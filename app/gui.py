@@ -15,6 +15,33 @@ logger = logging.getLogger(__name__)
 KNOWN_HOSTS_FILE = "known_hosts.json"
 
 
+import socket
+
+
+def get_local_ip_addresses():
+    addresses = []
+    try:
+        hostname = socket.gethostname()
+        infos = socket.getaddrinfo(hostname, None, socket.AF_INET)
+        for info in infos:
+            ip = info[4][0]
+            if ip and not ip.startswith("127.") and ip not in addresses:
+                addresses.append(ip)
+    except Exception:
+        pass
+    if not addresses:
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            s.connect(("8.8.8.8", 80))
+            ip = s.getsockname()[0]
+            s.close()
+            if ip and not ip.startswith("127.") and ip not in addresses:
+                addresses.append(ip)
+        except Exception:
+            pass
+    return addresses or ["127.0.0.1"]
+
+
 def configure_main_window(window):
     window.geometry("400x600")
     window.resizable(False, False)
@@ -337,8 +364,38 @@ class DeskFlowGUI(ctk.CTk):
         )
         self.repair_btn.pack(pady=5)
 
+        # Server IP display label (Click to Copy)
+        local_ips = get_local_ip_addresses()
+        ip_str = ", ".join(local_ips)
+        self.ip_display_label = ctk.CTkLabel(
+            self,
+            text=f"IPv4: {ip_str}  (click to copy)",
+            font=("Consolas", 11),
+            text_color="#AAAAAA",
+            cursor="hand2",
+        )
+        self.ip_display_label.grid(row=1, column=0, padx=20, pady=(0, 2), sticky="w")
+
+        def _copy_ip(event=None):
+            try:
+                self.clipboard_clear()
+                self.clipboard_append(ip_str)
+                self.ip_display_label.configure(
+                    text=f"IPv4: {ip_str}  (Copied!)", text_color="#4CAF50"
+                )
+                self.after(
+                    2000,
+                    lambda: self.ip_display_label.configure(
+                        text=f"IPv4: {ip_str}  (click to copy)", text_color="#AAAAAA"
+                    ),
+                )
+            except Exception:
+                pass
+
+        self.ip_display_label.bind("<Button-1>", _copy_ip)
+
         self.status_text = ctk.CTkTextbox(self, height=92, wrap="word")
-        self.status_text.grid(row=1, column=0, padx=20, pady=(0, 14), sticky="nsew")
+        self.status_text.grid(row=2, column=0, padx=20, pady=(0, 14), sticky="nsew")
         self._set_status("Status: Idle", "gray")
         
         self.protocol("WM_DELETE_WINDOW", self.on_close)
@@ -729,7 +786,7 @@ def run_mainloop(app):
             exists = app.winfo_exists()
         except AttributeError:
             exists = True
-        except (RuntimeError, tk.TclError):
+        except Exception:
             exists = False
         if exists:
             app.on_close()

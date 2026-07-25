@@ -103,6 +103,13 @@ class GuiTextboxQolTests(unittest.TestCase):
         self.assertEqual(res, "break")
         self.assertEqual(entry.get(), "hello world ")
 
+    def test_get_local_ip_addresses_returns_valid_ip_list(self):
+        from app.gui import get_local_ip_addresses
+        ips = get_local_ip_addresses()
+        self.assertIsInstance(ips, list)
+        self.assertGreater(len(ips), 0)
+        self.assertTrue(all(isinstance(ip, str) for ip in ips))
+
 
 if __name__ == "__main__":
     unittest.main()
