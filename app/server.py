@@ -356,7 +356,8 @@ class DeskFlowServer:
             forwarded.clear()
 
     def _on_emergency_exit(self):
-        logger.warning("EMERGENCY EXIT TRIGGERED! Forcefully disconnecting client and returning control.")
+        mouse_loc = "REMOTE CLIENT SCREEN" if getattr(self, "switching_to_client", False) else "LOCAL HOST SCREEN"
+        logger.warning("[HOTKEY DIAGNOSTIC] Ctrl+Alt+Shift+Escape triggered on Server! Cursor location: %s. Forcefully disconnecting client and returning control.", mouse_loc)
         self._release_forwarded_keys()
         if getattr(self, 'control_network', None):
             try:
@@ -370,7 +371,8 @@ class DeskFlowServer:
                 pass
 
     def _reload_connection(self):
-        logger.info("RELOAD TRIGGERED: Soft-resetting active connection and restoring local control...")
+        mouse_loc = "REMOTE CLIENT SCREEN" if getattr(self, "switching_to_client", False) else "LOCAL HOST SCREEN"
+        logger.warning("[HOTKEY DIAGNOSTIC] Ctrl+Alt+Shift+R triggered on Server! Cursor location: %s. Soft-resetting active connection and restoring local control.", mouse_loc)
         if getattr(self, 'control_network', None) and getattr(self.control_network, 'connected', False):
             try:
                 self.control_network.send_message({'type': 'reload_connection'})

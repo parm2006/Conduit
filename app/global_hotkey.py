@@ -41,6 +41,11 @@ class GlobalHotkeyMonitor:
         if isinstance(key, Key):
             return key.name.lower()
         if isinstance(key, KeyCode):
+            vk = getattr(key, "vk", None)
+            if vk in (82, 114) or (key.char and key.char.lower() in ("r", "\x12")):
+                return "r"
+            if vk == 27:
+                return "esc"
             if key.char:
                 return key.char.lower()
         return str(key).lower()
@@ -57,11 +62,11 @@ class GlobalHotkeyMonitor:
 
             if has_ctrl and has_alt and has_shift:
                 if has_esc and self.on_emergency_exit:
-                    logger.warning("GLOBAL HOTKEY: Ctrl+Alt+Shift+Escape triggered!")
+                    logger.warning("[HOTKEY DIAGNOSTIC] Ctrl+Alt+Shift+Escape triggered globally!")
                     self.pressed_keys.clear()
                     threading.Thread(target=self.on_emergency_exit, daemon=True).start()
                 elif has_r and self.on_reload_connection:
-                    logger.warning("GLOBAL HOTKEY: Ctrl+Alt+Shift+R triggered!")
+                    logger.warning("[HOTKEY DIAGNOSTIC] Ctrl+Alt+Shift+R triggered globally!")
                     self.pressed_keys.clear()
                     threading.Thread(target=self.on_reload_connection, daemon=True).start()
 
