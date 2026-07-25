@@ -283,7 +283,7 @@ class DeskFlowGUI(ctk.CTk):
             fingerprint_approval=self._approve_fingerprint,
         )
         self.client = client
-        client.on_reload_callback = lambda: self.after(500, self.start_client)
+        client.on_reload_callback = lambda: self.after(0, self.reconnect_client)
         client.control_network.register_callback(
             'disconnected',
             lambda data, source=client: self._on_client_disconnected_event(source, data),
@@ -327,13 +327,34 @@ class DeskFlowGUI(ctk.CTk):
         self.server_start_btn.pack(pady=10)
         self._set_status("Status: Server stopped", "gray")
 
-    def disconnect_client(self):
-        client, self.client = self.client, None
+    def disconnect_client(self, target_client=None):
+        if target_client is not None and self.client is not target_client:
+            return
+        client = self.client
+        if target_client is not None:
+            client = target_client
+            if self.client is target_client:
+                self.client = None
+        else:
+            self.client = None
         if client:
             client.disconnect()
-        self.client_disconnect_btn.pack_forget()
-        self.client_connect_btn.pack(pady=10)
-        self._set_status("Status: Disconnected", "gray")
+        if self.client is None:
+            self.client_disconnect_btn.pack_forget()
+            self.client_connect_btn.pack(pady=10)
+            self.client_connect_btn.configure(state="normal")
+            self._set_status("Status: Disconnected", "gray")
+
+    def reconnect_client(self):
+        logger.info("GUI: Initiating client reconnect...")
+        old_client = self.client
+        self._set_status("Status: Reloading connection...", "orange")
+        if old_client:
+            try:
+                old_client.disconnect()
+            except Exception:
+                pass
+        self.after(500, self.start_client)
 
     def _on_server_client_connected(self, data):
         self.after(0, lambda: self._set_status("Status: Client Connected!", "green"))
@@ -394,7 +415,7 @@ class DeskFlowGUI(ctk.CTk):
 
     def _finish_client_disconnect(self, source):
         if self.client is source:
-            self.disconnect_client()
+            self.disconnect_client(target_client=source)
 
     def _on_transfer_status(self, status):
         self.after(0, lambda: self.transfer_toast.show(status))
