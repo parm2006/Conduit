@@ -57,6 +57,169 @@ def write_status_message(widget, message, color="gray", white_text=None):
         widget.insert("1.0", message)
     widget.configure(state="disabled")
 
+
+import tkinter
+
+
+class EntryUndoManager:
+    def __init__(self, target_entry):
+        self.target = target_entry
+        try:
+            self.history = [target_entry.get()]
+        except Exception:
+            self.history = [""]
+        self.index = 0
+        self._ignore = False
+
+    def on_change(self, event=None):
+        if self._ignore:
+            return
+        try:
+            val = self.target.get()
+        except Exception:
+            return
+        if self.history and self.history[self.index] == val:
+            return
+        self.history = self.history[:self.index + 1]
+        self.history.append(val)
+        self.index = len(self.history) - 1
+
+    def undo(self, event=None):
+        if self.index > 0:
+            self.index -= 1
+            self._apply()
+        return "break"
+
+    def redo(self, event=None):
+        if self.index < len(self.history) - 1:
+            self.index += 1
+            self._apply()
+        return "break"
+
+    def _apply(self):
+        self._ignore = True
+        try:
+            self.target.delete(0, 'end')
+            self.target.insert(0, self.history[self.index])
+        except Exception:
+            pass
+        finally:
+            self._ignore = False
+
+
+def enable_textbox_qol(widget):
+    inner_entry = getattr(widget, '_entry', widget)
+    if not hasattr(inner_entry, 'bind'):
+        return None
+
+    undo_mgr = EntryUndoManager(inner_entry)
+
+    def _on_key_release(event):
+        if event.keysym in ("Control_L", "Control_R", "Alt_L", "Alt_R", "Shift_L", "Shift_R"):
+            return
+        undo_mgr.on_change(event)
+
+    def _select_all(event):
+        try:
+            inner_entry.select_range(0, 'end')
+            inner_entry.icursor('end')
+        except Exception:
+            pass
+        return "break"
+
+    def _delete_word_left(event):
+        try:
+            cursor_pos = inner_entry.index('insert')
+            text = inner_entry.get()
+            if cursor_pos > 0:
+                left_text = text[:cursor_pos].rstrip()
+                space_idx = left_text.rfind(' ')
+                new_pos = space_idx + 1 if space_idx != -1 else 0
+                inner_entry.delete(new_pos, cursor_pos)
+                undo_mgr.on_change()
+        except Exception:
+            pass
+        return "break"
+
+    def _delete_word_right(event):
+        try:
+            cursor_pos = inner_entry.index('insert')
+            text = inner_entry.get()
+            if cursor_pos < len(text):
+                right_text = text[cursor_pos:].lstrip()
+                space_idx = text.find(' ', cursor_pos + (len(text[cursor_pos:]) - len(right_text)))
+                new_pos = space_idx if space_idx != -1 else len(text)
+                inner_entry.delete(cursor_pos, new_pos)
+                undo_mgr.on_change()
+        except Exception:
+            pass
+        return "break"
+
+    def _show_context_menu(event):
+        menu = tkinter.Menu(inner_entry, tearoff=0)
+
+        def _cut():
+            try:
+                inner_entry.event_generate("<<Cut>>")
+                undo_mgr.on_change()
+            except Exception:
+                pass
+
+        def _copy():
+            try:
+                inner_entry.event_generate("<<Copy>>")
+            except Exception:
+                pass
+
+        def _paste():
+            try:
+                inner_entry.event_generate("<<Paste>>")
+                undo_mgr.on_change()
+            except Exception:
+                pass
+
+        def _select_all_menu():
+            try:
+                inner_entry.select_range(0, 'end')
+                inner_entry.icursor('end')
+            except Exception:
+                pass
+
+        menu.add_command(label="Undo", command=undo_mgr.undo)
+        menu.add_command(label="Redo", command=undo_mgr.redo)
+        menu.add_separator()
+        menu.add_command(label="Cut", command=_cut)
+        menu.add_command(label="Copy", command=_copy)
+        menu.add_command(label="Paste", command=_paste)
+        menu.add_separator()
+        menu.add_command(label="Select All", command=_select_all_menu)
+
+        try:
+            menu.tk_popup(event.x_root, event.y_root)
+        finally:
+            try:
+                menu.grab_release()
+            except Exception:
+                pass
+
+    try:
+        inner_entry.bind("<KeyRelease>", _on_key_release, add="+")
+        inner_entry.bind("<Control-a>", _select_all, add="+")
+        inner_entry.bind("<Control-A>", _select_all, add="+")
+        inner_entry.bind("<Control-z>", undo_mgr.undo, add="+")
+        inner_entry.bind("<Control-Z>", undo_mgr.redo, add="+")
+        inner_entry.bind("<Control-y>", undo_mgr.redo, add="+")
+        inner_entry.bind("<Control-Y>", undo_mgr.redo, add="+")
+        inner_entry.bind("<Control-BackSpace>", _delete_word_left, add="+")
+        inner_entry.bind("<Control-Delete>", _delete_word_right, add="+")
+        inner_entry.bind("<Button-3>", _show_context_menu, add="+")
+        inner_entry.bind("<Button-2>", _show_context_menu, add="+")
+    except Exception as error:
+        logger.debug("Could not attach textbox QoL bindings: %s", error_name(error))
+
+    return undo_mgr
+
+
 class DeskFlowGUI(ctk.CTk):
     def __init__(self):
         super().__init__()
@@ -98,11 +261,13 @@ class DeskFlowGUI(ctk.CTk):
         self.server_port_entry = ctk.CTkEntry(self.tab_server)
         self.server_port_entry.insert(0, "5000")
         self.server_port_entry.pack(pady=5)
+        enable_textbox_qol(self.server_port_entry)
         
         self.server_password_label = ctk.CTkLabel(self.tab_server, text="Password:")
         self.server_password_label.pack(pady=2)
         self.server_password_entry = ctk.CTkEntry(self.tab_server, show="*")
         self.server_password_entry.pack(pady=2)
+        enable_textbox_qol(self.server_password_entry)
         
         # Layout Selection
         self.layout_label = ctk.CTkLabel(self.tab_server, text="Client Position:")
@@ -146,6 +311,7 @@ class DeskFlowGUI(ctk.CTk):
         self.client_ip_entry = ctk.CTkComboBox(self.tab_client, values=ip_list, command=self.on_ip_select)
         self.client_ip_entry.set(default_ip)
         self.client_ip_entry.pack(pady=5)
+        enable_textbox_qol(self.client_ip_entry)
         
         self.client_port_label = ctk.CTkLabel(self.tab_client, text="Port:")
         self.client_port_label.pack(pady=5)
@@ -153,11 +319,13 @@ class DeskFlowGUI(ctk.CTk):
         default_port = str(self.known_hosts[0]['port']) if self.known_hosts else "5000"
         self.client_port_entry.insert(0, default_port)
         self.client_port_entry.pack(pady=5)
+        enable_textbox_qol(self.client_port_entry)
         
         self.client_password_label = ctk.CTkLabel(self.tab_client, text="Password:")
         self.client_password_label.pack(pady=5)
         self.client_password_entry = ctk.CTkEntry(self.tab_client, show="*")
         self.client_password_entry.pack(pady=5)
+        enable_textbox_qol(self.client_password_entry)
         
         self.client_connect_btn = ctk.CTkButton(self.tab_client, text="Connect", command=self.connect_client)
         self.client_connect_btn.pack(pady=10)
