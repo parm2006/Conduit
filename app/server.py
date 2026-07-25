@@ -417,58 +417,7 @@ class DeskFlowServer:
                 self.control_network.send_message({'type': 'reload_connection'})
             except Exception as error:
                 logger.debug("Could not send reload_connection message: %s", error_name(error))
-        try:
-            self._release_forwarded_keys()
-        except Exception as error:
-            logger.debug("Error releasing keys during reload: %s", error_name(error))
-        self.switching_to_client = False
-        self.pressed_keys.clear()
-        if hasattr(self, 'forwarded_keys'):
-            self.forwarded_keys.clear()
-        if getattr(self, 'on_capture_stop', None):
-            try:
-                self.on_capture_stop()
-            except Exception as error:
-                logger.debug("Error calling on_capture_stop: %s", error_name(error))
-        lock = getattr(self, "_client_state_lock", None)
-        if lock:
-            with lock:
-                self._client_ready = False
-                self.control_connected = False
-                self.data_connected = False
-        else:
-            self._client_ready = False
-            self.control_connected = False
-            self.data_connected = False
-        if hasattr(self, 'input_handler') and self.input_handler:
-            try:
-                self.input_handler.stop()
-            except Exception as error:
-                logger.debug("Error stopping input_handler during reload: %s", error_name(error))
-        self.switching_to_client = False
-        self.pressed_keys.clear()
-        if hasattr(self, 'forwarded_keys'):
-            self.forwarded_keys.clear()
-        if getattr(self, 'control_network', None):
-            try:
-                self.control_network.disconnect()
-            except Exception:
-                pass
-        if getattr(self, 'data_network', None):
-            try:
-                self.data_network.disconnect()
-            except Exception:
-                pass
-        if getattr(self, 'session_coordinator', None):
-            try:
-                self.session_coordinator.close()
-            except Exception:
-                pass
-        if getattr(self, 'file_network', None):
-            try:
-                self.file_network.revoke_session()
-            except Exception:
-                pass
+        self._on_emergency_exit()
 
     def on_local_copy(self, snapshot):
         return self.clipboard_sender.submit({"snapshot": snapshot})
