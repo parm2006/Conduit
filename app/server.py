@@ -20,6 +20,7 @@ from app.clipboard_handler import ClipboardHandler
 from app.clipboard_formats import encode_clipboard_message
 from app.latest_wins_sender import LatestWinsSender
 from app.safe_errors import error_name
+from app.global_hotkey import GlobalHotkeyMonitor
 
 logger = logging.getLogger(__name__)
 
@@ -53,6 +54,10 @@ class DeskFlowServer:
         )
         self.file_publisher = VirtualPastePublisher()
         self.input_handler = InputHandler()
+        self.global_hotkey_monitor = GlobalHotkeyMonitor(
+            on_emergency_exit=self._on_emergency_exit,
+            on_reload_connection=self._reload_connection,
+        )
         
         self.control_connected = False
         self.data_connected = False
@@ -116,11 +121,13 @@ class DeskFlowServer:
         d_success = self.data_network.start()
         f_success = self.file_network.start()
         if c_success and d_success and f_success:
+            self.global_hotkey_monitor.start()
             return True
         self.stop()
         return False
 
     def stop(self):
+        self.global_hotkey_monitor.stop()
         self.control_network.stop()
         self.data_network.stop()
         self.file_network.stop()

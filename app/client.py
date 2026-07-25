@@ -20,6 +20,7 @@ from app.clipboard_formats import encode_clipboard_message
 from app.latest_wins_sender import LatestWinsSender
 from app.input_geometry import client_entry_position
 from app.safe_errors import error_name, public_error_message
+from app.global_hotkey import GlobalHotkeyMonitor
 
 logger = logging.getLogger(__name__)
 
@@ -51,6 +52,10 @@ class DeskFlowClient:
         )
         self.file_publisher = VirtualPastePublisher()
         self.input_handler = InputHandler()
+        self.global_hotkey_monitor = GlobalHotkeyMonitor(
+            on_emergency_exit=self.disconnect,
+            on_reload_connection=self.reload_connection,
+        )
         self.is_active = False
         self.control_connected = False
         self.data_connected = False
@@ -114,6 +119,7 @@ class DeskFlowClient:
         self.clipboard_sender.stop()
         self.paste_coordinator.reset()
         self.hotkey_monitor.stop()
+        self.global_hotkey_monitor.stop()
         if internal_disconnect:
             return
         if report_setup_failure:
@@ -126,6 +132,27 @@ class DeskFlowClient:
             )
         else:
             self.disconnect()
+
+    def reload_connection(self):
+        logger.info("RELOAD CONNECTION TRIGGERED on Client (Ctrl+Shift+Alt+R)! Soft-resetting and auto-reconnecting...")
+        if hasattr(self, 'input_handler') and self.input_handler:
+            try:
+                self.input_handler.release_all_injected_keys()
+            except Exception:
+                pass
+        host = getattr(self, 'host', None)
+        port = getattr(self, 'port', None)
+        callback = getattr(self, '_connect_callback', None)
+        
+        self.disconnect()
+        
+        if host and port and callback:
+            def _auto_reconnect():
+                import time
+                time.sleep(0.5)
+                logger.info("Auto-reconnecting client to %s:%d...", host, port)
+                self.connect(host, port, callback)
+            threading.Thread(target=_auto_reconnect, daemon=True).start()
 
     def set_screen_size(self, w, h):
         self.input_handler.set_screen_size(w, h)
@@ -233,9 +260,11 @@ class DeskFlowClient:
                     )
                 self.clipboard.start()
                 self.hotkey_monitor.start()
+                self.global_hotkey_monitor.start()
                 if not self._all_lanes_live():
                     self.clipboard.stop()
                     self.hotkey_monitor.stop()
+                    self.global_hotkey_monitor.stop()
                     raise ConnectionError(
                         "secure session disconnected while starting services"
                     )
