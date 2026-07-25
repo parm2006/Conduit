@@ -19,6 +19,7 @@ from app.input_handler import InputHandler
 from app.clipboard_handler import ClipboardHandler
 from app.clipboard_formats import encode_clipboard_message
 from app.latest_wins_sender import LatestWinsSender
+from app.safe_errors import error_name
 
 logger = logging.getLogger(__name__)
 
@@ -354,8 +355,10 @@ class DeskFlowServer:
         logger.info("Reloading active connection lanes...")
         if hasattr(self, 'input_handler') and self.input_handler:
             try:
-                self.input_handler.stop_keyboard_capture()
-                self.input_handler.stop_capture()
+                if hasattr(self.input_handler, 'stop_keyboard_capture'):
+                    self.input_handler.stop_keyboard_capture()
+                if hasattr(self.input_handler, 'stop_capture'):
+                    self.input_handler.stop_capture()
             except Exception as error:
                 logger.debug("Error stopping capture during reload: %s", error_name(error))
         self.switching_to_client = False
