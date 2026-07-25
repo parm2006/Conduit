@@ -13,12 +13,7 @@ If the mouse/keyboard focus becomes stuck on the client, press **`Ctrl + Alt + S
 
 ## Getting Started
 
-### Prerequisites
-* Windows 10/11 on both PCs
-* Python 3.10+
-
 ### Setup & Run
-1. Clone the repository on both computers.
-2. Run `run.bat` on each PC (it sets up the virtual environment, installs dependencies, and boots the GUI).
-3. On the **Server (Host)**: Enter a password, select the Client position, and click **Start Server**.
-4. On the **Client**: Enter the Server's IP address, Port, password, and click **Connect**.
+1. Download the executable from the [Latest Release](https://github.com/parm2006/DeskFlow/releases/latest) and run `DeskFlow.exe` on both computers.
+2. On the **Server (Host)**: Enter a password, select the Client position, and click **Start Server**.
+3. On the **Client**: Enter the Server's IP address, Port, password, and click **Connect**.
