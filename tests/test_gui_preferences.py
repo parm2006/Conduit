@@ -46,6 +46,17 @@ class PreferencesTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 store.save_client_position("diagonal")
 
+    def test_server_port_persistence_and_validation(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = UserPreferences(Path(directory))
+            self.assertEqual(store.load_server_port(), 5000)
+
+            store.save_server_port(5005)
+            self.assertEqual(UserPreferences(Path(directory)).load_server_port(), 5005)
+
+            with self.assertRaises(ValueError):
+                store.save_server_port(70000)
+
     def test_role_store_round_trips_only_supported_roles(self):
         with tempfile.TemporaryDirectory() as directory:
             store = UserPreferences(Path(directory))

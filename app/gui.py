@@ -276,10 +276,11 @@ class DeskFlowGUI(ctk.CTk):
         restore_saved_role(self.tabview, saved_role)
         
         # Server UI
+        saved_server_port = str(self.preferences.load_server_port())
         self.server_port_label = ctk.CTkLabel(self.tab_server, text="Port:")
         self.server_port_label.pack(pady=5)
         self.server_port_entry = ctk.CTkEntry(self.tab_server)
-        self.server_port_entry.insert(0, "5000")
+        self.server_port_entry.insert(0, saved_server_port)
         self.server_port_entry.pack(pady=5)
         enable_textbox_qol(self.server_port_entry)
         
@@ -428,6 +429,10 @@ class DeskFlowGUI(ctk.CTk):
         
         if self.server.start():
             save_role_safely(self.preferences, "server")
+            try:
+                self.preferences.save_server_port(port)
+            except Exception as error:
+                logger.error("Could not save server port (%s)", error_name(error))
             fingerprint = certificate_fingerprint(self.server.identity.cert_path)
             code = pairing_code_from_fingerprint(fingerprint)
             recovery = (
@@ -752,7 +757,7 @@ def run_mainloop(app):
             exists = app.winfo_exists()
         except AttributeError:
             exists = True
-        except (RuntimeError, tk.TclError):
+        except (RuntimeError, tkinter.TclError, Exception):
             exists = False
         if exists:
             app.on_close()

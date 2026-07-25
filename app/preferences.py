@@ -28,6 +28,13 @@ class UserPreferences:
         position = self._load_values().get("client_position")
         return position if position in VALID_CLIENT_POSITIONS else "right"
 
+    def load_server_port(self):
+        try:
+            port = int(self._load_values().get("server_port", 5000))
+            return port if 1 <= port <= 65535 else 5000
+        except (TypeError, ValueError):
+            return 5000
+
     def save_role(self, role):
         if role not in VALID_ROLES:
             raise ValueError("role must be server or client")
@@ -37,6 +44,15 @@ class UserPreferences:
         if position not in VALID_CLIENT_POSITIONS:
             raise ValueError("client position must be top, left, right, or bottom")
         self._save_value("client_position", position)
+
+    def save_server_port(self, port):
+        try:
+            val = int(port)
+            if not (1 <= val <= 65535):
+                raise ValueError("port must be between 1 and 65535")
+            self._save_value("server_port", val)
+        except (TypeError, ValueError) as error:
+            raise ValueError("port must be an integer between 1 and 65535") from error
 
     def _load_values(self):
         if not self.path.exists():
