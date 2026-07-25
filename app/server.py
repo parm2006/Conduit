@@ -282,17 +282,24 @@ class DeskFlowServer:
             if self.paste_coordinator.on_key_press(val):
                 return
 
-        # Check emergency exit: Ctrl + Alt + Shift + Escape
+        # Check emergency exit (Ctrl+Alt+Shift+Escape) & Reload Connection (Ctrl+Alt+Shift+R)
         has_ctrl = any(k in self.pressed_keys for k in ('ctrl', 'ctrl_l', 'ctrl_r'))
         has_alt = any(k in self.pressed_keys for k in ('alt', 'alt_l', 'alt_r', 'alt_gr'))
         has_shift = any(k in self.pressed_keys for k in ('shift', 'shift_l', 'shift_r'))
         has_esc = val in ('esc', 'escape')
+        has_r = val in ('r', 'R')
         
         if has_ctrl and has_alt and has_shift and has_esc:
             logger.warning("EMERGENCY EXIT TRIGGERED! Forcefully disconnecting client and returning control.")
             self._release_forwarded_keys()
             self.control_network.disconnect()
             self.data_network.disconnect()
+            return
+
+        if has_ctrl and has_alt and has_shift and has_r:
+            logger.warning("RELOAD CONNECTION TRIGGERED (Ctrl+Shift+Alt+R)! Soft-resetting active connection and restoring local control.")
+            self._release_forwarded_keys()
+            self._reload_connection()
             return
 
         self.forwarded_keys[self._key_identity(key_data)] = dict(key_data)
@@ -342,6 +349,29 @@ class DeskFlowServer:
         self.pressed_keys.clear()
         if forwarded is not None:
             forwarded.clear()
+
+    def _reload_connection(self):
+        logger.info("Reloading active connection lanes...")
+        if hasattr(self, 'input_handler') and self.input_handler:
+            try:
+                self.input_handler.stop_keyboard_capture()
+                self.input_handler.stop_capture()
+            except Exception as error:
+                logger.debug("Error stopping capture during reload: %s", error_name(error))
+        self.switching_to_client = False
+        self.pressed_keys.clear()
+        if hasattr(self, 'forwarded_keys'):
+            self.forwarded_keys.clear()
+        if getattr(self, 'control_network', None):
+            try:
+                self.control_network.disconnect()
+            except Exception:
+                pass
+        if getattr(self, 'data_network', None):
+            try:
+                self.data_network.disconnect()
+            except Exception:
+                pass
 
     def on_local_copy(self, snapshot):
         return self.clipboard_sender.submit({"snapshot": snapshot})

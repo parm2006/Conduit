@@ -63,6 +63,22 @@ class EmergencyReleaseTests(unittest.TestCase):
         self.assertEqual(released, ["alt", "ctrl", "shift"])
         self.assertTrue(server.control_network.disconnected)
 
+    def test_reload_connection_releases_keys_and_resets_lanes(self):
+        server = DeskFlowServer.__new__(DeskFlowServer)
+        server.pressed_keys = {"ctrl", "alt", "shift"}
+        server.forwarded_keys = {("special", "ctrl"): {"type": "special", "value": "ctrl"}}
+        server.switching_to_client = True
+        server.paste_coordinator = Coordinator()
+        server.control_network = RecordingNetwork()
+        server.data_network = RecordingNetwork()
+
+        server.on_key_press({"type": "special", "value": "r"})
+
+        self.assertFalse(server.switching_to_client)
+        self.assertEqual(server.pressed_keys, set())
+        self.assertTrue(server.control_network.disconnected)
+        self.assertTrue(server.data_network.disconnected)
+
     def test_switch_back_releases_forwarded_control_before_capture_stops(self):
         events = []
 
