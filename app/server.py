@@ -370,7 +370,16 @@ class DeskFlowServer:
                 pass
 
     def _reload_connection(self):
-        logger.info("Reloading active connection lanes...")
+        logger.info("RELOAD TRIGGERED: Soft-resetting active connection and restoring local control...")
+        if getattr(self, 'control_network', None) and getattr(self.control_network, 'connected', False):
+            try:
+                self.control_network.send_message({'type': 'reload_connection'})
+            except Exception as error:
+                logger.debug("Could not send reload_connection message: %s", error_name(error))
+        try:
+            self._release_forwarded_keys()
+        except Exception as error:
+            logger.debug("Error releasing keys during reload: %s", error_name(error))
         if hasattr(self, 'input_handler') and self.input_handler:
             try:
                 if hasattr(self.input_handler, 'stop_keyboard_capture'):
@@ -391,6 +400,11 @@ class DeskFlowServer:
         if getattr(self, 'data_network', None):
             try:
                 self.data_network.disconnect()
+            except Exception:
+                pass
+        if getattr(self, 'session_coordinator', None):
+            try:
+                self.session_coordinator.clear()
             except Exception:
                 pass
 

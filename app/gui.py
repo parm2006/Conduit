@@ -283,6 +283,7 @@ class DeskFlowGUI(ctk.CTk):
             fingerprint_approval=self._approve_fingerprint,
         )
         self.client = client
+        client.on_reload_callback = lambda: self.after(500, self.start_client)
         client.control_network.register_callback(
             'disconnected',
             lambda data, source=client: self._on_client_disconnected_event(source, data),

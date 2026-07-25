@@ -77,6 +77,7 @@ class DeskFlowClient:
         self.control_network.register_callback('file_manifest_failed', self.on_file_manifest_failed)
         self.control_network.register_callback('file_manifest_ack', self.on_file_manifest_ack)
         self.control_network.register_callback('file_paste_trigger', lambda data: self.file_paste_service.request_paste())
+        self.control_network.register_callback('reload_connection', lambda data: self.reload_connection())
         
         # Setup data network callbacks
         # Setup input callbacks
