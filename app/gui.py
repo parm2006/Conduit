@@ -245,6 +245,12 @@ class DeskFlowGUI(ctk.CTk):
         super().__init__()
         
         self.title("DeskFlow")
+        icon_path = Path(__file__).parent / "assets" / "app_icon.ico"
+        if icon_path.exists():
+            try:
+                self.iconbitmap(str(icon_path))
+            except Exception:
+                pass
         configure_main_window(self)
         
         self.server = None
