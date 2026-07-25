@@ -354,7 +354,7 @@ class DeskFlowGUI(ctk.CTk):
                 old_client.disconnect()
             except Exception:
                 pass
-        self.after(500, self.start_client)
+        self.after(500, self.connect_client)
 
     def _on_server_client_connected(self, data):
         self.after(0, lambda: self._set_status("Status: Client Connected!", "green"))
