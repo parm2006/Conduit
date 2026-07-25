@@ -141,9 +141,17 @@ class DeskFlowClient:
                 self.input_handler.release_all_injected_keys()
             except Exception:
                 pass
+        
+        on_reload = getattr(self, 'on_reload_callback', None)
+        if on_reload is not None:
+            logger.info("Invoking client on_reload_callback...")
+            on_reload()
+            return
+
         host = getattr(self, 'host', None)
         port = getattr(self, 'port', None)
         callback = getattr(self, '_connect_callback', None)
+        password = getattr(self, 'password', '')
         
         self.disconnect()
         
@@ -152,7 +160,8 @@ class DeskFlowClient:
                 import time
                 time.sleep(0.5)
                 logger.info("Auto-reconnecting client to %s:%d...", host, port)
-                self.connect(host, port, callback)
+                new_client = DeskFlowClient(password=password)
+                new_client.connect(host, port, callback)
             threading.Thread(target=_auto_reconnect, daemon=True).start()
 
     def set_screen_size(self, w, h):
