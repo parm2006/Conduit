@@ -15,33 +15,6 @@ logger = logging.getLogger(__name__)
 KNOWN_HOSTS_FILE = "known_hosts.json"
 
 
-import socket
-
-
-def get_local_ip_addresses():
-    addresses = []
-    try:
-        hostname = socket.gethostname()
-        infos = socket.getaddrinfo(hostname, None, socket.AF_INET)
-        for info in infos:
-            ip = info[4][0]
-            if ip and not ip.startswith("127.") and ip not in addresses:
-                addresses.append(ip)
-    except Exception:
-        pass
-    if not addresses:
-        try:
-            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            s.connect(("8.8.8.8", 80))
-            ip = s.getsockname()[0]
-            s.close()
-            if ip and not ip.startswith("127.") and ip not in addresses:
-                addresses.append(ip)
-        except Exception:
-            pass
-    return addresses or ["127.0.0.1"]
-
-
 def configure_main_window(window):
     window.geometry("400x600")
     window.resizable(False, False)
@@ -71,9 +44,30 @@ def save_role_safely(preferences, role):
         return False
 
 
-def write_status_message(widget, message, color="gray", white_text=None):
+import socket
+
+
+def get_local_ip():
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("8.8.8.8", 80))
+        ip = s.getsockname()[0]
+        s.close()
+        return ip
+    except Exception:
+        try:
+            return socket.gethostbyname(socket.gethostname())
+        except Exception:
+            return "127.0.0.1"
+
+
+def write_status_message(widget, message, color="gray", white_text=None, show_ip=False):
     widget.configure(state="normal", text_color=color)
     widget.delete("1.0", "end")
+    if show_ip:
+        ip = get_local_ip()
+        widget.tag_config("ip_header", foreground="white")
+        widget.insert("end", f"Server IP (IPv4): {ip}\n", "ip_header")
     if white_text and white_text in message:
         before, after = message.split(white_text, 1)
         widget.insert("end", before)
@@ -81,7 +75,7 @@ def write_status_message(widget, message, color="gray", white_text=None):
         widget.insert("end", white_text, "pairing_code")
         widget.insert("end", after)
     else:
-        widget.insert("1.0", message)
+        widget.insert("end", message)
     widget.configure(state="disabled")
 
 
@@ -364,19 +358,8 @@ class DeskFlowGUI(ctk.CTk):
         )
         self.repair_btn.pack(pady=5)
 
-        # Server IP display label (Visible only while idle/disconnected)
-        local_ips = get_local_ip_addresses()
-        ip_str = ", ".join(local_ips)
-        self.ip_display_label = ctk.CTkLabel(
-            self,
-            text=f"IPv4: {ip_str}",
-            font=("Consolas", 11),
-            text_color="#AAAAAA",
-        )
-        self.ip_display_label.grid(row=1, column=0, padx=20, pady=(0, 2), sticky="w")
-
         self.status_text = ctk.CTkTextbox(self, height=92, wrap="word")
-        self.status_text.grid(row=2, column=0, padx=20, pady=(0, 14), sticky="nsew")
+        self.status_text.grid(row=1, column=0, padx=20, pady=(0, 14), sticky="nsew")
         self._set_status("Status: Idle", "gray")
         
         self.protocol("WM_DELETE_WINDOW", self.on_close)
@@ -570,21 +553,16 @@ class DeskFlowGUI(ctk.CTk):
             port = self.server_port_entry.get()
             self.after(0, lambda: self._set_status(f"Status: Server listening on port {port}", "green"))
 
-    def _set_status(self, message, color="gray", white_text=None):
+    def _set_status(self, message, color="gray", white_text=None, show_ip=None):
+        if show_ip is None:
+            show_ip = message in ("Status: Idle", "Status: Server stopped", "Status: Disconnected")
         write_status_message(
             self.status_text,
             message,
             color,
             white_text=white_text,
+            show_ip=show_ip,
         )
-        if hasattr(self, 'ip_display_label') and self.ip_display_label:
-            try:
-                if "Idle" in message or "stopped" in message or "Disconnected" in message:
-                    self.ip_display_label.grid(row=1, column=0, padx=20, pady=(0, 2), sticky="w")
-                else:
-                    self.ip_display_label.grid_remove()
-            except Exception:
-                pass
 
     def set_layout_position(self, position, persist=True):
         if position not in {"top", "left", "right", "bottom"}:
@@ -775,7 +753,7 @@ def run_mainloop(app):
             exists = app.winfo_exists()
         except AttributeError:
             exists = True
-        except Exception:
+        except (RuntimeError, tk.TclError):
             exists = False
         if exists:
             app.on_close()
