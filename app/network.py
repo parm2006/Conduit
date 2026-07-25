@@ -526,6 +526,7 @@ class NetworkClient(NetworkNode):
     def _set_phase(self, phase):
         with self._state_lock:
             self.phase = phase
+        logger.info("[%s-lane] Phase changed to %s", self.role, phase.value if hasattr(phase, "value") else phase)
 
     def connect(self, host, port, callback):
         def worker():
@@ -544,6 +545,7 @@ class NetworkClient(NetworkNode):
                 self._set_phase(ConnectionPhase.TLS_CANDIDATE)
                 self.host = host
                 self.port = int(port)
+                logger.info("[%s-lane] Connecting to %s:%d...", self.role, host, self.port)
                 raw = socket.create_connection((host, port), timeout=self.connect_timeout)
                 raw.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
                 raw.settimeout(self.handshake_timeout)
@@ -552,6 +554,7 @@ class NetworkClient(NetworkNode):
                 if not certificate:
                     raise ssl.SSLError("server did not provide a certificate")
                 fingerprint = hashlib.sha256(certificate).hexdigest()
+                logger.info("[%s-lane] TLS wrap successful; peer fingerprint %s", self.role, fingerprint[:12])
                 if self.role == "control":
                     peer = self.trust_store.peer_id(host, port)
                     pinned = self.trust_store.load(peer)
@@ -602,6 +605,7 @@ class NetworkClient(NetworkNode):
                     self._set_phase(ConnectionPhase.CONNECTED)
                 secure.settimeout(None)
                 generation = self._attach_socket(secure)
+                logger.info("[%s-lane] Authenticated successfully and bound to session", self.role)
                 self.trigger_callbacks("connected", {"host": host, "session_id": response.get("session_id")})
                 self.receive_thread = threading.Thread(
                     target=self._receive_loop,
@@ -610,8 +614,14 @@ class NetworkClient(NetworkNode):
                 )
                 self.receive_thread.start()
                 report(True, None)
-            except Exception as error:
-                error = _actionable_connection_error(error, self.role)
+            except Exception as raw_error:
+                logger.error(
+                    "[%s-lane] Failed during phase %s: %s (%s)",
+                    self.role, getattr(self, 'phase', 'UNKNOWN'),
+                    type(raw_error).__name__, raw_error,
+                    exc_info=True,
+                )
+                error = _actionable_connection_error(raw_error, self.role)
                 self.last_error = error
                 self._pending_trust = None
                 self._set_phase(ConnectionPhase.FAILED)

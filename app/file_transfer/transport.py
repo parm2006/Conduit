@@ -173,16 +173,23 @@ class _FileLane:
 
 class FileLaneClient(_FileLane):
     def connect(self, host, port, expected_fingerprint, token, session_id=None, timeout=3):
+        logger.info("[file-lane] Client connecting to %s:%d (session %s)...", host, port, session_id[:8] if session_id else None)
         raw_sock = socket.create_connection((host, port), timeout=timeout)
         secure_sock = None
         context = _tls_client_context()
         try:
             raw_sock.settimeout(timeout)
             secure_sock = context.wrap_socket(raw_sock, server_hostname=host)
+            logger.info("[file-lane] TLS wrap successful; authenticating token...")
             authenticate_client_connection(
                 secure_sock, expected_fingerprint, token, session_id=session_id
             )
-        except Exception:
+            logger.info("[file-lane] Client authenticated successfully")
+        except Exception as error:
+            logger.error(
+                "[file-lane] Connection to %s:%d failed (%s: %s)",
+                host, port, type(error).__name__, error, exc_info=True
+            )
             self._close(secure_sock if secure_sock is not None else raw_sock)
             raise
         secure_sock.settimeout(None)
@@ -249,6 +256,7 @@ class FileLaneServer(_FileLane):
                 else SessionAuthenticator(token)
             )
             self._expected_session_id = session_id
+            logger.info("[file-lane] Offsetting/Offered file-lane session %s", session_id[:8] if session_id else None)
 
     def revoke_session(self):
         with self._auth_lock:
@@ -271,8 +279,10 @@ class FileLaneServer(_FileLane):
             self._running = True
             self._server_generation += 1
             threading.Thread(target=self._accept_loop, daemon=True).start()
+            logger.info("[file-lane] Server listening on %s:%d", self.host, self.port)
             return True
-        except OSError:
+        except OSError as error:
+            logger.error("[file-lane] Failed to start server (%s)", error)
             self.stop()
             return False
 
@@ -283,12 +293,14 @@ class FileLaneServer(_FileLane):
             except socket.timeout:
                 continue
             except OSError:
-                return
+                break
+            raw_sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
             if not self._candidate_slots.acquire(blocking=False):
                 self._close(raw_sock)
                 continue
             with self._candidate_lock:
                 self._candidate_sockets.add(raw_sock)
+            logger.info("[file-lane] Incoming connection candidate from %s", address)
             threading.Thread(
                 target=self._candidate_worker,
                 args=(raw_sock, address, self._server_generation),
@@ -342,10 +354,12 @@ class FileLaneServer(_FileLane):
                 generation = self._attach(secure_sock)
             with self._candidate_lock:
                 self._candidate_sockets.discard(secure_sock)
+            logger.info("[file-lane] Server authenticated candidate from %s successfully", address)
             for callback in self._callbacks.get("connected", ()):
                 callback({"type": "connected", "session_id": session_id}, b"")
             self._receive_loop(secure_sock, generation)
-        except Exception:
+        except Exception as error:
+            logger.error("[file-lane] Candidate from %s failed authentication (%s: %s)", address, type(error).__name__, error, exc_info=True)
             if secure_sock is not None:
                 self._close(secure_sock)
             else:

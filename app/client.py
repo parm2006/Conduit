@@ -147,6 +147,7 @@ class DeskFlowClient:
 
         def _control_callback(success, err):
             if success:
+                logger.info("[1/3] Control lane (port %d): CONNECTED", port)
                 self.control_connected = True
                 self._connect_deadline = threading.Timer(
                     self.lane_timeout, self._on_lane_binding_timeout
@@ -164,8 +165,10 @@ class DeskFlowClient:
                 )
                 self.data_network.register_callback('clipboard_sync', self.on_remote_copy)
                 self.data_network.register_callback('disconnected', self.on_disconnected)
+                logger.info("[2/3] Connecting data lane (port %d)...", port + 1)
                 self.data_network.connect(host, port + 1, _data_callback)
             else:
+                logger.error("[1/3] Control lane (port %d) FAILED: %s", port, err)
                 self.connect_error = err
                 self.disconnect(
                     preserve_failure=True,
@@ -175,9 +178,11 @@ class DeskFlowClient:
 
         def _data_callback(success, err):
             if success:
+                logger.info("[2/3] Data lane (port %d): CONNECTED", port + 1)
                 self.data_connected = True
                 _check_both_connected()
             else:
+                logger.error("[2/3] Data lane (port %d) FAILED: %s", port + 1, err)
                 self.connect_error = err
                 self.disconnect(
                     preserve_failure=True,
@@ -185,6 +190,7 @@ class DeskFlowClient:
                 )
                 self._report_connect(False, err)
 
+        logger.info("[1/3] Connecting control lane to %s:%d...", host, port)
         self.control_network.connect(host, port, _control_callback)
 
     def _report_connect(self, success, error):
@@ -213,6 +219,10 @@ class DeskFlowClient:
                 or not self.data_network.connected
                 or self.file_network.sock is None
             ):
+                logger.debug(
+                    "Connection check incomplete: control=%s, data=%s, file=%s",
+                    self.control_connected, self.data_connected, self.file_connected
+                )
                 return False
             self._ready_started = True
             try:
@@ -229,9 +239,11 @@ class DeskFlowClient:
                     raise ConnectionError(
                         "secure session disconnected while starting services"
                     )
+                logger.info("[ALL LANES BOUND] Control, Data, and File lanes successfully established!")
                 self._report_connect(True, None)
                 return True
             except Exception as error:
+                logger.error("Session finish failed: %s", error, exc_info=True)
                 message = public_error_message(error, "secure session setup failed")
                 self.connect_error = message
                 self.clipboard.stop()
@@ -250,7 +262,22 @@ class DeskFlowClient:
         )
 
     def _on_lane_binding_timeout(self):
-        error = TimeoutError("secondary lanes did not bind before the deadline")
+        timeout_val = getattr(self, 'lane_timeout', 10.0)
+        control_net = getattr(self, 'control_network', None)
+        data_net = getattr(self, 'data_network', None)
+        file_net = getattr(self, 'file_network', None)
+        logger.error(
+            "Connection deadline expired after %.1fs. Lane status: control=%s (connected=%s), data=%s (connected=%s), file=%s (sock=%s). Check port %s:5002 firewall.",
+            timeout_val,
+            getattr(self, 'control_connected', False), getattr(control_net, 'connected', False) if control_net else False,
+            getattr(self, 'data_connected', False), getattr(data_net, 'connected', False) if data_net else False,
+            getattr(self, 'file_connected', False), getattr(file_net, 'sock', None) is not None if file_net else False,
+            getattr(self, 'host', 'server'),
+        )
+        error = TimeoutError(
+            f"Secondary lanes failed to bind within {timeout_val}s "
+            f"(control={getattr(self, 'control_connected', False)}, data={getattr(self, 'data_connected', False)}, file={getattr(self, 'file_connected', False)})"
+        )
         self.connect_error = str(error)
         self.disconnect(preserve_failure=True, error=error)
         self._report_connect(
@@ -286,12 +313,14 @@ class DeskFlowClient:
             self._disconnecting = False
 
     def on_file_lane_offer(self, data):
+        logger.info("[3/3] Received file_lane_offer for port %s (session %s)", data.get('port'), str(data.get('session_id'))[:8])
         def connect_file_lane():
             try:
                 self._connect_file_lane(data)
             except Exception as error:
                 logger.error(
-                    "Secure file lane connection failed (%s)", error_name(error)
+                    "[3/3] Secure file lane connection failed (%s: %s)",
+                    error_name(error), error, exc_info=True
                 )
                 message = public_error_message(error, "secure file connection failed")
                 self.connect_error = message
@@ -307,10 +336,13 @@ class DeskFlowClient:
         token = session.get('file_token')
         if (not isinstance(port, int) or not isinstance(token, str)
                 or session_id != session.get('session_id')):
+            logger.error("[3/3] File lane offer malformed or session mismatched: port=%s, session_id=%s, token_len=%s", port, session_id, len(token) if token else 0)
             raise ValueError("file-lane offer is malformed")
         fingerprint = self.control_network.peer_certificate_fingerprint()
+        logger.info("[3/3] Connecting file lane to %s:%d...", self.host, port)
         self.file_network.connect(self.host, port, fingerprint, token, session_id=session_id)
         self.file_connected = True
+        logger.info("[3/3] File lane (port %d): CONNECTED", port)
         if self.control_connected and self.data_connected:
             self._maybe_finish_connect()
 
