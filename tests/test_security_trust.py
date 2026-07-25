@@ -25,7 +25,7 @@ class PeerTrustStoreTests(unittest.TestCase):
     def test_rejects_invalid_fingerprints_without_changing_existing_trust(self):
         with tempfile.TemporaryDirectory() as directory:
             store = PeerTrustStore(directory)
-            peer = store.peer_id("192.168.1.5", 5000)
+            peer = store.peer_id("192.0.2.5", 5000)
             store.commit(peer, "11" * 32)
 
             with self.assertRaises(ValueError):

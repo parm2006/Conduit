@@ -11,8 +11,11 @@ dist/
 *.spec
 handoffs/
 
-# Local development and agent planning artifacts
+# Local development, logs, and agent planning artifacts
 docs/
 features.md
 plan.md
 .worktrees/
+codexchat.txt
+*.log
+*.tmp
