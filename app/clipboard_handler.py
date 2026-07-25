@@ -25,6 +25,8 @@ class ClipboardHandler:
         self.is_running = False
         self.thread = None
         self.is_injecting = False
+        self.last_sent_fingerprint = None
+        self.last_injected_fingerprint = None
 
     def start(self):
         self.is_running = True
@@ -64,6 +66,8 @@ class ClipboardHandler:
             )
             return False
 
+        injected_fp = snapshot.fingerprint()
+        self.last_injected_fingerprint = injected_fp
         self.is_injecting = True
         injected_sequence = None
         clipboard_updated = False
@@ -188,5 +192,13 @@ class ClipboardHandler:
             return
         snapshot = self._read_clipboard()
         if snapshot:
+            captured_fp = snapshot.fingerprint()
+            if captured_fp == self.last_injected_fingerprint:
+                logger.info(
+                    "Suppressing echo of injected clipboard snapshot (fingerprint %s)",
+                    captured_fp[:8],
+                )
+                self.last_injected_fingerprint = None  # Single-use suppression clearing
+                return
             logger.info("Local rich clipboard change detected, forwarding...")
             self.on_clipboard_change(snapshot)
