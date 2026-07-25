@@ -329,6 +329,11 @@ class DeskFlowClient:
         input_handler = getattr(self, 'input_handler', None)
         if input_handler is not None:
             input_handler.release_all_injected_keys()
+        if getattr(self, 'is_active', False) and getattr(self, 'control_network', None) and getattr(self.control_network, 'connected', False):
+            try:
+                self.control_network.send_message({'type': 'switch_back', 'ratio': 0.5})
+            except Exception:
+                pass
         if hasattr(self, '_connect_lock'):
             with self._connect_lock:
                 if self._disconnecting:

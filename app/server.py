@@ -364,6 +364,15 @@ class DeskFlowServer:
         mouse_loc = "REMOTE CLIENT SCREEN" if getattr(self, "switching_to_client", False) else "LOCAL HOST SCREEN"
         logger.warning("[HOTKEY DIAGNOSTIC] Ctrl+Alt+Shift+Escape triggered on Server! Cursor location: %s. Forcefully disconnecting client and returning control.", mouse_loc)
         self._release_forwarded_keys()
+        self.switching_to_client = False
+        self.pressed_keys.clear()
+        if hasattr(self, 'forwarded_keys'):
+            self.forwarded_keys.clear()
+        if getattr(self, 'on_capture_stop', None):
+            try:
+                self.on_capture_stop()
+            except Exception as error:
+                logger.debug("Error calling on_capture_stop: %s", error_name(error))
         lock = getattr(self, "_client_state_lock", None)
         if lock:
             with lock:
@@ -412,6 +421,15 @@ class DeskFlowServer:
             self._release_forwarded_keys()
         except Exception as error:
             logger.debug("Error releasing keys during reload: %s", error_name(error))
+        self.switching_to_client = False
+        self.pressed_keys.clear()
+        if hasattr(self, 'forwarded_keys'):
+            self.forwarded_keys.clear()
+        if getattr(self, 'on_capture_stop', None):
+            try:
+                self.on_capture_stop()
+            except Exception as error:
+                logger.debug("Error calling on_capture_stop: %s", error_name(error))
         lock = getattr(self, "_client_state_lock", None)
         if lock:
             with lock:

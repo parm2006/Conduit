@@ -465,28 +465,35 @@ class DeskFlowGUI(ctk.CTk):
 
     def show_overlay(self):
         def _show():
-            if self.overlay:
-                self.overlay_active = True
-                self.overlay.deiconify() # Show it
-                self.overlay.focus_force()
-                self.overlay.grab_set()
-                self.transfer_toast.raise_if_visible()
-                
-                # Initial position
-                self.last_x = self.overlay_center_x
-                self.last_y = self.overlay_center_y
-                # Mapping the overlay and warping to its center can each emit a
-                # synthetic motion event. Neither represents physical input.
-                self.warp_count = 2
-                self.overlay.event_generate('<Motion>', warp=True, x=self.overlay_center_x, y=self.overlay_center_y)
+            try:
+                if self.overlay and self.overlay.winfo_exists():
+                    self.overlay_active = True
+                    self.overlay.deiconify() # Show it
+                    self.overlay.focus_force()
+                    self.overlay.grab_set()
+                    self.transfer_toast.raise_if_visible()
+                    
+                    # Initial position
+                    self.last_x = self.overlay_center_x
+                    self.last_y = self.overlay_center_y
+                    self.warp_count = 2
+                    self.overlay.event_generate('<Motion>', warp=True, x=self.overlay_center_x, y=self.overlay_center_y)
+            except Exception as error:
+                logger.debug("Could not show overlay: %s", error_name(error))
         self.after(0, _show)
 
     def hide_overlay(self):
         def _hide():
-            if self.overlay:
-                self.overlay_active = False
-                self.overlay.grab_release()
-                self.overlay.withdraw()
+            try:
+                if self.overlay and self.overlay.winfo_exists():
+                    self.overlay_active = False
+                    try:
+                        self.overlay.grab_release()
+                    except Exception:
+                        pass
+                    self.overlay.withdraw()
+            except Exception as error:
+                logger.debug("Could not hide overlay: %s", error_name(error))
         self.after(0, _hide)
 
     def on_overlay_motion(self, event):
