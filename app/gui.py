@@ -66,8 +66,7 @@ def write_status_message(widget, message, color="gray", white_text=None, show_ip
     widget.delete("1.0", "end")
     if show_ip:
         ip = get_local_ip()
-        widget.tag_config("ip_header", foreground="white")
-        widget.insert("end", f"Server IP (IPv4): {ip}\n", "ip_header")
+        widget.insert("end", f"Server IP (IPv4): {ip}\n")
     if white_text and white_text in message:
         before, after = message.split(white_text, 1)
         widget.insert("end", before)
