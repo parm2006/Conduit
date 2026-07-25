@@ -298,10 +298,7 @@ class DeskFlowServer:
         has_r = val in ('r', 'R')
         
         if has_ctrl and has_alt and has_shift and has_esc:
-            logger.warning("EMERGENCY EXIT TRIGGERED! Forcefully disconnecting client and returning control.")
-            self._release_forwarded_keys()
-            self.control_network.disconnect()
-            self.data_network.disconnect()
+            self._on_emergency_exit()
             return
 
         if has_ctrl and has_alt and has_shift and has_r:
@@ -357,6 +354,20 @@ class DeskFlowServer:
         self.pressed_keys.clear()
         if forwarded is not None:
             forwarded.clear()
+
+    def _on_emergency_exit(self):
+        logger.warning("EMERGENCY EXIT TRIGGERED! Forcefully disconnecting client and returning control.")
+        self._release_forwarded_keys()
+        if getattr(self, 'control_network', None):
+            try:
+                self.control_network.disconnect()
+            except Exception:
+                pass
+        if getattr(self, 'data_network', None):
+            try:
+                self.data_network.disconnect()
+            except Exception:
+                pass
 
     def _reload_connection(self):
         logger.info("Reloading active connection lanes...")
