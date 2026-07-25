@@ -1,7 +1,6 @@
 import time
 import unittest
 
-from app.file_transfer.handshake import ManifestHandshakeQueue
 from app.file_transfer.paste_service import FilePasteService
 
 
