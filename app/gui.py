@@ -364,35 +364,16 @@ class DeskFlowGUI(ctk.CTk):
         )
         self.repair_btn.pack(pady=5)
 
-        # Server IP display label (Click to Copy)
+        # Server IP display label (Visible only while idle/disconnected)
         local_ips = get_local_ip_addresses()
         ip_str = ", ".join(local_ips)
         self.ip_display_label = ctk.CTkLabel(
             self,
-            text=f"IPv4: {ip_str}  (click to copy)",
+            text=f"IPv4: {ip_str}",
             font=("Consolas", 11),
             text_color="#AAAAAA",
-            cursor="hand2",
         )
         self.ip_display_label.grid(row=1, column=0, padx=20, pady=(0, 2), sticky="w")
-
-        def _copy_ip(event=None):
-            try:
-                self.clipboard_clear()
-                self.clipboard_append(ip_str)
-                self.ip_display_label.configure(
-                    text=f"IPv4: {ip_str}  (Copied!)", text_color="#4CAF50"
-                )
-                self.after(
-                    2000,
-                    lambda: self.ip_display_label.configure(
-                        text=f"IPv4: {ip_str}  (click to copy)", text_color="#AAAAAA"
-                    ),
-                )
-            except Exception:
-                pass
-
-        self.ip_display_label.bind("<Button-1>", _copy_ip)
 
         self.status_text = ctk.CTkTextbox(self, height=92, wrap="word")
         self.status_text.grid(row=2, column=0, padx=20, pady=(0, 14), sticky="nsew")
@@ -596,6 +577,14 @@ class DeskFlowGUI(ctk.CTk):
             color,
             white_text=white_text,
         )
+        if hasattr(self, 'ip_display_label') and self.ip_display_label:
+            try:
+                if "Idle" in message or "stopped" in message or "Disconnected" in message:
+                    self.ip_display_label.grid(row=1, column=0, padx=20, pady=(0, 2), sticky="w")
+                else:
+                    self.ip_display_label.grid_remove()
+            except Exception:
+                pass
 
     def set_layout_position(self, position, persist=True):
         if position not in {"top", "left", "right", "bottom"}:
