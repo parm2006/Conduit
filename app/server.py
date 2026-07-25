@@ -355,10 +355,30 @@ class DeskFlowServer:
         if forwarded is not None:
             forwarded.clear()
 
+    def set_screen_size(self, w, h):
+        self._screen_width = w
+        self._screen_height = h
+        self.input_handler.set_screen_size(w, h)
+
     def _on_emergency_exit(self):
         mouse_loc = "REMOTE CLIENT SCREEN" if getattr(self, "switching_to_client", False) else "LOCAL HOST SCREEN"
         logger.warning("[HOTKEY DIAGNOSTIC] Ctrl+Alt+Shift+Escape triggered on Server! Cursor location: %s. Forcefully disconnecting client and returning control.", mouse_loc)
         self._release_forwarded_keys()
+        lock = getattr(self, "_client_state_lock", None)
+        if lock:
+            with lock:
+                self._client_ready = False
+                self.control_connected = False
+                self.data_connected = False
+        else:
+            self._client_ready = False
+            self.control_connected = False
+            self.data_connected = False
+        if hasattr(self, 'input_handler') and self.input_handler:
+            try:
+                self.input_handler.stop()
+            except Exception:
+                pass
         if getattr(self, 'control_network', None):
             try:
                 self.control_network.disconnect()
@@ -367,6 +387,16 @@ class DeskFlowServer:
         if getattr(self, 'data_network', None):
             try:
                 self.data_network.disconnect()
+            except Exception:
+                pass
+        if getattr(self, 'session_coordinator', None):
+            try:
+                self.session_coordinator.close()
+            except Exception:
+                pass
+        if getattr(self, 'file_network', None):
+            try:
+                self.file_network.revoke_session()
             except Exception:
                 pass
 
@@ -382,14 +412,21 @@ class DeskFlowServer:
             self._release_forwarded_keys()
         except Exception as error:
             logger.debug("Error releasing keys during reload: %s", error_name(error))
+        lock = getattr(self, "_client_state_lock", None)
+        if lock:
+            with lock:
+                self._client_ready = False
+                self.control_connected = False
+                self.data_connected = False
+        else:
+            self._client_ready = False
+            self.control_connected = False
+            self.data_connected = False
         if hasattr(self, 'input_handler') and self.input_handler:
             try:
-                if hasattr(self.input_handler, 'stop_keyboard_capture'):
-                    self.input_handler.stop_keyboard_capture()
-                if hasattr(self.input_handler, 'stop_capture'):
-                    self.input_handler.stop_capture()
+                self.input_handler.stop()
             except Exception as error:
-                logger.debug("Error stopping capture during reload: %s", error_name(error))
+                logger.debug("Error stopping input_handler during reload: %s", error_name(error))
         self.switching_to_client = False
         self.pressed_keys.clear()
         if hasattr(self, 'forwarded_keys'):
@@ -406,7 +443,12 @@ class DeskFlowServer:
                 pass
         if getattr(self, 'session_coordinator', None):
             try:
-                self.session_coordinator.clear()
+                self.session_coordinator.close()
+            except Exception:
+                pass
+        if getattr(self, 'file_network', None):
+            try:
+                self.file_network.revoke_session()
             except Exception:
                 pass
 
