@@ -2,6 +2,8 @@ import customtkinter as ctk
 import logging
 import json
 import os
+from pathlib import Path
+
 from app.server import DeskFlowServer
 from app.client import DeskFlowClient
 from app.file_transfer.toast import TransferToast
