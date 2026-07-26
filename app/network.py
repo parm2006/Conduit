@@ -3,6 +3,8 @@
 import hashlib
 import json
 import logging
+import os
+import select
 import socket
 import ssl
 import struct
@@ -415,7 +417,30 @@ class NetworkServer(NetworkNode):
                     raise ConnectionError("server stopped during authentication")
                 with self._state_lock:
                     if self.connected:
-                        raise ConnectionError("a peer is already connected")
+                        stale = False
+                        if self.sock is not None:
+                            try:
+                                r, _, _ = select.select([self.sock], [], [], 0)
+                                if r:
+                                    peek = self.sock.recv(1, socket.MSG_PEEK)
+                                    if not peek:
+                                        stale = True
+                            except Exception:
+                                stale = True
+                        else:
+                            stale = True
+
+                        if stale or self.role == "control":
+                            logger.info("Server: Replacing prior control session with new incoming connection candidate.")
+                            conn_to_close = self.sock
+                            self.sock = None
+                            self.connected = False
+                            self.authenticated = False
+                            self._heartbeat_stop.set()
+                            if conn_to_close:
+                                self._close_socket(conn_to_close)
+                        else:
+                            raise ConnectionError("a peer is already connected")
                 if self.role == "control":
                     if request.get("type") != "auth":
                         raise SessionAuthenticationError("control authentication is required")
@@ -541,58 +566,77 @@ class NetworkClient(NetworkNode):
                     callback(success, error)
 
             try:
-                self.last_error = None
-                self._set_phase(ConnectionPhase.TLS_CANDIDATE)
-                self.host = host
-                self.port = int(port)
-                logger.info("[%s-lane] Connecting to %s:%d...", self.role, host, self.port)
-                raw = socket.create_connection((host, port), timeout=self.connect_timeout)
-                raw.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
-                raw.settimeout(self.handshake_timeout)
-                secure = _tls_client_context().wrap_socket(raw, server_hostname=host)
-                certificate = secure.getpeercert(binary_form=True)
-                if not certificate:
-                    raise ssl.SSLError("server did not provide a certificate")
-                fingerprint = hashlib.sha256(certificate).hexdigest()
-                logger.info("[%s-lane] TLS wrap successful; peer fingerprint %s", self.role, fingerprint[:12])
-                if self.role == "control":
-                    peer = self.trust_store.peer_id(host, port)
-                    pinned = self.trust_store.load(peer)
-                    if pinned is not None and pinned != fingerprint:
-                        raise PeerIdentityChanged("server identity changed; re-pair is required")
-                    if pinned is None:
-                        self._set_phase(ConnectionPhase.AWAITING_APPROVAL)
-                        pending = PendingPeerTrust(self.trust_store, peer, fingerprint)
-                        if self.fingerprint_approval is None:
-                            raise PairingRequired("first connection requires pairing approval")
-                        if not self._request_pairing_approval(fingerprint, peer):
-                            pending.decline()
-                            raise PairingDeclined("Pairing was declined.")
-                        pending.approve()
-                        self._pending_trust = pending
-                    request = {"type": "auth", "password": self.password}
-                else:
-                    if not self.expected_fingerprint or fingerprint != self.expected_fingerprint:
-                        raise PeerIdentityChanged("secondary lane certificate does not match control")
-                    request = {
-                        "type": "lane_auth",
-                        "token": self.lane_token,
-                        "session_id": self.session_id,
-                    }
-                self._set_phase(ConnectionPhase.AUTHENTICATING)
-                secure.settimeout(self.auth_timeout)
-                _write_message(secure, request)
-                response = _read_message(secure)
-                if response.get("type") == "auth_failure":
-                    if self.role == "control":
-                        raise IncorrectPassword(
-                            "Incorrect password. Check the password shown on the server and try again."
-                        )
-                    raise SecureLaneAuthenticationFailed(
-                        "The secure session could not be completed. Reconnect and try again."
-                    )
-                if response.get("type") != "auth_success":
-                    raise SessionAuthenticationError("authentication was not acknowledged")
+                max_attempts = 2 if self.role == "control" else 1
+                for attempt in range(max_attempts):
+                    try:
+                        self.last_error = None
+                        self._set_phase(ConnectionPhase.TLS_CANDIDATE)
+                        self.host = host
+                        self.port = int(port)
+                        logger.info("[%s-lane] Connecting to %s:%d...", self.role, host, self.port)
+                        raw = socket.create_connection((host, port), timeout=self.connect_timeout)
+                        raw.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+                        raw.settimeout(self.handshake_timeout)
+                        secure = _tls_client_context().wrap_socket(raw, server_hostname=host)
+                        certificate = secure.getpeercert(binary_form=True)
+                        if not certificate:
+                            raise ssl.SSLError("server did not provide a certificate")
+                        fingerprint = hashlib.sha256(certificate).hexdigest()
+                        logger.info("[%s-lane] TLS wrap successful; peer fingerprint %s", self.role, fingerprint[:12])
+                        if self.role == "control":
+                            peer = self.trust_store.peer_id(host, port)
+                            pinned = self.trust_store.load(peer)
+                            if pinned is not None and pinned != fingerprint:
+                                raise PeerIdentityChanged("server identity changed; re-pair is required")
+                            if pinned is None:
+                                self._set_phase(ConnectionPhase.AWAITING_APPROVAL)
+                                pending = PendingPeerTrust(self.trust_store, peer, fingerprint)
+                                if self.fingerprint_approval is None:
+                                    raise PairingRequired("first connection requires pairing approval")
+                                if not self._request_pairing_approval(fingerprint, peer):
+                                    pending.decline()
+                                    raise PairingDeclined("Pairing was declined.")
+                                pending.approve()
+                                self._pending_trust = pending
+                            request = {"type": "auth", "password": self.password}
+                        else:
+                            if not self.expected_fingerprint or fingerprint != self.expected_fingerprint:
+                                raise PeerIdentityChanged("secondary lane certificate does not match control")
+                            request = {
+                                "type": "lane_auth",
+                                "token": self.lane_token,
+                                "session_id": self.session_id,
+                            }
+                        self._set_phase(ConnectionPhase.AUTHENTICATING)
+                        secure.settimeout(self.auth_timeout)
+                        _write_message(secure, request)
+                        response = _read_message(secure)
+                        if response.get("type") == "auth_failure":
+                            if self.role == "control":
+                                raise IncorrectPassword(
+                                    "Incorrect password. Check the password shown on the server and try again."
+                                )
+                            raise SecureLaneAuthenticationFailed(
+                                "The secure session could not be completed. Reconnect and try again."
+                            )
+                        if response.get("type") != "auth_success":
+                            raise SessionAuthenticationError("authentication was not acknowledged")
+                        break
+                    except (SessionAuthenticationError, IncorrectPassword, PairingDeclined, PeerIdentityChanged):
+                        raise
+                    except (ConnectionError, OSError, ssl.SSLError) as err:
+                        if raw is not None:
+                            self._close_socket(raw)
+                        if secure is not None:
+                            self._close_socket(secure)
+                        raw = None
+                        secure = None
+                        if attempt < max_attempts - 1 and self.role == "control":
+                            logger.warning("[%s-lane] Connection attempt %d failed (%s); retrying in 0.4s...", self.role, attempt + 1, err)
+                            time.sleep(0.4)
+                            continue
+                        raise
+
                 if self.role == "control":
                     required = ("session_id", "data_token", "file_token")
                     if not all(isinstance(response.get(key), str) for key in required):
