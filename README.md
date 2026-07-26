@@ -1,19 +1,26 @@
-# DeskFlow
+# 🚀 DeskFlow v4.3s
 
-DeskFlow is a lightweight, wireless KVM utility written in Python. It allows sharing a single mouse, keyboard, and rich clipboard (including text and images) between two computers on the same local network.
+**DeskFlow** is a lightweight wireless KVM for Windows. Share your mouse, keyboard, rich clipboard, and Explorer file transfers between 2 PCs over your local network.
 
-## Features
-* **Wireless Mouse Roaming**: Border edge detection switches control seamlessly.
-* **Keyboard Redirection**: Captures and routes input (including modifier keys) with local suppression.
-* **Rich Clipboard Sync**: Synchronizes text and images with fast zlib compression and loop/freeze protection.
-* **TLS Encryption**: Secure communication via SSL/TLS socket wrappers.
+### ✨ What's New in v4.3s
+* **Synchronized Background Daemon Mode (`Ctrl + Shift + Alt + B`):** Hides the GUI window completely out of the way on both Host and Client PCs in sync across the network. Pressing it again restores visibility on both ends.
+* **Seamless Connection Soft-Reset (`Ctrl + Shift + Alt + R`):** Soft-resets socket connections between server and client in reality without disturbing window visibility if hidden in daemon mode.
+* **Race Condition & Reconnect Hardening:** Eliminates control lane authentication race conditions on quick reconnects with automatic stale session replacement and transient network retries.
+* **Pre-Disconnect & Exit Visibility Sync:** Emergency exit (`Ctrl + Shift + Alt + Esc`) and explicit disconnects notify the remote peer and unhide the GUI window so neither side is left hidden.
 
-## Emergency Exit
-If the mouse/keyboard focus becomes stuck on the client, press **`Ctrl + Alt + Shift + Escape`** on the server keyboard to immediately break the connection and restore local control.
+### 🛠️ All Features
+* **Mouse Roaming & Resolution Scaling:** Smooth edge transition with auto-calculated X/Y speed scaling across 4K, 1440p, and 1080p screens.
+* **Low-Latency Keyboard Simulation:** Full forwarding of modifiers (`Ctrl`, `Alt`, `Shift`, `Win`) with strict host suppression so passwords aren't typed on the host screen.
+* **Rich Clipboard Sync:** Supports Plain Text, Formatted HTML, RTF, PNG/DIB Images, and Web MIME formats with Zlib compression and SHA-256 echo suppression.
+* **Explorer File Paste:** Transfer files on demand by pressing `Ctrl+V` on the client, powered by a fast 256 KiB sliding-window pipeline (~5.5 MiB/s).
+* **TLS Security & Pairing:** Auto-generated RSA certificates, encrypted lanes, session-bound tokens, and interactive 4-digit pairing approval.
+* **Global Hotkeys:**
+  - **`Ctrl + Alt + Shift + B`**: Toggle Background Daemon Mode (syncs across network).
+  - **`Ctrl + Alt + Shift + R`**: Reconnect / Soft-reset connection.
+  - **`Ctrl + Alt + Shift + Escape`**: Emergency Exit (restores GUI & local input).
 
-## Getting Started
+### 📦 Quick Start
+1. Run **`DeskFlow.exe`** on both Windows 10/11 PCs.
+2. **PC 1 (Host):** Select edge $\rightarrow$ **Start Server**.
+3. **PC 2 (Client):** Enter Host IP & Password $\rightarrow$ **Connect**.
 
-### Setup & Run
-1. Download the executable from the [Latest Release](https://github.com/parm2006/DeskFlow/releases/latest) and run `DeskFlow.exe` on both computers.
-2. On the **Server (Host)**: Enter a password, select the Client position, and click **Start Server**.
-3. On the **Client**: Enter the Server's IP address, Port, password, and click **Connect**.
