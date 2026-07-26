@@ -7,10 +7,12 @@ from app.gui import DeskFlowGUI
 class MockDeskFlowGUI(DeskFlowGUI):
     def __init__(self):
         self._window_state = "normal"
+        self._is_reloading = False
         self.server = MagicMock()
         self.client = MagicMock()
         self.server_stop_btn = MagicMock()
         self.server_start_btn = MagicMock()
+        self.server_port_entry = MagicMock()
         self.client_stop_btn = MagicMock()
         self.client_start_btn = MagicMock()
         self.client_connect_btn = MagicMock()
@@ -23,7 +25,8 @@ class MockDeskFlowGUI(DeskFlowGUI):
         self.focus_force_calls = 0
 
     def after(self, delay, func):
-        func()
+        if delay == 0:
+            func()
 
     def state(self):
         return self._window_state
@@ -104,6 +107,18 @@ class DaemonModeTests(unittest.TestCase):
         self.gui._on_reload_connection_global()
 
         self.gui.server._reload_connection.assert_called_once()
+        self.assertEqual(self.gui._window_state, "withdrawn")
+        self.assertEqual(self.gui.deiconify_calls, 0)
+
+    def test_reload_connection_prevents_disconnect_from_unhiding_window(self):
+        self.gui._window_state = "withdrawn"
+        self.gui._on_reload_connection_global()
+
+        # Disconnect events that happen as a result of reload socket reset
+        self.gui._on_server_client_disconnected({})
+        self.gui._finish_client_disconnect(self.gui.client)
+        self.gui._on_disconnect_notice({'reason': 'reload_connection'})
+
         self.assertEqual(self.gui._window_state, "withdrawn")
         self.assertEqual(self.gui.deiconify_calls, 0)
 

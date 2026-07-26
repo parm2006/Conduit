@@ -266,6 +266,7 @@ class DeskFlowGUI(ctk.CTk):
         self.overlay_center_y = self.winfo_screenheight() // 2
         self.overlay = None
         self.overlay_active = False
+        self._is_reloading = False
         self.transfer_toast = TransferToast(self, self._cancel_transfer)
         self.pairing_approval = PairingApprovalController(
             self,
@@ -442,6 +443,7 @@ class DeskFlowGUI(ctk.CTk):
         self.server.control_network.register_callback('disconnected', self._on_server_client_disconnected)
         self.server.control_network.register_callback('set_daemon_mode', self._on_remote_daemon_mode)
         self.server.control_network.register_callback('disconnect_notice', self._on_disconnect_notice)
+        self.server.control_network.register_callback('reload_connection', self._on_remote_reload_connection)
         screen_width = self.winfo_screenwidth()
         screen_height = self.winfo_screenheight()
         self.server.set_screen_size(screen_width, screen_height)
@@ -502,6 +504,7 @@ class DeskFlowGUI(ctk.CTk):
         )
         client.control_network.register_callback('set_daemon_mode', self._on_remote_daemon_mode)
         client.control_network.register_callback('disconnect_notice', self._on_disconnect_notice)
+        client.control_network.register_callback('reload_connection', self._on_remote_reload_connection)
         screen_width = self.winfo_screenwidth()
         screen_height = self.winfo_screenheight()
         client.set_screen_size(screen_width, screen_height)
@@ -524,6 +527,7 @@ class DeskFlowGUI(ctk.CTk):
         if self.client is not source:
             return
         self.client_connect_btn.configure(state="normal")
+        self._is_reloading = False
         if success:
             save_role_safely(self.preferences, "client")
             self._set_status(f"Status: Connected to {ip}:{port}", "green")
@@ -534,6 +538,7 @@ class DeskFlowGUI(ctk.CTk):
             self._set_status(f"Status: Connection failed\n{error_msg}", "red")
 
     def stop_server(self):
+        self._is_reloading = False
         if self.server:
             if getattr(self.server, 'control_connected', False) and getattr(self.server, 'control_network', None):
                 try:
@@ -552,6 +557,8 @@ class DeskFlowGUI(ctk.CTk):
     def disconnect_client(self, target_client=None):
         if target_client is not None and self.client is not target_client:
             return
+        if target_client is None:
+            self._is_reloading = False
         client = self.client if target_client is None else target_client
         if self.client is client:
             self.client = None
@@ -573,6 +580,8 @@ class DeskFlowGUI(ctk.CTk):
 
     def reconnect_client(self):
         logger.info("GUI: Initiating client reconnect...")
+        self._is_reloading = True
+        self.after(3000, lambda: setattr(self, '_is_reloading', False))
         old_client = self.client
         self._set_status("Status: Reloading connection...", "orange")
         if old_client:
@@ -663,7 +672,11 @@ class DeskFlowGUI(ctk.CTk):
         self.set_daemon_mode(hidden)
 
     def ensure_visible(self):
-        """Ensure the GUI window is restored to visible state."""
+        """Ensure the GUI window is restored to visible state (unless connection reload is in progress)."""
+        if self.__dict__.get('_is_reloading', False):
+            logger.info("[DAEMON] Skipping window restore because connection reload is in progress.")
+            return
+
         def _show():
             try:
                 if self.state() == "withdrawn":
@@ -677,6 +690,7 @@ class DeskFlowGUI(ctk.CTk):
 
     def _on_emergency_exit_global(self):
         logger.warning("[GUI] Global emergency exit triggered (Ctrl+Shift+Alt+Escape). Restoring window visibility.")
+        self._is_reloading = False
         if self.server:
             self.server._on_emergency_exit()
         if self.client:
@@ -686,12 +700,23 @@ class DeskFlowGUI(ctk.CTk):
 
     def _on_reload_connection_global(self):
         logger.warning("[GUI] Global connection reload triggered (Ctrl+Shift+Alt+R). Maintaining current window visibility.")
+        self._is_reloading = True
+        self.after(3000, lambda: setattr(self, '_is_reloading', False))
         if self.server:
             self.server._reload_connection()
         elif self.client:
             self.reconnect_client()
 
+    def _on_remote_reload_connection(self, data):
+        logger.info("[GUI] Remote peer triggered connection reload. Maintaining current window visibility.")
+        self._is_reloading = True
+        self.after(3000, lambda: setattr(self, '_is_reloading', False))
+
     def _on_disconnect_notice(self, data):
+        reason = data.get('reason', '')
+        if reason == 'reload_connection' or self.__dict__.get('_is_reloading', False):
+            logger.info("[GUI] Pre-disconnect notice received during connection reload. Maintaining window visibility.")
+            return
         logger.info("[GUI] Pre-disconnect notice received from peer. Restoring window visibility.")
         self.ensure_visible()
 
