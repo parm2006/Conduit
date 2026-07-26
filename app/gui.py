@@ -527,6 +527,9 @@ class DeskFlowGUI(ctk.CTk):
             self.client_connect_btn.pack_forget()
             self.client_disconnect_btn.pack(pady=10)
         else:
+            if source and (getattr(source, 'control_connected', False) or getattr(source, 'is_active', False)):
+                logger.info("GUI: Suppressing stale connect error because client is connected.")
+                return
             self._set_status(f"Status: Connection failed\n{error_msg}", "red")
 
     def stop_server(self):
@@ -561,10 +564,16 @@ class DeskFlowGUI(ctk.CTk):
         self._set_status("Status: Reloading connection...", "orange")
         if old_client:
             try:
+                old_client.on_reload_callback = None
+                if hasattr(old_client, 'control_network') and old_client.control_network:
+                    try:
+                        old_client.control_network.unregister_callback('disconnected')
+                    except Exception:
+                        pass
                 old_client.disconnect()
             except Exception:
                 pass
-        self.after(500, self.connect_client)
+        self.after(600, self.connect_client)
 
     def _on_server_client_connected(self, data):
         self.after(0, lambda: self._set_status("Status: Client Connected!", "green"))
