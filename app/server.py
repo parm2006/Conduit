@@ -25,7 +25,7 @@ from app.global_hotkey import GlobalHotkeyMonitor
 logger = logging.getLogger(__name__)
 
 class DeskFlowServer:
-    def __init__(self, password, port=5000, layout_position='right', on_capture_start=None, on_capture_stop=None, on_transfer_status=None, on_toggle_daemon=None):
+    def __init__(self, password, port=5000, layout_position='right', on_capture_start=None, on_capture_stop=None, on_transfer_status=None):
         self.layout_position = layout_position
         self.on_capture_start = on_capture_start
         self.on_capture_stop = on_capture_stop
@@ -57,9 +57,7 @@ class DeskFlowServer:
         self.global_hotkey_monitor = GlobalHotkeyMonitor(
             on_emergency_exit=self._on_emergency_exit,
             on_reload_connection=self._reload_connection,
-            on_toggle_daemon=on_toggle_daemon,
         )
-
         
         self.control_connected = False
         self.data_connected = False

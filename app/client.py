@@ -27,7 +27,7 @@ logger = logging.getLogger(__name__)
 class DeskFlowClient:
     def __init__(
         self, password, on_transfer_status=None, fingerprint_approval=None,
-        trust_store=None, lane_timeout=10.0, on_toggle_daemon=None,
+        trust_store=None, lane_timeout=10.0,
     ):
         self.password = password
         self.trust_store = trust_store or PeerTrustStore()
@@ -55,9 +55,7 @@ class DeskFlowClient:
         self.global_hotkey_monitor = GlobalHotkeyMonitor(
             on_emergency_exit=self.disconnect,
             on_reload_connection=self.reload_connection,
-            on_toggle_daemon=on_toggle_daemon,
         )
-
         self.is_active = False
         self.control_connected = False
         self.data_connected = False

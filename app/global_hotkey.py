@@ -6,7 +6,7 @@ logger = logging.getLogger(__name__)
 
 
 class GlobalHotkeyMonitor:
-    """Always-active background keybind monitor for emergency exit, connection reload, & background daemon toggle."""
+    """Always-active background keybind monitor for emergency exit, connection reload, and background daemon mode."""
 
     def __init__(self, on_emergency_exit=None, on_reload_connection=None, on_toggle_daemon=None):
         self.on_emergency_exit = on_emergency_exit

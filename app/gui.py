@@ -271,12 +271,6 @@ class DeskFlowGUI(ctk.CTk):
             self,
             on_status=lambda message: self._set_status(message, "orange"),
         )
-        self.global_hotkey_monitor = GlobalHotkeyMonitor(
-            on_emergency_exit=self._on_emergency_exit_global,
-            on_reload_connection=self._on_reload_connection_global,
-            on_toggle_daemon=self.toggle_daemon_mode,
-        )
-        self.global_hotkey_monitor.start()
         
         # UI setup
         self.grid_columnconfigure(0, weight=1)
@@ -377,6 +371,14 @@ class DeskFlowGUI(ctk.CTk):
         self.status_text.grid(row=1, column=0, padx=20, pady=(0, 14), sticky="nsew")
         self._set_status("Status: Idle", "gray")
         
+        # Global Hotkey Monitor
+        self.global_hotkey_monitor = GlobalHotkeyMonitor(
+            on_emergency_exit=self._on_emergency_exit_global,
+            on_reload_connection=self._on_reload_connection_global,
+            on_toggle_daemon=self.toggle_daemon_mode,
+        )
+        self.global_hotkey_monitor.start()
+
         self.protocol("WM_DELETE_WINDOW", self.on_close)
 
     def load_known_hosts(self):
@@ -435,10 +437,11 @@ class DeskFlowGUI(ctk.CTk):
             on_capture_start=self.show_overlay, 
             on_capture_stop=self.hide_overlay,
             on_transfer_status=self._on_transfer_status,
-            on_toggle_daemon=self.toggle_daemon_mode,
         )
         self.server.control_network.register_callback('connected', self._on_server_client_connected)
         self.server.control_network.register_callback('disconnected', self._on_server_client_disconnected)
+        self.server.control_network.register_callback('set_daemon_mode', self._on_remote_daemon_mode)
+        self.server.control_network.register_callback('disconnect_notice', self._on_disconnect_notice)
         screen_width = self.winfo_screenwidth()
         screen_height = self.winfo_screenheight()
         self.server.set_screen_size(screen_width, screen_height)
@@ -490,7 +493,6 @@ class DeskFlowGUI(ctk.CTk):
             password=password,
             on_transfer_status=self._on_transfer_status,
             fingerprint_approval=self._approve_fingerprint,
-            on_toggle_daemon=self.toggle_daemon_mode,
         )
         self.client = client
         client.on_reload_callback = lambda: self.after(0, self.reconnect_client)
@@ -498,6 +500,8 @@ class DeskFlowGUI(ctk.CTk):
             'disconnected',
             lambda data, source=client: self._on_client_disconnected_event(source, data),
         )
+        client.control_network.register_callback('set_daemon_mode', self._on_remote_daemon_mode)
+        client.control_network.register_callback('disconnect_notice', self._on_disconnect_notice)
         screen_width = self.winfo_screenwidth()
         screen_height = self.winfo_screenheight()
         client.set_screen_size(screen_width, screen_height)
@@ -527,36 +531,45 @@ class DeskFlowGUI(ctk.CTk):
             self.client_connect_btn.pack_forget()
             self.client_disconnect_btn.pack(pady=10)
         else:
-            if source and (getattr(source, 'control_connected', False) or getattr(source, 'is_active', False)):
-                logger.info("GUI: Suppressing stale connect error because client is connected.")
-                return
             self._set_status(f"Status: Connection failed\n{error_msg}", "red")
 
     def stop_server(self):
         if self.server:
+            if getattr(self.server, 'control_connected', False) and getattr(self.server, 'control_network', None):
+                try:
+                    self.server.control_network.send_message({'type': 'disconnect_notice', 'reason': 'server_stopping'})
+                    import time
+                    time.sleep(0.05)
+                except Exception:
+                    pass
             self.server.stop()
             self.server = None
         self.server_stop_btn.pack_forget()
         self.server_start_btn.pack(pady=10)
         self._set_status("Status: Server stopped", "gray")
+        self.ensure_visible()
 
     def disconnect_client(self, target_client=None):
         if target_client is not None and self.client is not target_client:
             return
-        client = self.client
-        if target_client is not None:
-            client = target_client
-            if self.client is target_client:
-                self.client = None
-        else:
+        client = self.client if target_client is None else target_client
+        if self.client is client:
             self.client = None
         if client:
+            if getattr(client, 'control_connected', False) and getattr(client, 'control_network', None):
+                try:
+                    client.control_network.send_message({'type': 'disconnect_notice', 'reason': 'client_disconnecting'})
+                    import time
+                    time.sleep(0.05)
+                except Exception:
+                    pass
             client.disconnect()
         if self.client is None:
             self.client_disconnect_btn.pack_forget()
             self.client_connect_btn.pack(pady=10)
             self.client_connect_btn.configure(state="normal")
             self._set_status("Status: Disconnected", "gray")
+            self.ensure_visible()
 
     def reconnect_client(self):
         logger.info("GUI: Initiating client reconnect...")
@@ -564,16 +577,10 @@ class DeskFlowGUI(ctk.CTk):
         self._set_status("Status: Reloading connection...", "orange")
         if old_client:
             try:
-                old_client.on_reload_callback = None
-                if hasattr(old_client, 'control_network') and old_client.control_network:
-                    try:
-                        old_client.control_network.unregister_callback('disconnected')
-                    except Exception:
-                        pass
                 old_client.disconnect()
             except Exception:
                 pass
-        self.after(600, self.connect_client)
+        self.after(500, self.connect_client)
 
     def _on_server_client_connected(self, data):
         self.after(0, lambda: self._set_status("Status: Client Connected!", "green"))
@@ -582,6 +589,7 @@ class DeskFlowGUI(ctk.CTk):
         if self.server:
             port = self.server_port_entry.get()
             self.after(0, lambda: self._set_status(f"Status: Server listening on port {port}", "green"))
+        self.ensure_visible()
 
     def _set_status(self, message, color="gray", white_text=None, show_ip=None):
         if show_ip is None:
@@ -612,6 +620,81 @@ class DeskFlowGUI(ctk.CTk):
                     error_name(error),
                 )
 
+    def set_daemon_mode(self, hidden):
+        """Set window visibility to background daemon mode (hidden) or visible mode."""
+        def _apply():
+            try:
+                if hidden and self.state() != "withdrawn":
+                    self.withdraw()
+                    logger.info("[DAEMON] DeskFlow GUI hidden in background daemon mode.")
+                elif not hidden and self.state() == "withdrawn":
+                    self.deiconify()
+                    self.lift()
+                    self.focus_force()
+                    logger.info("[DAEMON] DeskFlow GUI unhidden from background daemon mode.")
+            except Exception as error:
+                logger.debug("Could not set daemon mode: %s", error_name(error))
+        self.after(0, _apply)
+
+    def toggle_daemon_mode(self):
+        """Toggle background daemon mode locally and sync across network with connected peer."""
+        is_currently_hidden = (self.state() == "withdrawn")
+        target_hidden = not is_currently_hidden
+        self.set_daemon_mode(target_hidden)
+        self._send_daemon_mode_sync(target_hidden)
+
+    def _send_daemon_mode_sync(self, hidden):
+        """Send background daemon mode visibility state to connected peer."""
+        msg = {'type': 'set_daemon_mode', 'hidden': hidden}
+        if self.server and getattr(self.server, 'control_connected', False) and getattr(self.server, 'control_network', None):
+            try:
+                self.server.control_network.send_message(msg)
+            except Exception as error:
+                logger.debug("Could not send daemon mode sync from server: %s", error_name(error))
+        elif self.client and getattr(self.client, 'control_connected', False) and getattr(self.client, 'control_network', None):
+            try:
+                self.client.control_network.send_message(msg)
+            except Exception as error:
+                logger.debug("Could not send daemon mode sync from client: %s", error_name(error))
+
+    def _on_remote_daemon_mode(self, data):
+        """Handle daemon mode sync message from remote peer."""
+        hidden = data.get('hidden', False)
+        self.set_daemon_mode(hidden)
+
+    def ensure_visible(self):
+        """Ensure the GUI window is restored to visible state."""
+        def _show():
+            try:
+                if self.state() == "withdrawn":
+                    self.deiconify()
+                    self.lift()
+                    self.focus_force()
+                    logger.info("[DAEMON] DeskFlow GUI restored to visibility.")
+            except Exception as error:
+                logger.debug("Could not ensure window visibility: %s", error_name(error))
+        self.after(0, _show)
+
+    def _on_emergency_exit_global(self):
+        logger.warning("[GUI] Global emergency exit triggered (Ctrl+Shift+Alt+Escape). Restoring window visibility.")
+        if self.server:
+            self.server._on_emergency_exit()
+        if self.client:
+            self.client.disconnect()
+        self.hide_overlay()
+        self.ensure_visible()
+
+    def _on_reload_connection_global(self):
+        logger.warning("[GUI] Global connection reload triggered (Ctrl+Shift+Alt+R). Maintaining current window visibility.")
+        if self.server:
+            self.server._reload_connection()
+        elif self.client:
+            self.reconnect_client()
+
+    def _on_disconnect_notice(self, data):
+        logger.info("[GUI] Pre-disconnect notice received from peer. Restoring window visibility.")
+        self.ensure_visible()
+
     def _approve_fingerprint(self, fingerprint, peer):
         return self.pairing_approval.request(fingerprint, peer)
 
@@ -638,6 +721,7 @@ class DeskFlowGUI(ctk.CTk):
     def _finish_client_disconnect(self, source):
         if self.client is source:
             self.disconnect_client(target_client=source)
+        self.ensure_visible()
 
     def _on_transfer_status(self, status):
         self.after(0, lambda: self.transfer_toast.show(status))
@@ -648,51 +732,6 @@ class DeskFlowGUI(ctk.CTk):
         if self.client and self.client.transfer_controller.status(job_id):
             return self.client.cancel_transfer(job_id)
         return False
-
-    def toggle_daemon_mode(self):
-        """Toggle window visibility between background daemon mode (hidden) and visible mode."""
-        def _toggle():
-            try:
-                if self.state() == "withdrawn":
-                    self.deiconify()
-                    self.lift()
-                    self.focus_force()
-                    logger.info("[DAEMON] DeskFlow GUI unhidden from background daemon mode.")
-                else:
-                    self.withdraw()
-                    logger.info("[DAEMON] DeskFlow GUI hidden in background daemon mode (Ctrl+Shift+Alt+B to restore).")
-            except Exception as error:
-                logger.debug("Could not toggle daemon mode visibility: %s", error_name(error))
-        self.after(0, _toggle)
-
-    def ensure_visible(self):
-        """Ensure the GUI window is restored to visible state."""
-        def _show():
-            try:
-                if self.state() == "withdrawn":
-                    self.deiconify()
-                    self.lift()
-                    self.focus_force()
-                    logger.info("[DAEMON] DeskFlow GUI unhidden via emergency exit.")
-            except Exception as error:
-                logger.debug("Could not ensure window visibility: %s", error_name(error))
-        self.after(0, _show)
-
-    def _on_emergency_exit_global(self):
-        logger.warning("[GUI] Global emergency exit triggered (Ctrl+Shift+Alt+Escape). Restoring window visibility.")
-        if self.server:
-            self.server._on_emergency_exit()
-        if self.client:
-            self.client.disconnect()
-        self.hide_overlay()
-        self.ensure_visible()
-
-    def _on_reload_connection_global(self):
-        logger.warning("[GUI] Global connection reload triggered (Ctrl+Shift+Alt+R). Window will maintain current visibility.")
-        if self.server:
-            self.server._reload_connection()
-        elif self.client:
-            self.reconnect_client()
 
     def on_close(self):
         self.pairing_approval.shutdown()
