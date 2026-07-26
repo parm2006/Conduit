@@ -11,6 +11,7 @@ from app.crypto import certificate_fingerprint, pairing_code_from_fingerprint
 from app.pairing_dialog import PairingApprovalController
 from app.safe_errors import error_name, public_error_message
 from app.preferences import UserPreferences
+from app.global_hotkey import GlobalHotkeyMonitor
 
 logger = logging.getLogger(__name__)
 
@@ -270,6 +271,12 @@ class DeskFlowGUI(ctk.CTk):
             self,
             on_status=lambda message: self._set_status(message, "orange"),
         )
+        self.global_hotkey_monitor = GlobalHotkeyMonitor(
+            on_emergency_exit=self._on_emergency_exit_global,
+            on_reload_connection=self._on_reload_connection_global,
+            on_toggle_daemon=self.toggle_daemon_mode,
+        )
+        self.global_hotkey_monitor.start()
         
         # UI setup
         self.grid_columnconfigure(0, weight=1)
@@ -428,6 +435,7 @@ class DeskFlowGUI(ctk.CTk):
             on_capture_start=self.show_overlay, 
             on_capture_stop=self.hide_overlay,
             on_transfer_status=self._on_transfer_status,
+            on_toggle_daemon=self.toggle_daemon_mode,
         )
         self.server.control_network.register_callback('connected', self._on_server_client_connected)
         self.server.control_network.register_callback('disconnected', self._on_server_client_disconnected)
@@ -482,6 +490,7 @@ class DeskFlowGUI(ctk.CTk):
             password=password,
             on_transfer_status=self._on_transfer_status,
             fingerprint_approval=self._approve_fingerprint,
+            on_toggle_daemon=self.toggle_daemon_mode,
         )
         self.client = client
         client.on_reload_callback = lambda: self.after(0, self.reconnect_client)
@@ -631,8 +640,59 @@ class DeskFlowGUI(ctk.CTk):
             return self.client.cancel_transfer(job_id)
         return False
 
+    def toggle_daemon_mode(self):
+        """Toggle window visibility between background daemon mode (hidden) and visible mode."""
+        def _toggle():
+            try:
+                if self.state() == "withdrawn":
+                    self.deiconify()
+                    self.lift()
+                    self.focus_force()
+                    logger.info("[DAEMON] DeskFlow GUI unhidden from background daemon mode.")
+                else:
+                    self.withdraw()
+                    logger.info("[DAEMON] DeskFlow GUI hidden in background daemon mode (Ctrl+Shift+Alt+B to restore).")
+            except Exception as error:
+                logger.debug("Could not toggle daemon mode visibility: %s", error_name(error))
+        self.after(0, _toggle)
+
+    def ensure_visible(self):
+        """Ensure the GUI window is restored to visible state."""
+        def _show():
+            try:
+                if self.state() == "withdrawn":
+                    self.deiconify()
+                    self.lift()
+                    self.focus_force()
+                    logger.info("[DAEMON] DeskFlow GUI unhidden via emergency exit.")
+            except Exception as error:
+                logger.debug("Could not ensure window visibility: %s", error_name(error))
+        self.after(0, _show)
+
+    def _on_emergency_exit_global(self):
+        logger.warning("[GUI] Global emergency exit triggered (Ctrl+Shift+Alt+Escape). Restoring window visibility.")
+        if self.server:
+            self.server._on_emergency_exit()
+        if self.client:
+            self.client.disconnect()
+        self.hide_overlay()
+        self.ensure_visible()
+
+    def _on_reload_connection_global(self):
+        logger.warning("[GUI] Global connection reload triggered (Ctrl+Shift+Alt+R). Window will maintain current visibility.")
+        if self.server:
+            self.server._reload_connection()
+        elif self.client:
+            self.reconnect_client()
+
     def on_close(self):
         self.pairing_approval.shutdown()
+        monitor = self.__dict__.get('global_hotkey_monitor')
+        if monitor is not None:
+            try:
+                monitor.stop()
+            except Exception:
+                pass
         if self.overlay:
             self.hide_overlay()
         if self.server:

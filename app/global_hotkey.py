@@ -6,11 +6,12 @@ logger = logging.getLogger(__name__)
 
 
 class GlobalHotkeyMonitor:
-    """Always-active background keybind monitor for emergency exit & connection reload."""
+    """Always-active background keybind monitor for emergency exit, connection reload, & background daemon toggle."""
 
-    def __init__(self, on_emergency_exit=None, on_reload_connection=None):
+    def __init__(self, on_emergency_exit=None, on_reload_connection=None, on_toggle_daemon=None):
         self.on_emergency_exit = on_emergency_exit
         self.on_reload_connection = on_reload_connection
+        self.on_toggle_daemon = on_toggle_daemon
         self.pressed_keys = set()
         self.listener = None
         self._lock = threading.Lock()
@@ -24,7 +25,7 @@ class GlobalHotkeyMonitor:
         )
         self.listener.daemon = True
         self.listener.start()
-        logger.info("Global hotkey monitor started (Ctrl+Shift+Alt+Escape & Ctrl+Shift+Alt+R)")
+        logger.info("Global hotkey monitor started (Ctrl+Shift+Alt+Escape, Ctrl+Shift+Alt+R, Ctrl+Shift+Alt+B)")
 
     def stop(self):
         if self.listener is not None:
@@ -44,6 +45,8 @@ class GlobalHotkeyMonitor:
             vk = getattr(key, "vk", None)
             if vk in (82, 114) or (key.char and key.char.lower() in ("r", "\x12")):
                 return "r"
+            if vk in (66, 98) or (key.char and key.char.lower() in ("b", "\x02")):
+                return "b"
             if vk == 27:
                 return "esc"
             if key.char:
@@ -59,6 +62,7 @@ class GlobalHotkeyMonitor:
             has_shift = any(k in self.pressed_keys for k in ("shift", "shift_l", "shift_r"))
             has_esc = val in ("esc", "escape")
             has_r = val in ("r", "R")
+            has_b = val in ("b", "B")
 
             if has_ctrl and has_alt and has_shift:
                 if has_esc and self.on_emergency_exit:
@@ -69,8 +73,13 @@ class GlobalHotkeyMonitor:
                     logger.warning("[HOTKEY DIAGNOSTIC] Ctrl+Alt+Shift+R triggered globally!")
                     self.pressed_keys.clear()
                     threading.Thread(target=self.on_reload_connection, daemon=True).start()
+                elif has_b and self.on_toggle_daemon:
+                    logger.warning("[HOTKEY DIAGNOSTIC] Ctrl+Alt+Shift+B triggered globally!")
+                    self.pressed_keys.clear()
+                    threading.Thread(target=self.on_toggle_daemon, daemon=True).start()
 
     def _on_release(self, key):
         val = self._normalize_key(key)
         with self._lock:
             self.pressed_keys.discard(val)
+
