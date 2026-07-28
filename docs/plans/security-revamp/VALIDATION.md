@@ -167,25 +167,22 @@ Pass when every requested file appears once, late Explorer requests cannot
 crash the provider, **Don't copy** keeps the user's file copy, and newer
 clipboard content still wins.
 
-## 6. Queue order, cancellation, and recovery
+## 6. Cancellation and recovery
 
-Create files A, B, and C with distinct hashes. Make A large enough to remain
-active while you request B and C.
+File queueing is intentionally out of scope. Use the large disposable file
+from section 4 to verify that each active transfer cleans up independently.
 
-1. Paste A, then request B and C while A remains active.
-2. Confirm A, B, and C start and finish in request order and all hashes match.
-3. Repeat in the other direction.
-4. Start a large server-to-client transfer and cancel it at the source. Confirm
+1. Start a large server-to-client transfer and cancel it at the source. Confirm
    both toasts clear and a new small-file paste works without reconnecting.
-5. Start a large client-to-server transfer and cancel it at the destination.
+2. Start a large client-to-server transfer and cancel it at the destination.
    Confirm both toasts clear and a new small-file paste works without
    reconnecting.
-6. Disconnect once during an active transfer. Reconnect, then paste text, a
+3. Disconnect once during an active transfer. Reconnect, then paste text, a
    screenshot, a multi-file selection, and one small file.
 
-Pass when queue order is stable, each cancellation finishes exactly once, no
-partial destination remains, and reconnecting creates a clean session without
-stale jobs or invisible cursors.
+Pass when each cancellation finishes exactly once, no partial destination
+remains, and reconnecting creates a clean session without stale jobs or
+invisible cursors.
 
 ## 7. Final clean restart
 
@@ -211,7 +208,7 @@ Full commit on CLIENT_PC: <SAME_FULL_COMMIT>
 3 Google Docs rich clipboard: PASS/FAIL/NOT RUN
 4 Large-file throughput and input priority: PASS/FAIL/NOT RUN
 5 Multi-file paste and clipboard lifecycle: PASS/FAIL/NOT RUN
-6 Queue order, cancellation, and recovery: PASS/FAIL/NOT RUN
+6 Cancellation and recovery: PASS/FAIL/NOT RUN
 7 Final clean restart: PASS/FAIL/NOT RUN
 
 First failure:
