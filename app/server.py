@@ -9,7 +9,7 @@ from app.file_transfer.transport import FileLaneServer
 from app.file_transfer.paste_coordinator import PasteCoordinator
 from app.file_transfer.hotkey import WindowsPasteHotkeyMonitor
 from app.file_transfer.paste_service import FilePasteService
-from app.file_transfer.publisher import VirtualPastePublisher
+from app.file_transfer.publisher import VirtualPastePublisher, inject_paste_shortcut
 from app.file_transfer.receiver import TransferReceiver
 from app.file_transfer.selection import snapshot_selection
 from app.file_transfer.sender import TransferSender
@@ -52,8 +52,11 @@ class DeskFlowServer:
         self.transfer_cancellation = TransferCancellation(
             self.file_network, self.transfer_controller, self.file_receiver
         )
-        self.file_publisher = VirtualPastePublisher()
+        self.file_publisher = VirtualPastePublisher(
+            inject=self._inject_local_file_paste
+        )
         self.input_handler = InputHandler()
+        self._input_route_lock = threading.RLock()
         self.global_hotkey_monitor = GlobalHotkeyMonitor(
             on_emergency_exit=self._on_emergency_exit,
             on_reload_connection=self._reload_connection,
@@ -112,6 +115,24 @@ class DeskFlowServer:
 
     def cancel_transfer(self, job_id):
         return self.transfer_cancellation.request(job_id)
+
+    def _get_input_route_lock(self):
+        lock = getattr(self, "_input_route_lock", None)
+        if lock is None:
+            lock = threading.RLock()
+            self._input_route_lock = lock
+        return lock
+
+    def _inject_local_file_paste(self, keyboard):
+        lock = self._get_input_route_lock()
+        with lock:
+            if getattr(self, "switching_to_client", False):
+                self.input_handler.stop_keyboard_capture()
+            try:
+                return inject_paste_shortcut(keyboard)
+            finally:
+                if getattr(self, "switching_to_client", False):
+                    self.input_handler.start_keyboard_capture()
 
     def set_screen_size(self, w, h):
         self.input_handler.set_screen_size(w, h)
@@ -220,47 +241,49 @@ class DeskFlowServer:
         self.hotkey_monitor.stop()
 
     def on_edge_hit(self, direction, ratio):
-        if direction == self.layout_position:
-            if self.switching_to_client:
-                return
-            self.switching_to_client = True
-            self.paste_coordinator.set_remote_files_available(self.local_files_available)
-            
-            logger.info(f"Hit {direction} edge. Switching to client.")
-            self.control_network.send_message({
-                'type': 'switch',
-                'direction': direction,
-                'ratio': ratio
-            })
-            self.input_handler.stop() # Stop edge detection
-            self.input_handler.start_keyboard_capture()
-            if self.on_capture_start:
-                self.on_capture_start()
+        with self._get_input_route_lock():
+            if direction == self.layout_position:
+                if self.switching_to_client:
+                    return
+                self.switching_to_client = True
+                self.paste_coordinator.set_remote_files_available(self.local_files_available)
+
+                logger.info(f"Hit {direction} edge. Switching to client.")
+                self.control_network.send_message({
+                    'type': 'switch',
+                    'direction': direction,
+                    'ratio': ratio
+                })
+                self.input_handler.stop() # Stop edge detection
+                self.input_handler.start_keyboard_capture()
+                if self.on_capture_start:
+                    self.on_capture_start()
 
     def on_switch_back(self, data):
-        # Client hit its return edge
-        logger.info("Client signaled switch back.")
-        self._release_forwarded_keys()
-        self.switching_to_client = False
-        self.paste_coordinator.set_remote_files_available(self.remote_files_available)
-        ratio = data.get('ratio', 0.5)
-        self.input_handler.stop_keyboard_capture()
-        if self.on_capture_stop:
-            self.on_capture_stop()
-            
-        # Warp the server mouse cleanly to the boundary
-        w = self.input_handler.screen_width
-        h = self.input_handler.screen_height
-        if self.layout_position == 'right':
-            self.input_handler.inject_position(w - 2, int(h * ratio))
-        elif self.layout_position == 'left':
-            self.input_handler.inject_position(2, int(h * ratio))
-        elif self.layout_position == 'top':
-            self.input_handler.inject_position(int(w * ratio), 2)
-        elif self.layout_position == 'bottom':
-            self.input_handler.inject_position(int(w * ratio), h - 2)
-            
-        self.input_handler.start_edge_detection(self.layout_position)
+        with self._get_input_route_lock():
+            # Client hit its return edge
+            logger.info("Client signaled switch back.")
+            self._release_forwarded_keys()
+            self.switching_to_client = False
+            self.paste_coordinator.set_remote_files_available(self.remote_files_available)
+            ratio = data.get('ratio', 0.5)
+            self.input_handler.stop_keyboard_capture()
+            if self.on_capture_stop:
+                self.on_capture_stop()
+
+            # Warp the server mouse cleanly to the boundary
+            w = self.input_handler.screen_width
+            h = self.input_handler.screen_height
+            if self.layout_position == 'right':
+                self.input_handler.inject_position(w - 2, int(h * ratio))
+            elif self.layout_position == 'left':
+                self.input_handler.inject_position(2, int(h * ratio))
+            elif self.layout_position == 'top':
+                self.input_handler.inject_position(int(w * ratio), 2)
+            elif self.layout_position == 'bottom':
+                self.input_handler.inject_position(int(w * ratio), h - 2)
+
+            self.input_handler.start_edge_detection(self.layout_position)
 
     def on_mouse_move(self, dx, dy):
         self.control_network.send_message({

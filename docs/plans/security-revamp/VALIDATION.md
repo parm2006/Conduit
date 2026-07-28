@@ -121,7 +121,8 @@ authenticated reload still reconnects.
 After DeskFlow creates an identity, run on each PC:
 
 ```powershell
-$identityRoot = Join-Path $env:LOCALAPPDATA "DeskFlow\identity"
+$deskFlowData = .\venv\Scripts\python.exe -c "import os; print(os.path.join(os.environ.get('LOCALAPPDATA', os.path.expanduser('~')), 'DeskFlow'))"
+$identityRoot = Join-Path $deskFlowData "identity"
 $pointer = Get-Content (Join-Path $identityRoot "current.json") | ConvertFrom-Json
 $generation = Join-Path (Join-Path $identityRoot "generations") $pointer.generation
 Get-Content (Join-Path $generation "key.pem") -TotalCount 1
@@ -170,9 +171,12 @@ During one transfer, verify encrypted staging:
 4. On the receiving PC, run:
 
    ```powershell
-   $staging = Join-Path $env:LOCALAPPDATA "DeskFlow\transfers"
+   $deskFlowData = .\venv\Scripts\python.exe -c "import os; print(os.path.join(os.environ.get('LOCALAPPDATA', os.path.expanduser('~')), 'DeskFlow'))"
+   $staging = Join-Path $deskFlowData "transfers"
    Get-ChildItem $staging -Recurse -File | Select-Object FullName, Length
-   rg -a -l --fixed-strings "DESKFLOW-PLAINTEXT-VALIDATION-MARKER" $staging
+   Get-ChildItem $staging -Recurse -File |
+       Select-String -SimpleMatch "DESKFLOW-PLAINTEXT-VALIDATION-MARKER" |
+       Select-Object -ExpandProperty Path -Unique
    ```
 
 5. Complete or cancel the prompt, wait for the transfer status to close, then
@@ -201,6 +205,18 @@ For each case:
 
 Pass when each cancellation completes once and the next transfer succeeds
 without reconnecting or relaunching.
+
+Then verify that a transfer keeps the destination selected when paste begins:
+
+1. Copy a disposable file on one PC.
+2. Move control to the other PC and press paste.
+3. Before the **Waiting for Windows Explorer** status changes, move control
+   back to the sending PC.
+4. Confirm the file still appears on the PC where paste was pressed.
+5. Repeat in the other direction.
+
+Pass when later cursor movement cannot redirect the paste or leave either PC
+waiting for Windows Explorer.
 
 ## 7. Validate network-loss recovery
 

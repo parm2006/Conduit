@@ -158,29 +158,33 @@ class SecureControlConnectionTests(unittest.TestCase):
     def test_concurrent_disconnect_cannot_resurrect_connected_phase(self):
         client, result = self.connect()
         self.assertEqual(result, (True, None))
-        entered_commit = threading.Event()
-        release_commit = threading.Event()
+        disconnect_ready = threading.Event()
+        begin_disconnect = threading.Event()
+        disconnect_attempting = threading.Event()
         original_commit = self.trust.commit
 
+        def disconnect_during_commit():
+            disconnect_ready.set()
+            begin_disconnect.wait(1)
+            disconnect_attempting.set()
+            client.disconnect()
+
         def blocking_commit(peer, fingerprint):
-            entered_commit.set()
-            release_commit.wait(1)
+            begin_disconnect.set()
+            self.assertTrue(disconnect_attempting.wait(1))
             original_commit(peer, fingerprint)
 
         self.trust.commit = blocking_commit
-        commit_result = []
-        commit_thread = threading.Thread(
-            target=lambda: commit_result.append(client.commit_peer_trust())
-        )
-        disconnect_thread = threading.Thread(target=client.disconnect)
-        commit_thread.start()
-        self.assertTrue(entered_commit.wait(1))
+        disconnect_thread = threading.Thread(target=disconnect_during_commit)
         disconnect_thread.start()
-        release_commit.set()
-        commit_thread.join(1)
+        self.assertTrue(disconnect_ready.wait(1))
+
+        commit_result = client.commit_peer_trust()
+
         disconnect_thread.join(1)
 
-        self.assertEqual(commit_result, [True])
+        self.assertFalse(disconnect_thread.is_alive())
+        self.assertTrue(commit_result)
         self.assertFalse(client.connected)
         self.assertEqual(client.phase, ConnectionPhase.DISCONNECTED)
 
