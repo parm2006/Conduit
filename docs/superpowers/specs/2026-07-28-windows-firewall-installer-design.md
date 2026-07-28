@@ -63,20 +63,22 @@ The repository will add three release inputs:
   `DeskFlow.exe`, the application icon, required assets, and Windows/pywin32
   hidden imports.
 - `installer/DeskFlow.iss` — an Inno Setup definition that installs the
-  packaged executable and assets, offers firewall setup as a clearly named
-  installation task, and removes the DeskFlow rule during uninstall.
+  packaged executable and assets, requires explicit firewall consent, and
+  removes the DeskFlow rule during uninstall.
 - `scripts/build_release.ps1` — a deterministic entry point that runs the
   automated gate, builds the executable with the repository virtual
   environment, validates the artifact, and invokes Inno Setup when `ISCC.exe`
   is available.
 
-The firewall task will be visible and selected by default:
+Before copying files, the installer will show a dedicated consent page:
 
 > Allow DeskFlow Server on private local networks (TCP ports 5000-5002).
 
-This is informed consent, not a silent exception. The installer already runs
-elevated, so it can call the installed executable's restricted firewall helper
-without another elevation prompt.
+**Yes** continues installation. **No**, closing the consent page, or declining
+the installer's required elevation cancels installation. Cancellation leaves
+no installed files, shortcuts, startup entries, or DeskFlow firewall rules.
+The installer already runs elevated after consent, so it can call the installed
+executable's restricted firewall helper without another elevation prompt.
 
 The checked-in build supports an optional signing command when a signing
 certificate is supplied. This work cannot produce a trusted signature without
@@ -190,12 +192,15 @@ the **Configure and start** choice.
 
 Installation order:
 
-1. Copy the packaged executable and required files.
-2. Show the named firewall task and its scope.
-3. If selected, run installed `DeskFlow.exe` in firewall-helper install mode
-   with the default base port.
-4. Fail the firewall task visibly if the rule cannot be created, but keep the
-   application installation usable.
+1. Show the mandatory firewall consent page and its exact scope.
+2. Cancel without system changes if the user chooses **No**, closes the page,
+   or declines required elevation.
+3. Copy the packaged executable and required files.
+4. Run installed `DeskFlow.exe` in firewall-helper install mode with the
+   default base port.
+5. Verify the resulting rule against the complete rule contract.
+6. If rule creation or verification fails, show a safe explanation and roll
+   back the installation and any partially created DeskFlow rule.
 
 Uninstall order:
 
@@ -219,8 +224,10 @@ new executable path. It does not accumulate versioned firewall rules.
   trusted home or work network.`
 - **Inspection unavailable:** allow Server mode with a warning and provide
   manual help; do not guess that the firewall is ready.
-- **Installer task failure:** finish installation, show the same manual help,
-  and return a nonzero helper result in the installer log.
+- **Installer consent declined:** cancel installation before copying files or
+  changing the firewall.
+- **Installer rule failure:** return a nonzero helper result, remove any
+  partially created DeskFlow rule, and roll back the installation.
 - **Port conflict:** preserve the existing server-start error. Firewall repair
   does not imply that the port is available to bind.
 
@@ -243,11 +250,13 @@ Test coverage will include:
   and enabled flag;
 - helper argument rejection for arbitrary paths, commands, profiles, and port
   ranges;
+- installer **No**, close, and elevation-decline paths leaving no installed
+  files or firewall state;
 - UAC success, cancellation, failure, and refresh;
 - Start Server continuation only after successful matching configuration;
 - Start without setup warning behavior;
 - port edits producing stale state without automatic mutation;
-- installer task definitions, uninstall cleanup, and stable rule identity;
+- installer consent, rollback, uninstall cleanup, and stable rule identity;
 - PyInstaller import and asset smoke checks.
 
 Verification will run:
@@ -277,12 +286,14 @@ The physical two-PC check will:
 
 The feature is complete when:
 
-- a fresh packaged installation provides an informed firewall setup choice;
+- a fresh packaged installation requires informed firewall consent;
+- choosing **No**, closing consent, or declining required installer elevation
+  cancels without leaving installed files or DeskFlow firewall state;
 - a consenting user can accept a client connection without manual firewall
   commands;
 - the installed rule matches every property in the rule contract;
 - missing and stale rules are visible and repairable from Server mode;
-- declined elevation changes nothing and gives a clear next action;
+- declined in-app elevation changes nothing and gives a clear next action;
 - source mode clearly identifies its broader `python.exe` scope;
 - port changes never silently broaden access;
 - uninstall removes only DeskFlow-owned firewall state;
