@@ -1,215 +1,258 @@
-# DeskFlow focused two-PC validation
+# DeskFlow security acceptance
 
-This handoff contains only the physical tests needed for the current clipboard,
-edge-placement, and file-transfer changes. Earlier pairing, identity, window,
-keyboard, security, and basic connection tests have passed and are outside this
-retest.
+Use this checklist to validate `codex/file-security-hardening` on two Windows
+PCs connected to the same private network. Call them `SERVER_PC` and
+`CLIENT_PC`. Use disposable files and accounts.
 
-Use two Windows PCs on the same private network. Call them `SERVER_PC` and
-`CLIENT_PC` in your notes. Use disposable files only. Run the sections in
-order, and record `PASS`, `FAIL`, or `NOT RUN` for each section.
+This checklist does not repeat accepted feature work. Mouse and keyboard
+control, ordinary clipboard sync, Explorer file paste, multi-file paste,
+background mode, reload, and emergency exit need only a short regression smoke
+test. File queueing remains out of scope.
 
 Do not publish IP addresses, usernames, computer names, Wi-Fi names, MAC
-addresses, fingerprints, clipboard contents, filenames, or absolute paths.
-Replace private values with placeholders before sharing output.
+addresses, certificate fingerprints, clipboard contents, filenames, or
+absolute paths. Redact private values before sharing results.
 
 If DeskFlow traps input, press `Ctrl+Alt+Shift+Escape` on the server keyboard.
+Stop at the first failure and record the exact step, status text, and redacted
+console output.
 
-## 0. Install and automated gate
+## 0. Synchronize the security branch
 
-Close DeskFlow on both PCs. Run on both PCs:
+The branch must exist on GitHub before this test begins. Close DeskFlow on both
+PCs, then run:
 
 ```powershell
 git fetch origin
-git switch codex/rebuild-from-5f97c81
+git show-ref --verify --quiet refs/heads/codex/file-security-hardening
+if ($LASTEXITCODE -eq 0) {
+    git switch codex/file-security-hardening
+} else {
+    git switch --track origin/codex/file-security-hardening
+}
 git pull --ff-only
 git rev-parse HEAD
 git status --short
+```
+
+Pass when both PCs print the same full commit and both `git status --short`
+commands print nothing.
+
+## 1. Run the automated gate
+
+Run on both PCs:
+
+```powershell
 .\venv\Scripts\python.exe -m compileall -q app tests run.py
 .\venv\Scripts\python.exe -m unittest discover -s tests -q
 git diff --check
 ```
 
-Pass when both PCs print the same full commit, both worktrees are clean,
-compilation succeeds, both test suites finish with `OK`, and `git diff --check`
-prints nothing.
+The suite intentionally exercises rejected connections and may print expected
+error-path logs. Pass only when compilation exits successfully, the final test
+summary says `OK`, and `git diff --check` prints nothing.
 
-If the client reproduces an order-dependent network-test timeout but that same
-test passes five times by itself, record the full-suite failure and isolated
-passes. Continue with the physical checks; do not hide the flaky result.
+The automated gate must include
+`test_wrong_password_candidate_cannot_disconnect_live_control_session`.
 
-## 1. Connection and ordinary-use smoke test
+## 2. Validate identity and pairing
 
-1. Start DeskFlow on both PCs and connect normally.
-2. Cross to the client, move, click, scroll, and type in Notepad.
-3. Cross back to the server.
-4. Copy and paste plain text in both directions.
-5. Copy and paste one screenshot in both directions.
+Use a disposable DeskFlow password.
 
-Pass when control crosses cleanly, input arrives once, and text and screenshots
-paste correctly. Stop here if the basic connection is unusable.
+1. Clear the saved peer only through DeskFlow's **Forget saved identity and
+   re-pair** action.
+2. Connect for the first time.
+3. Confirm only the client shows the approval dialog.
+4. Confirm the short comparison code matches on both PCs.
+5. Confirm the client shows a selectable full fingerprint.
+6. Decline. Confirm the connection ends and no trust is saved.
+7. Retry and leave the approval dialog untouched. Confirm it times out and a
+   later retry prompts again.
+8. Retry with the wrong password and approve the displayed peer. Confirm
+   DeskFlow reports an incorrect password and saves no trust.
+9. Connect with the correct password and approve. Confirm all three lanes
+   connect.
+10. Disconnect and reconnect. Confirm the saved peer reconnects without another
+    approval dialog.
+11. Use **Forget saved identity and re-pair**. Confirm the next connection
+    requires approval again.
 
-## 2. Edge and corner placement
+Pass when DeskFlow commits trust only after approval, password authentication,
+and all three lanes connect.
 
-Test all four client layouts. The Left layout needs the most attention because
-that is where the corner offset was reproduced.
+## 3. Validate live-session protection
 
-For each layout:
-
-1. Cross near the start, middle, and end of the shared edge.
-2. Return across the matching edge.
-3. Leave the server at each exact corner on that edge.
-4. Confirm the client cursor appears at the corresponding corner with only the
-   small safety inset, not about 60 or 96 pixels away.
-5. Hold the physical mouse still for one second after entry. Confirm the cursor
-   does not jump because of the synthetic warp event.
-6. Disconnect, reconnect, and repeat one corner crossing.
-
-For a client on the left, explicitly test server `(0, 0)` and `(0, Y_max)`.
-The client should enter near `(X_max, 10)` and `(X_max, Y_max - 10)`, adjusted
-only for Windows coordinate bounds.
-
-Pass when every layout preserves the position along the shared edge and no
-corner shows the old large offset.
-
-## 3. Google Docs rich clipboard
-
-Run every item Google Docs to Google Docs, first server-to-client and then
-client-to-server. Use documents you can safely discard.
-
-1. Copy several paragraphs containing blank lines. Confirm every Enter and
-   blank line survives.
-2. Repeat with a heading, font family, font size, bold, italic, text color,
-   highlight, a link, and a list.
-3. Select one image by itself, press Ctrl+C, and paste it into the other Doc.
-4. Copy one selection containing formatted text, blank lines, and two images.
-5. Copy a small table containing text and images.
-6. For images in mixed content, test the Docs layout modes you use: inline,
-   wrap text, break text, behind text, and in front of text.
-7. Copy the same mixed selection twice and paste after each copy.
-8. Copy text A, text B, and screenshot C quickly. Confirm C wins.
-9. Disconnect, reconnect, and repeat one mixed text-and-image copy.
-
-Pass when paragraph breaks, formatting, images, tables, and supported Docs
-image layout state survive in both directions, and the newest copy wins.
-
-Record a failed case by source application, direction, selection type, portable
-format kind, source order, and byte count. Do not record clipboard contents or
-encoded image data.
-
-Word and cross-application Google Docs/Word behavior are deferred. They are not
-part of this focused retest.
-
-## 4. Large-file throughput and input priority
-
-Use a random 100 MiB file and record its source SHA-256:
+Run the focused regression five times on either PC:
 
 ```powershell
-$testDir = Join-Path $env:USERPROFILE "Desktop\DeskFlow-Validation"
-New-Item -ItemType Directory -Path $testDir -Force | Out-Null
-$path = Join-Path $testDir "DeskFlow-100MiB.bin"
+1..5 | ForEach-Object {
+    .\venv\Scripts\python.exe -m unittest -q `
+        tests.test_security_network.SecureControlConnectionTests.test_wrong_password_candidate_cannot_disconnect_live_control_session
+    if ($LASTEXITCODE -ne 0) { throw "Live-session regression failed" }
+}
+```
+
+Then connect `CLIENT_PC` normally and confirm mouse, keyboard, and clipboard
+control work. Trigger `Ctrl+Alt+Shift+R` and confirm a valid reconnect can still
+replace the prior control connection.
+
+Pass when an unauthenticated candidate cannot eject the live session and an
+authenticated reload still reconnects.
+
+## 4. Validate local secret protection
+
+After DeskFlow creates an identity, run on each PC:
+
+```powershell
+$identityRoot = Join-Path $env:LOCALAPPDATA "DeskFlow\identity"
+$pointer = Get-Content (Join-Path $identityRoot "current.json") | ConvertFrom-Json
+$generation = Join-Path (Join-Path $identityRoot "generations") $pointer.generation
+Get-Content (Join-Path $generation "key.pem") -TotalCount 1
+Get-ChildItem $generation | Select-Object Name, Length
+```
+
+Pass when:
+
+- `key.pem` begins with `-----BEGIN ENCRYPTED PRIVATE KEY-----`;
+- the generation contains `cert.pem`, `key.pem`, and
+  `key-password.dpapi`;
+- no plaintext private key exists in the repository root;
+- peer-trust records under `%LOCALAPPDATA%\DeskFlow\peers` are protected binary
+  records with hash-like filenames rather than raw peer addresses.
+
+## 5. Validate authenticated file staging
+
+Create a random 100 MiB file on the sending PC:
+
+```powershell
+$testRoot = Join-Path $env:USERPROFILE "Desktop\DeskFlow-Security-Validation"
+New-Item -ItemType Directory -Path $testRoot -Force | Out-Null
+$sourcePath = Join-Path $testRoot "DeskFlow-100MiB.bin"
 $buffer = [byte[]]::new(1MB)
 $rng = [Security.Cryptography.RandomNumberGenerator]::Create()
-$stream = [IO.File]::Create($path)
+$stream = [IO.File]::Create($sourcePath)
 1..100 | ForEach-Object {
     $rng.GetBytes($buffer)
     $stream.Write($buffer, 0, $buffer.Length)
 }
 $stream.Dispose()
 $rng.Dispose()
-Get-FileHash $path -Algorithm SHA256
+Get-Item $sourcePath | Select-Object Length
+Get-FileHash $sourcePath -Algorithm SHA256
 ```
 
-Run two transfers server-to-client and two client-to-server. For each transfer,
-record elapsed seconds, MiB/s, source hash, and destination hash.
+Transfer it once in each direction. Record elapsed seconds, MiB/s, source hash,
+and destination hash. Pass when sizes and hashes match.
 
-During one server-to-client transfer:
+During one transfer, verify encrypted staging:
 
-1. run `ping <CLIENT_IP> -n 100` from the server;
-2. move the server-controlled client cursor continuously;
-3. type, click, and scroll in an application other than the Explorer copy
-   window;
-4. cross back to the server and return to the client;
-5. copy and paste text;
-6. copy and paste a screenshot.
+1. Create a disposable text file containing a unique marker.
+2. Create a destination file with the same name so Explorer opens its
+   duplicate-name prompt.
+3. Start the transfer and leave the prompt open.
+4. On the receiving PC, run:
 
-Repeat the responsiveness checks during one client-to-server transfer.
+   ```powershell
+   $staging = Join-Path $env:LOCALAPPDATA "DeskFlow\transfers"
+   Get-ChildItem $staging -Recurse -File | Select-Object FullName, Length
+   rg -a -l --fixed-strings "DESKFLOW-PLAINTEXT-VALIDATION-MARKER" $staging
+   ```
 
-Pass when all four hashes match, mouse and keyboard control remain usable,
-ordinary clipboard sync remains usable, the cursor stays visible, and ping does
-not develop multi-second stalls during the transfer. Record every speed. Repeat
-one run if it falls below 8 MiB/s; report both results instead of discarding the
-slow result.
+5. Complete or cancel the prompt, wait for the transfer status to close, then
+   inspect the staging directory again.
 
-Explorer may delay input in the window performing its synchronous paste. Other
-applications and DeskFlow control must remain responsive.
+Pass when staging may contain ciphertext during the transfer, `rg` finds no
+plaintext marker, the published file matches its source hash, and the job's
+staging files disappear after completion or cancellation.
 
-## 5. Multi-file paste and clipboard lifecycle
+## 6. Validate cancellation and recovery
 
-Prepare three disposable files with different names, sizes, and hashes.
+File queueing is intentionally out of scope. Run these four cases with the
+100 MiB disposable file:
 
-1. Select all three files in Explorer, copy once, and paste once on the other
-   PC.
-2. Confirm all three names, sizes, and hashes match.
-3. Repeat immediately with three new files. Repeat the whole sequence three
-   times to exercise Explorer's late stream requests.
-4. Run the same test in the other direction.
-5. Confirm neither console reports `KeyError`, `Unexpected exception in gateway
-   method 'GetData'`, or `Could not restore clipboard after virtual paste`.
-6. Paste one copied file where the same name already exists and choose
-   **Don't copy**.
-7. Confirm that file remains the active clipboard offer for a later explicit
-   paste.
-8. Copy newer text and then a screenshot. Confirm each newer copy replaces the
-   file offer normally.
+- server to client, cancel at source;
+- server to client, cancel at destination;
+- client to server, cancel at source;
+- client to server, cancel at destination.
 
-Pass when every requested file appears once, late Explorer requests cannot
-crash the provider, **Don't copy** keeps the user's file copy, and newer
-clipboard content still wins.
+For each case:
 
-## 6. Cancellation and recovery
+1. Cancel after progress begins.
+2. Confirm both peers enter cancellation and both transfer statuses clear.
+3. Confirm no partial destination file or staging ciphertext remains.
+4. Transfer a small disposable file in the same direction without reconnecting.
 
-File queueing is intentionally out of scope. Use the large disposable file
-from section 4 to verify that each active transfer cleans up independently.
+Pass when each cancellation completes once and the next transfer succeeds
+without reconnecting or relaunching.
 
-1. Start a large server-to-client transfer and cancel it at the source. Confirm
-   both toasts clear and a new small-file paste works without reconnecting.
-2. Start a large client-to-server transfer and cancel it at the destination.
-   Confirm both toasts clear and a new small-file paste works without
-   reconnecting.
-3. Disconnect once during an active transfer. Reconnect, then paste text, a
-   screenshot, a multi-file selection, and one small file.
+## 7. Validate network-loss recovery
 
-Pass when each cancellation finishes exactly once, no partial destination
-remains, and reconnecting creates a clean session without stale jobs or
-invisible cursors.
+1. Connect normally and transfer a small file.
+2. Start a 100 MiB transfer.
+3. Disable the client's network adapter.
+4. Confirm both apps leave the connected state, clear transfer status, and
+   restore local input within the configured timeout.
+5. Re-enable the adapter and reconnect without relaunching DeskFlow.
+6. Transfer text, a screenshot, one small file, and a multi-file selection.
 
-## 7. Final clean restart
+Pass when the abandoned session cannot contaminate the new session and no stale
+transfer, toast, or hidden cursor remains.
+
+## 8. Run a feature regression smoke test
+
+With the security branch connected:
+
+1. Cross to the client and back.
+2. Type, click, scroll, and press Delete on a disposable selected file.
+3. Sync plain text, formatted text, and a screenshot in both directions.
+4. Paste one file and one multi-file selection in both directions.
+5. Trigger background mode, reload, and emergency exit once each.
+
+Pass when the accepted features still work and file traffic causes no
+multi-second input or ordinary-clipboard stall.
+
+## 9. Validate clean shutdown
 
 1. Close both apps normally.
-2. Confirm ports 5000-5002 no longer listen on the server.
+2. On the server, run:
+
+   ```powershell
+   Get-NetTCPConnection -LocalPort 5000,5001,5002 -ErrorAction SilentlyContinue
+   ```
+
 3. Confirm no unexpected DeskFlow Python process remains.
-4. Reopen both apps and reconnect with saved settings.
-5. Cross once, type, paste rich Google Docs content, paste a screenshot, and
-   perform one multi-file paste.
-6. Close both apps again.
+4. Reopen both apps, reconnect using saved trust, and transfer one small file.
+5. Close both apps again.
 
-Pass when restart requires no repair, re-pair, or stale-process cleanup.
+Pass when the ports close, no stale process remains, saved trust reconnects
+without a new prompt, and the final transfer succeeds.
 
-## Results template
+## Results
+
+Record one result block:
 
 ```text
-Full commit on SERVER_PC: <FULL_COMMIT>
-Full commit on CLIENT_PC: <SAME_FULL_COMMIT>
+Full commit on SERVER_PC:
+Full commit on CLIENT_PC:
 
-0 Install and automated gate: PASS/FAIL/NOT RUN
-1 Connection and ordinary-use smoke: PASS/FAIL/NOT RUN
-2 Edge and corner placement: PASS/FAIL/NOT RUN
-3 Google Docs rich clipboard: PASS/FAIL/NOT RUN
-4 Large-file throughput and input priority: PASS/FAIL/NOT RUN
-5 Multi-file paste and clipboard lifecycle: PASS/FAIL/NOT RUN
+0 Branch synchronization: PASS/FAIL/NOT RUN
+1 Automated gate: PASS/FAIL/NOT RUN
+2 Identity and pairing: PASS/FAIL/NOT RUN
+3 Live-session protection: PASS/FAIL/NOT RUN
+4 Local secret protection: PASS/FAIL/NOT RUN
+5 Authenticated file staging: PASS/FAIL/NOT RUN
 6 Cancellation and recovery: PASS/FAIL/NOT RUN
-7 Final clean restart: PASS/FAIL/NOT RUN
+7 Network-loss recovery: PASS/FAIL/NOT RUN
+8 Feature regression smoke test: PASS/FAIL/NOT RUN
+9 Clean shutdown: PASS/FAIL/NOT RUN
+
+Transfer direction:
+Source size:
+Destination size:
+Source SHA-256:
+Destination SHA-256:
+Elapsed seconds:
+MiB/s:
 
 First failure:
 Expected:
@@ -218,3 +261,6 @@ Exact status text:
 Relevant redacted console lines:
 Reconnect or relaunch required: YES/NO
 ```
+
+Security acceptance is complete only when both PCs test the same full commit
+and every required section passes.
