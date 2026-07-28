@@ -143,7 +143,8 @@ Pass when:
 Create a random 100 MiB file on the sending PC:
 
 ```powershell
-$testRoot = Join-Path $env:USERPROFILE "Desktop\DeskFlow-Security-Validation"
+$desktop = [Environment]::GetFolderPath("Desktop")
+$testRoot = Join-Path $desktop "DeskFlow-Security-Validation"
 New-Item -ItemType Directory -Path $testRoot -Force | Out-Null
 $sourcePath = Join-Path $testRoot "DeskFlow-100MiB.bin"
 $buffer = [byte[]]::new(1MB)
