@@ -415,6 +415,20 @@ class NetworkServer(NetworkNode):
                     or server_generation != self._server_generation
                 ):
                     raise ConnectionError("server stopped during authentication")
+                if self.role == "control":
+                    if request.get("type") != "auth":
+                        raise SessionAuthenticationError("control authentication is required")
+                    offer = self.coordinator.authenticate_control(
+                        request.get("password"), peer_address=address[0]
+                    )
+                    response = {
+                        "type": "auth_success",
+                        "session_id": offer.session_id,
+                        "data_token": offer.data_token,
+                        "file_token": offer.file_token,
+                    }
+                    session_id = offer.session_id
+                    self.session_offer = offer
                 with self._state_lock:
                     if self.connected:
                         stale = False
@@ -441,21 +455,7 @@ class NetworkServer(NetworkNode):
                                 self._close_socket(conn_to_close)
                         else:
                             raise ConnectionError("a peer is already connected")
-                if self.role == "control":
-                    if request.get("type") != "auth":
-                        raise SessionAuthenticationError("control authentication is required")
-                    offer = self.coordinator.authenticate_control(
-                        request.get("password"), peer_address=address[0]
-                    )
-                    response = {
-                        "type": "auth_success",
-                        "session_id": offer.session_id,
-                        "data_token": offer.data_token,
-                        "file_token": offer.file_token,
-                    }
-                    session_id = offer.session_id
-                    self.session_offer = offer
-                else:
+                if self.role != "control":
                     if request.get("type") != "lane_auth":
                         raise SessionAuthenticationError("lane authentication is required")
                     session_id = request.get("session_id")

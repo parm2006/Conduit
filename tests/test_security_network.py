@@ -197,6 +197,22 @@ class SecureControlConnectionTests(unittest.TestCase):
         )
         self.assertIsNone(self.trust.load(peer))
 
+    def test_wrong_password_candidate_cannot_disconnect_live_control_session(self):
+        good, good_result = self.connect()
+        try:
+            self.assertEqual(good_result, (True, None))
+            self.assertTrue(self.server.connected)
+
+            bad, bad_result = self.connect(password="wrong")
+            try:
+                self.assertFalse(bad_result[0])
+                self.assertIsInstance(bad.last_error, IncorrectPassword)
+                self.assertTrue(self.server.connected)
+            finally:
+                bad.disconnect()
+        finally:
+            good.disconnect()
+
     def test_refused_connection_is_actionable_and_does_not_expose_os_text(self):
         event = threading.Event()
         result = []
