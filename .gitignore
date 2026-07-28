@@ -16,6 +16,5 @@ docs/
 features.md
 plan.md
 .worktrees/
-codexchat.txt
 *.log
 *.tmp
