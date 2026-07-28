@@ -62,13 +62,19 @@ The repository will add three release inputs:
 - `DeskFlow.spec` — a checked-in PyInstaller specification for one packaged
   `DeskFlow.exe`, the application icon, required assets, and Windows/pywin32
   hidden imports.
-- `installer/DeskFlow.iss` — an Inno Setup definition that installs the
+- `installer/DeskFlow.nsi` — an NSIS definition that installs the
   packaged executable and assets, requires explicit firewall consent, and
   removes the DeskFlow rule during uninstall.
 - `scripts/build_release.ps1` — a deterministic entry point that runs the
   automated gate, builds the executable with the repository virtual
-  environment, validates the artifact, and invokes Inno Setup when `ISCC.exe`
+  environment, validates the artifact, and invokes NSIS when `makensis.exe`
   is available.
+
+NSIS is selected because its official zlib/libpng-based licensing explicitly
+permits commercial use. PyInstaller's documented GPL exception permits
+shipping bundled applications under the application's own license, subject to
+the licenses of bundled dependencies. The release checklist will record the
+versions and official license links used for each build.
 
 Before copying files, the installer will show a dedicated consent page:
 
@@ -268,8 +274,8 @@ git diff --check
 ```
 
 Release validation will additionally build `DeskFlow.exe`, launch its helper in
-inspect mode without changing state, and build the installer when Inno Setup
-is present.
+inspect mode without changing state, and build the installer when NSIS is
+present.
 
 The physical two-PC check will:
 
