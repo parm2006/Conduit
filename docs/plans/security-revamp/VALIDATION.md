@@ -20,23 +20,40 @@ console output.
 ## 0. Synchronize the security branch
 
 The branch must exist on GitHub before this test begins. Close DeskFlow on both
-PCs, then run:
+PCs. Open PowerShell in the DeskFlow repository on each PC.
+
+### On `SERVER_PC`
 
 ```powershell
 git fetch origin
-git show-ref --verify --quiet refs/heads/codex/file-security-hardening
-if ($LASTEXITCODE -eq 0) {
+if (git branch --list codex/file-security-hardening) {
     git switch codex/file-security-hardening
 } else {
     git switch --track origin/codex/file-security-hardening
 }
 git pull --ff-only
+Write-Host "SERVER_PC commit:"
 git rev-parse HEAD
 git status --short
 ```
 
-Pass when both PCs print the same full commit and both `git status --short`
-commands print nothing.
+### On `CLIENT_PC`
+
+```powershell
+git fetch origin
+if (git branch --list codex/file-security-hardening) {
+    git switch codex/file-security-hardening
+} else {
+    git switch --track origin/codex/file-security-hardening
+}
+git pull --ff-only
+Write-Host "CLIENT_PC commit:"
+git rev-parse HEAD
+git status --short
+```
+
+Pass when `SERVER_PC` and `CLIENT_PC` print the same full commit and both
+`git status --short` commands print nothing.
 
 ## 1. Run the automated gate
 
