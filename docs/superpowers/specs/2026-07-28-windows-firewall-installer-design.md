@@ -91,6 +91,27 @@ certificate is supplied. This work cannot produce a trusted signature without
 the owner's certificate; unsigned local builds must identify themselves as
 development builds.
 
+## Distribution compliance
+
+DeskFlow's repository license is GPL-3.0. The installer will display and
+install the repository `LICENSE`, identify the public source location, and
+keep the corresponding release source available beside each distributed
+binary release. The release output will include a generated
+`THIRD_PARTY_NOTICES.txt` based on the versions and installed package metadata
+used for the build; the build must stop rather than invent a license when
+metadata is missing.
+
+PyInstaller's documented GPL exception permits shipping bundled applications
+under the application's license, subject to bundled dependency licenses. NSIS
+is licensed for any use, including commercial applications. The build uses
+unmodified released build tools and will retain any notices required by the
+dependencies actually included in the package.
+
+This work does not claim formal legal review. It creates an auditable license
+inventory, carries the project's GPL terms and source link, and avoids the
+known commercial-license expectation attached to the rejected Inno Setup
+alternative.
+
 ## Firewall rule contract
 
 DeskFlow owns one stable inbound rule with a stable internal name and group.
@@ -264,6 +285,8 @@ Test coverage will include:
 - port edits producing stale state without automatic mutation;
 - installer consent, rollback, uninstall cleanup, and stable rule identity;
 - PyInstaller import and asset smoke checks.
+- installed GPL license, source link, and generated third-party notice
+  completeness.
 
 Verification will run:
 
@@ -304,4 +327,6 @@ The feature is complete when:
 - port changes never silently broaden access;
 - uninstall removes only DeskFlow-owned firewall state;
 - Public networks remain blocked;
+- release artifacts include the GPL license, source location, and
+  third-party notices derived from the packaged dependency versions;
 - the complete automated suite and physical two-PC validation pass.
