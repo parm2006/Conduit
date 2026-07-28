@@ -32,6 +32,7 @@ class FilePasteService:
         self._outgoing = {}
         self._outgoing_timers = {}
         self._outgoing_lock = threading.Lock()
+        self._destination_lock = threading.RLock()
         self._pending_snapshots = 0
         self._outgoing_limit = MAX_OUTGOING_MANIFESTS
         self._outgoing_timeout = OUTGOING_MANIFEST_TIMEOUT
@@ -39,7 +40,16 @@ class FilePasteService:
         self._timer_factory = timer_factory
 
     def request_paste(self):
-        return self.handshakes.begin()
+        with self._destination_lock:
+            return self.handshakes.begin()
+
+    @property
+    def destination_paste_active(self):
+        with self._destination_lock:
+            return (
+                self.handshakes.has_pending
+                or self.publisher.has_pending_paste
+            )
 
     def on_manifest_request(self, message):
         request_id = message.get("request_id")
@@ -88,20 +98,24 @@ class FilePasteService:
                 self._pending_snapshots -= 1
 
     def on_manifest_response(self, message):
-        request_id = message.get("request_id")
-        manifest = message.get("manifest")
-        if not self.handshakes.accept(request_id, manifest):
-            return False
-        self.receiver.accept_manifest(manifest)
-        self.control.send_message({
-            "type": "file_manifest_ack",
-            "job_id": manifest["job_id"],
-        })
-        self.publisher.publish_and_paste(manifest, self.receiver)
-        return True
+        with self._destination_lock:
+            request_id = message.get("request_id")
+            manifest = message.get("manifest")
+            if not self.handshakes.accept(request_id, manifest):
+                return False
+            self.receiver.accept_manifest(manifest)
+            self.control.send_message({
+                "type": "file_manifest_ack",
+                "job_id": manifest["job_id"],
+            })
+            self.publisher.publish_and_paste(manifest, self.receiver)
+            return True
 
     def on_manifest_failed(self, message):
-        return self.handshakes.fail(message.get("request_id"), message.get("error", "failed"))
+        with self._destination_lock:
+            return self.handshakes.fail(
+                message.get("request_id"), message.get("error", "failed")
+            )
 
     def on_manifest_ack(self, message):
         job_id = message.get("job_id")

@@ -52,6 +52,7 @@ class DeskFlowClient:
         )
         self.file_publisher = VirtualPastePublisher()
         self.input_handler = InputHandler()
+        self._paste_route_lock = threading.RLock()
         self.global_hotkey_monitor = GlobalHotkeyMonitor(
             on_emergency_exit=self.disconnect,
             on_reload_connection=self.reload_connection,
@@ -76,7 +77,10 @@ class DeskFlowClient:
         self.control_network.register_callback('file_manifest_response', self.on_file_manifest_response)
         self.control_network.register_callback('file_manifest_failed', self.on_file_manifest_failed)
         self.control_network.register_callback('file_manifest_ack', self.on_file_manifest_ack)
-        self.control_network.register_callback('file_paste_trigger', lambda data: self.file_paste_service.request_paste())
+        self.control_network.register_callback(
+            'file_paste_trigger',
+            lambda data: self._request_remote_file_paste(),
+        )
         self.control_network.register_callback('reload_connection', lambda data: self.reload_connection())
         
         # Setup data network callbacks
@@ -101,6 +105,13 @@ class DeskFlowClient:
 
     def cancel_transfer(self, job_id):
         return self.transfer_cancellation.request(job_id)
+
+    def _get_paste_route_lock(self):
+        lock = getattr(self, "_paste_route_lock", None)
+        if lock is None:
+            lock = threading.RLock()
+            self._paste_route_lock = lock
+        return lock
 
     def on_disconnected(self, data):
         logger.info("Disconnected from Server.")
@@ -456,17 +467,27 @@ class DeskFlowClient:
             self.input_handler.inject_key_release(key_data)
 
     def on_client_edge_hit(self, direction, ratio):
-        if not self.is_active:
-            return
-            
-        if direction == self.input_handler.client_edge:
-            logger.info(f"Hit {direction} edge. Sending switch_back to server.")
-            self.is_active = False
-            self.input_handler.release_all_injected_keys()
-            self.control_network.send_message({
-                'type': 'switch_back',
-                'ratio': ratio
-            })
+        with self._get_paste_route_lock():
+            if not self.is_active:
+                return
+
+            if direction == self.input_handler.client_edge:
+                paste_service = getattr(self, "file_paste_service", None)
+                if (
+                    paste_service is not None
+                    and paste_service.destination_paste_active
+                ):
+                    logger.info(
+                        "Ignoring return edge while the local paste destination is active."
+                    )
+                    return
+                logger.info(f"Hit {direction} edge. Sending switch_back to server.")
+                self.is_active = False
+                self.input_handler.release_all_injected_keys()
+                self.control_network.send_message({
+                    'type': 'switch_back',
+                    'ratio': ratio
+                })
 
     def on_local_copy(self, snapshot):
         return self.clipboard_sender.submit({"snapshot": snapshot})
@@ -488,7 +509,8 @@ class DeskFlowClient:
         self.paste_coordinator.set_remote_files_available(data.get('available') is True)
 
     def _request_remote_file_paste(self):
-        return self.file_paste_service.request_paste()
+        with self._get_paste_route_lock():
+            return self.file_paste_service.request_paste()
 
     def on_file_manifest_request(self, data):
         self.file_paste_service.on_manifest_request(data)

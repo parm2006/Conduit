@@ -211,12 +211,16 @@ Then verify that a transfer keeps the destination selected when paste begins:
 
 1. Copy a disposable file on one PC.
 2. Move control to the other PC and press paste.
-3. Before the **Waiting for Windows Explorer** status changes, move control
+3. While **Waiting for Windows Explorer** is visible, immediately try to cross
    back to the sending PC.
-4. Confirm the file still appears on the PC where paste was pressed.
-5. Repeat in the other direction.
+4. Confirm DeskFlow keeps control on the receiving PC until Explorer accepts
+   the paste.
+5. After Explorer accepts the paste, cross back normally.
+6. Confirm the file appears on the PC where paste was pressed.
+7. Repeat in the other direction.
 
-Pass when later cursor movement cannot redirect the paste or leave either PC
+Pass when cursor movement after paste cannot change its destination, the
+temporary crossing block clears automatically, and neither PC remains stuck
 waiting for Windows Explorer.
 
 ## 7. Validate network-loss recovery

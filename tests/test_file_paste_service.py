@@ -29,6 +29,7 @@ class RecordingReceiver:
 class RecordingPublisher:
     def __init__(self):
         self.jobs = []
+        self.has_pending_paste = False
 
     def publish_and_paste(self, manifest, receiver):
         self.jobs.append(manifest["job_id"])
@@ -95,6 +96,22 @@ class FilePasteServiceTests(unittest.TestCase):
             events,
             [("send", "file_manifest_request"), ("send", "file_manifest_ack"), ("publish", JOB_A)],
         )
+
+    def test_destination_latch_spans_request_through_explorer_paste(self):
+        service, _, _, publisher, _ = self.make_service([])
+
+        pending = service.request_paste()
+        self.assertTrue(service.destination_paste_active)
+
+        publisher.has_pending_paste = True
+        service.on_manifest_response({
+            "request_id": pending.request_id,
+            "manifest": {"job_id": JOB_A},
+        })
+        self.assertTrue(service.destination_paste_active)
+
+        publisher.has_pending_paste = False
+        self.assertFalse(service.destination_paste_active)
 
     def make_service(self, snapshots):
         control = RecordingControl()

@@ -45,6 +45,11 @@ class ManifestHandshakeQueue:
                 if request.state is RequestState.ACCEPTED
             )
 
+    @property
+    def has_pending(self):
+        with self._lock:
+            return bool(self._by_id)
+
     def begin(self):
         with self._lock:
             self._expire_locked()

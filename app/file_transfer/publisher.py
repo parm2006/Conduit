@@ -151,6 +151,11 @@ class VirtualPastePublisher:
         with self._owner_lock:
             return int(self._owner is not None)
 
+    @property
+    def has_pending_paste(self):
+        with self._idle:
+            return bool(self._pending)
+
     def _worker(self):
         pythoncom.OleInitialize()
         keyboard = self._keyboard_factory()

@@ -25,6 +25,7 @@ class RecordingCoordinator:
 class RecordingInputHandler:
     def __init__(self, events):
         self.events = events
+        self.client_edge = "left"
 
     def stop_keyboard_capture(self):
         self.events.append("capture-stopped")
@@ -35,16 +36,26 @@ class RecordingInputHandler:
     def stop(self):
         self.events.append("input-stopped")
 
+    def release_all_injected_keys(self):
+        self.events.append("keys-released")
 
-class RecordingKeyboard:
-    def __init__(self, events):
-        self.events = events
 
-    def press(self, key):
-        self.events.append(("press", key))
+class PasteServiceState:
+    def __init__(self, active):
+        self.destination_paste_active = active
 
-    def release(self, key):
-        self.events.append(("release", key))
+
+class BlockingPasteService(PasteServiceState):
+    def __init__(self):
+        super().__init__(active=False)
+        self.request_started = threading.Event()
+        self.finish_request = threading.Event()
+
+    def request_paste(self):
+        self.request_started.set()
+        self.finish_request.wait(1)
+        self.destination_paste_active = True
+        return object()
 
 
 class FileAvailabilityRoutingTests(unittest.TestCase):
@@ -70,34 +81,43 @@ class FileAvailabilityRoutingTests(unittest.TestCase):
         self.assertEqual(server.control_network.messages, [{"type": "file_clipboard_available", "available": False}])
         self.assertEqual(server.paste_coordinator.values, [True])
 
-    def test_server_local_paste_pauses_remote_capture_during_injection(self):
+    def test_server_ignores_edge_crossing_while_local_paste_is_pending(self):
         events = []
         server = DeskFlowServer.__new__(DeskFlowServer)
         server.input_handler = RecordingInputHandler(events)
-        server.switching_to_client = True
+        server.file_paste_service = PasteServiceState(active=True)
+        server.switching_to_client = False
+        server.local_files_available = True
+        server.layout_position = "right"
+        server.paste_coordinator = RecordingCoordinator()
+        server.control_network = RecordingNetwork()
+        server.on_capture_start = None
 
-        server._inject_local_file_paste(RecordingKeyboard(events))
+        server.on_edge_hit("right", 0.5)
 
-        self.assertEqual(events[0], "capture-stopped")
-        self.assertEqual(events[-1], "capture-started")
-        self.assertEqual(
-            [event[0] for event in events[1:-1]],
-            ["press", "press", "release", "release"],
-        )
+        self.assertFalse(server.switching_to_client)
+        self.assertEqual(server.control_network.messages, [])
+        self.assertEqual(events, [])
 
-    def test_server_screen_transition_waits_for_local_paste_injection(self):
-        injection_started = threading.Event()
-        finish_injection = threading.Event()
-
-        class BlockingKeyboard(RecordingKeyboard):
-            def press(self, key):
-                super().press(key)
-                injection_started.set()
-                finish_injection.wait(1)
-
+    def test_client_ignores_return_edge_while_local_paste_is_pending(self):
         events = []
+        client = DeskFlowClient.__new__(DeskFlowClient)
+        client.input_handler = RecordingInputHandler(events)
+        client.file_paste_service = PasteServiceState(active=True)
+        client.control_network = RecordingNetwork()
+        client.is_active = True
+
+        client.on_client_edge_hit("left", 0.5)
+
+        self.assertTrue(client.is_active)
+        self.assertEqual(client.control_network.messages, [])
+        self.assertEqual(events, [])
+
+    def test_server_edge_cannot_race_paste_destination_latching(self):
+        events = []
+        service = BlockingPasteService()
         server = DeskFlowServer.__new__(DeskFlowServer)
-        server._input_route_lock = threading.RLock()
+        server.file_paste_service = service
         server.input_handler = RecordingInputHandler(events)
         server.switching_to_client = False
         server.local_files_available = True
@@ -106,26 +126,50 @@ class FileAvailabilityRoutingTests(unittest.TestCase):
         server.control_network = RecordingNetwork()
         server.on_capture_start = None
 
-        injection = threading.Thread(
-            target=server._inject_local_file_paste,
-            args=(BlockingKeyboard(events),),
-        )
-        transition = threading.Thread(
+        paste = threading.Thread(target=server._request_remote_file_paste)
+        crossing = threading.Thread(
             target=server.on_edge_hit,
             args=("right", 0.5),
         )
-        injection.start()
-        self.assertTrue(injection_started.wait(1))
-        transition.start()
-        transition.join(0.05)
+        paste.start()
+        self.assertTrue(service.request_started.wait(1))
+        crossing.start()
+        crossing.join(0.05)
 
-        self.assertTrue(transition.is_alive())
+        self.assertTrue(crossing.is_alive())
 
-        finish_injection.set()
-        injection.join(1)
-        transition.join(1)
-        self.assertFalse(injection.is_alive())
-        self.assertFalse(transition.is_alive())
+        service.finish_request.set()
+        paste.join(1)
+        crossing.join(1)
+        self.assertFalse(server.switching_to_client)
+        self.assertEqual(server.control_network.messages, [])
+
+    def test_client_edge_cannot_race_paste_destination_latching(self):
+        events = []
+        service = BlockingPasteService()
+        client = DeskFlowClient.__new__(DeskFlowClient)
+        client.file_paste_service = service
+        client.input_handler = RecordingInputHandler(events)
+        client.control_network = RecordingNetwork()
+        client.is_active = True
+
+        paste = threading.Thread(target=client._request_remote_file_paste)
+        crossing = threading.Thread(
+            target=client.on_client_edge_hit,
+            args=("left", 0.5),
+        )
+        paste.start()
+        self.assertTrue(service.request_started.wait(1))
+        crossing.start()
+        crossing.join(0.05)
+
+        self.assertTrue(crossing.is_alive())
+
+        service.finish_request.set()
+        paste.join(1)
+        crossing.join(1)
+        self.assertTrue(client.is_active)
+        self.assertEqual(client.control_network.messages, [])
 
 
 if __name__ == "__main__":
