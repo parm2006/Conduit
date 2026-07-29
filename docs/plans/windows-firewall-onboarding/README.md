@@ -16,8 +16,8 @@ done.
 | Plan | Title | Effort | Depends on | Status |
 |---|---|---|---|---|
 | [001](001-build-firewall-core-and-helper.md) | Build firewall core and restricted helper | L | — | DONE |
-| [002](002-integrate-server-firewall-onboarding.md) | Integrate Server-mode onboarding | L | 001 | IN PROGRESS |
-| [003](003-package-executable-and-transactional-installer.md) | Package executable and transactional NSIS installer | L | 001, 002 | TODO |
+| [002](002-integrate-server-firewall-onboarding.md) | Integrate Server-mode onboarding | L | 001 | DONE |
+| [003](003-package-executable-and-transactional-installer.md) | Package executable and transactional NSIS installer | L | 001, 002 | IN PROGRESS |
 | [004](004-review-and-validate-firewall-release.md) | Independently review and validate release | M | 001, 002, 003 | TODO |
 
 Status values: TODO | IN PROGRESS | DONE | BLOCKED (one-line reason) |
@@ -43,6 +43,10 @@ SUPERSEDED (one-line pointer)
 - **2026-07-28**: Plan 001 completed. Added a pure exact-rule contract,
   fakeable Windows Firewall COM boundary, allowlisted helper protocol, and
   pre-GUI helper dispatch. Full suite: 365 tests passed. Next: 002.
+- **2026-07-28**: Plan 002 completed. Added Server-tab firewall state,
+  explicit configure/start-without/cancel flow, UAC cancellation handling,
+  development-mode warnings, and the three-lane base-port ceiling. Full
+  suite: 380 tests passed. Next: 003.
 
 ## Considered and rejected
 

@@ -3,8 +3,11 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+from app.firewall import FirewallInspection, FirewallState
+from app.firewall_onboarding import FirewallSetupOutcome, FirewallSetupResult
 from app.gui import (
-    DeskFlowGUI, configure_main_window, restore_saved_role, write_status_message,
+    DeskFlowGUI, configure_main_window, parse_port, restore_saved_role,
+    write_status_message,
 )
 from app.preferences import UserPreferences
 
@@ -21,6 +24,21 @@ class Button:
 
     def pack_forget(self):
         return None
+
+
+class ConfigWidget:
+    def __init__(self):
+        self.values = {}
+        self.visible = True
+
+    def configure(self, **values):
+        self.values.update(values)
+
+    def pack(self, **values):
+        self.visible = True
+
+    def pack_forget(self):
+        self.visible = False
 
 
 class PreferencesTests(unittest.TestCase):
@@ -57,6 +75,28 @@ class PreferencesTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 store.save_server_port(70000)
 
+    def test_server_port_is_limited_to_three_consecutive_lanes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = UserPreferences(Path(directory))
+            for port in (1, 5000, 65533):
+                with self.subTest(port=port):
+                    store.save_server_port(port)
+                    self.assertEqual(store.load_server_port(), port)
+            for port in (65534, 65535):
+                with self.subTest(port=port):
+                    with self.assertRaises(ValueError):
+                        store.save_server_port(port)
+
+    def test_loaded_out_of_range_server_port_falls_back(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "preferences.json").write_text(
+                '{"server_port":65534}',
+                encoding="utf-8",
+            )
+
+            self.assertEqual(UserPreferences(root).load_server_port(), 5000)
+
     def test_role_store_round_trips_only_supported_roles(self):
         with tempfile.TemporaryDirectory() as directory:
             store = UserPreferences(Path(directory))
@@ -77,6 +117,14 @@ class PreferencesTests(unittest.TestCase):
 
 
 class SuccessfulRoleTimingTests(unittest.TestCase):
+    def test_server_and_client_base_port_parser_reserves_three_lanes(self):
+        for port in (1, 5000, 65533):
+            with self.subTest(port=port):
+                self.assertEqual(parse_port(str(port)), port)
+        for port in (0, 65534, 65535, 70000):
+            with self.subTest(port=port):
+                self.assertIsNone(parse_port(str(port)))
+
     def test_selecting_client_position_updates_buttons_and_saves_immediately(self):
         saved = []
 
@@ -159,10 +207,141 @@ class SuccessfulRoleTimingTests(unittest.TestCase):
         self.assertEqual(
             statuses,
             [
-                ("Status: Invalid port\nEnter a number from 1 to 65535.", "red"),
-                ("Status: Invalid port\nEnter a number from 1 to 65535.", "red"),
+                (
+                    "Status: Invalid port\n"
+                    "Enter a base port from 1 to 65533.",
+                    "red",
+                ),
+                (
+                    "Status: Invalid port\n"
+                    "Enter a base port from 1 to 65533.",
+                    "red",
+                ),
             ],
         )
+
+    def test_firewall_status_row_renders_all_states_and_actions(self):
+        expected = {
+            FirewallState.READY: ("Firewall: Ready", None),
+            FirewallState.MISSING: ("Firewall: Setup required", "Configure"),
+            FirewallState.STALE: ("Firewall: Repair required", "Repair"),
+            FirewallState.DEVELOPMENT: (
+                "Firewall: Development rule",
+                "View help",
+            ),
+            FirewallState.MANAGED: (
+                "Firewall: Managed by administrator",
+                "View help",
+            ),
+            FirewallState.UNAVAILABLE: (
+                "Firewall: Unavailable",
+                "View help",
+            ),
+        }
+        for state, (label, action) in expected.items():
+            with self.subTest(state=state):
+                gui = DeskFlowGUI.__new__(DeskFlowGUI)
+                gui.firewall_status_label = ConfigWidget()
+                gui.firewall_action_btn = ConfigWidget()
+                gui._render_firewall_inspection(
+                    FirewallInspection(state, "safe_reason")
+                )
+                self.assertEqual(
+                    gui.firewall_status_label.values["text"],
+                    label,
+                )
+                if action is None:
+                    self.assertFalse(gui.firewall_action_btn.visible)
+                else:
+                    self.assertEqual(
+                        gui.firewall_action_btn.values["text"],
+                        action,
+                    )
+                    self.assertTrue(gui.firewall_action_btn.visible)
+
+    def test_valid_port_edit_schedules_inspection_without_configuration(self):
+        calls = []
+        gui = DeskFlowGUI.__new__(DeskFlowGUI)
+        gui.server_port_entry = type(
+            "Entry",
+            (),
+            {"get": lambda self: "5000"},
+        )()
+        gui._firewall_refresh_token = None
+        gui.after = lambda delay, callback: calls.append(("after", delay, callback)) or 12
+        gui.after_cancel = lambda token: calls.append(("cancel", token))
+        gui._refresh_firewall_status = lambda: calls.append(("refresh",))
+
+        gui._schedule_firewall_refresh()
+
+        self.assertEqual(calls[0][:2], ("after", 250))
+        self.assertNotIn(("refresh",), calls)
+        calls[0][2]()
+        self.assertIn(("refresh",), calls)
+
+    def test_firewall_start_choices_latch_the_requested_behavior(self):
+        class Entry:
+            def __init__(self, value):
+                self.value = value
+
+            def get(self):
+                return self.value
+
+        for choice, expected_starts, expected_configures in (
+            ("configure", 1, 1),
+            ("without_setup", 1, 0),
+            ("cancel", 0, 0),
+        ):
+            with self.subTest(choice=choice):
+                starts = []
+                configures = []
+
+                class Onboarding:
+                    busy = False
+                    executable_path = (
+                        r"C:\Program Files\DeskFlow\DeskFlow.exe"
+                    )
+                    inspection = FirewallInspection(
+                        FirewallState.MISSING,
+                        "rule_missing",
+                    )
+
+                    def refresh(self, port):
+                        return None
+
+                    def configure(self, port, *, consent, on_ready=None):
+                        configures.append(port)
+                        self.inspection = FirewallInspection(
+                            FirewallState.READY,
+                            "rule_ready",
+                        )
+                        if on_ready:
+                            on_ready()
+                        return FirewallSetupResult(
+                            FirewallSetupOutcome.READY,
+                            self.inspection,
+                        )
+
+                gui = DeskFlowGUI.__new__(DeskFlowGUI)
+                gui.server_port_entry = Entry("5000")
+                gui.server_password_entry = Entry("secret")
+                gui.firewall_onboarding = Onboarding()
+                gui._render_firewall_inspection = lambda value: None
+                gui._set_status = lambda *args, **kwargs: None
+                gui._start_server_after_firewall = (
+                    lambda port, password: starts.append((port, password))
+                )
+
+                with patch(
+                    "app.gui.ask_firewall_start_choice",
+                    return_value=choice,
+                ):
+                    gui.start_server()
+
+                self.assertEqual(len(starts), expected_starts)
+                self.assertEqual(len(configures), expected_configures)
+                if choice == "without_setup":
+                    self.assertTrue(gui._firewall_start_warning)
 
     def test_client_role_is_saved_only_after_successful_full_connection(self):
         roles = []

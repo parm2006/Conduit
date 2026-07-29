@@ -3,6 +3,7 @@ import logging
 import json
 import os
 from pathlib import Path
+from tkinter import messagebox
 
 from app.server import DeskFlowServer
 from app.client import DeskFlowClient
@@ -12,6 +13,12 @@ from app.pairing_dialog import PairingApprovalController
 from app.safe_errors import error_name, public_error_message
 from app.preferences import UserPreferences
 from app.global_hotkey import GlobalHotkeyMonitor
+from app.firewall import FirewallInspection, FirewallRuleSpec, FirewallState
+from app.firewall_onboarding import (
+    FirewallOnboarding,
+    FirewallSetupOutcome,
+    firewall_display,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -35,7 +42,7 @@ def parse_port(value):
         port = int(value)
     except (TypeError, ValueError):
         return None
-    return port if 1 <= port <= 65535 else None
+    return port if 1 <= port <= 65533 else None
 
 
 def save_role_safely(preferences, role):
@@ -79,6 +86,66 @@ def write_status_message(widget, message, color="gray", white_text=None, show_ip
     else:
         widget.insert("end", message)
     widget.configure(state="disabled")
+
+
+def _firewall_scope_text(spec):
+    message = (
+        "Allow DeskFlow Server on private local networks?\n\n"
+        "Windows will allow this DeskFlow executable to receive TCP "
+        f"connections on ports {spec.local_ports} from devices on your local "
+        "network. Public networks remain blocked."
+    )
+    if spec.development_scope:
+        message += (
+            "\n\nThis development build runs through Python. Windows can "
+            "restrict the rule to this Python executable, but not to the "
+            "DeskFlow script alone. Packaged releases use a DeskFlow-specific "
+            "rule."
+        )
+    return message
+
+
+def ask_firewall_start_choice(parent, spec, *, configure_allowed=True):
+    """Show the explicit three-way Server start decision."""
+    dialog = ctk.CTkToplevel(parent)
+    dialog.title("DeskFlow Firewall")
+    dialog.geometry("430x330" if spec.development_scope else "430x270")
+    dialog.resizable(False, False)
+    dialog.transient(parent)
+    result = {"value": "cancel"}
+
+    ctk.CTkLabel(
+        dialog,
+        text=_firewall_scope_text(spec),
+        wraplength=390,
+        justify="left",
+    ).pack(fill="x", padx=20, pady=(20, 14))
+
+    def choose(value):
+        result["value"] = value
+        dialog.destroy()
+
+    if configure_allowed:
+        ctk.CTkButton(
+            dialog,
+            text="Configure and start",
+            command=lambda: choose("configure"),
+        ).pack(fill="x", padx=40, pady=4)
+    ctk.CTkButton(
+        dialog,
+        text="Start without setup",
+        command=lambda: choose("without_setup"),
+    ).pack(fill="x", padx=40, pady=4)
+    ctk.CTkButton(
+        dialog,
+        text="Cancel",
+        fg_color="gray",
+        command=lambda: choose("cancel"),
+    ).pack(fill="x", padx=40, pady=4)
+    dialog.protocol("WM_DELETE_WINDOW", lambda: choose("cancel"))
+    dialog.grab_set()
+    dialog.wait_window()
+    return result["value"]
 
 
 import tkinter
@@ -259,6 +326,11 @@ class DeskFlowGUI(ctk.CTk):
         self.server = None
         self.client = None
         self.preferences = UserPreferences()
+        self.firewall_onboarding = FirewallOnboarding(
+            scheduler=lambda callback: self.after(0, callback),
+        )
+        self._firewall_refresh_token = None
+        self._firewall_start_warning = None
         saved_role = self.preferences.load_role()
         saved_position = self.preferences.load_client_position()
         self.known_hosts = self.load_known_hosts()
@@ -293,6 +365,30 @@ class DeskFlowGUI(ctk.CTk):
         self.server_port_entry.insert(0, saved_server_port)
         self.server_port_entry.pack(pady=5)
         enable_textbox_qol(self.server_port_entry)
+        self.server_port_entry.bind(
+            "<KeyRelease>",
+            lambda event: self._schedule_firewall_refresh(),
+            add="+",
+        )
+
+        self.firewall_row = ctk.CTkFrame(
+            self.tab_server,
+            fg_color="transparent",
+        )
+        self.firewall_row.pack(fill="x", padx=12, pady=(0, 2))
+        self.firewall_status_label = ctk.CTkLabel(
+            self.firewall_row,
+            text="Firewall: Checking...",
+            anchor="w",
+        )
+        self.firewall_status_label.pack(side="left", expand=True, fill="x")
+        self.firewall_action_btn = ctk.CTkButton(
+            self.firewall_row,
+            text="Configure",
+            width=82,
+            height=28,
+            command=self._on_firewall_action,
+        )
         
         self.server_password_label = ctk.CTkLabel(self.tab_server, text="Password:")
         self.server_password_label.pack(pady=2)
@@ -381,6 +477,7 @@ class DeskFlowGUI(ctk.CTk):
         self.global_hotkey_monitor.start()
 
         self.protocol("WM_DELETE_WINDOW", self.on_close)
+        self.after(0, self._refresh_firewall_status)
 
     def load_known_hosts(self):
         try:
@@ -413,11 +510,91 @@ class DeskFlowGUI(ctk.CTk):
                 self.client_port_entry.insert(0, str(host['port']))
                 break
 
+    def _schedule_firewall_refresh(self):
+        token = self._firewall_refresh_token
+        if token is not None:
+            try:
+                self.after_cancel(token)
+            except Exception:
+                pass
+        self._firewall_refresh_token = self.after(
+            250,
+            self._refresh_firewall_status,
+        )
+
+    def _refresh_firewall_status(self):
+        self._firewall_refresh_token = None
+        port = parse_port(self.server_port_entry.get())
+        if port is None:
+            inspection = FirewallInspection(
+                FirewallState.UNAVAILABLE,
+                "invalid_port",
+            )
+        else:
+            self.firewall_onboarding.refresh(port)
+            inspection = self.firewall_onboarding.inspection
+        self._render_firewall_inspection(inspection)
+
+    def _render_firewall_inspection(self, inspection):
+        display = firewall_display(inspection)
+        self.firewall_status_label.configure(
+            text=f"Firewall: {display.label}",
+            text_color=display.color,
+        )
+        if display.action is None:
+            self.firewall_action_btn.pack_forget()
+        else:
+            self.firewall_action_btn.configure(
+                text=display.action,
+                state="normal",
+            )
+            self.firewall_action_btn.pack(side="right")
+
+    def _show_firewall_help(self):
+        inspection = self.firewall_onboarding.inspection
+        display = firewall_display(inspection)
+        messagebox.showinfo("DeskFlow Firewall", display.explanation)
+
+    def _on_firewall_action(self):
+        port = parse_port(self.server_port_entry.get())
+        if port is None:
+            self._set_status(
+                "Status: Invalid port\n"
+                "Enter a base port from 1 to 65533.",
+                "red",
+            )
+            return
+        if self.firewall_onboarding.inspection.state not in {
+            FirewallState.MISSING,
+            FirewallState.STALE,
+        }:
+            self._show_firewall_help()
+            return
+        spec = FirewallRuleSpec(self.firewall_onboarding.executable_path, port)
+        consent = messagebox.askyesno(
+            "Configure DeskFlow Firewall",
+            _firewall_scope_text(spec),
+        )
+        result = self.firewall_onboarding.configure(
+            port,
+            consent=lambda scope: consent,
+        )
+        self._render_firewall_inspection(self.firewall_onboarding.inspection)
+        if result.outcome is FirewallSetupOutcome.DECLINED:
+            self._set_status("Status: Firewall setup was cancelled.", "orange")
+        elif result.outcome is not FirewallSetupOutcome.READY:
+            self._set_status(
+                "Status: Firewall setup did not complete.\n"
+                "Try again or ask your administrator for help.",
+                "red",
+            )
+
     def start_server(self):
         port = parse_port(self.server_port_entry.get())
         if port is None:
             self._set_status(
-                "Status: Invalid port\nEnter a number from 1 to 65535.", "red"
+                "Status: Invalid port\nEnter a base port from 1 to 65533.",
+                "red",
             )
             return
         password = self.server_password_entry.get()
@@ -425,6 +602,76 @@ class DeskFlowGUI(ctk.CTk):
         if not password:
             self._set_status("Status: Error - Password required", "red")
             return
+
+        onboarding = self.__dict__.get("firewall_onboarding")
+        if onboarding is None:
+            self._start_server_after_firewall(port, password)
+            return
+        if onboarding.busy:
+            return
+
+        onboarding.refresh(port)
+        if hasattr(self, "_render_firewall_inspection"):
+            self._render_firewall_inspection(onboarding.inspection)
+        if onboarding.inspection.state in {
+            FirewallState.READY,
+            FirewallState.DEVELOPMENT,
+        }:
+            self._firewall_start_warning = (
+                "Development firewall rule targets Python."
+                if onboarding.inspection.state is FirewallState.DEVELOPMENT
+                else None
+            )
+            self._start_server_after_firewall(port, password)
+            return
+
+        spec = FirewallRuleSpec(onboarding.executable_path, port)
+        configure_allowed = onboarding.inspection.state in {
+            FirewallState.MISSING,
+            FirewallState.STALE,
+        }
+        choice = ask_firewall_start_choice(
+            self,
+            spec,
+            configure_allowed=configure_allowed,
+        )
+        if choice == "configure":
+            self._firewall_start_warning = None
+
+            def start_after_setup():
+                if (
+                    onboarding.inspection.state
+                    is FirewallState.DEVELOPMENT
+                ):
+                    self._firewall_start_warning = (
+                        "Development firewall rule targets Python."
+                    )
+                self._start_server_after_firewall(port, password)
+
+            result = onboarding.configure(
+                port,
+                consent=lambda scope: True,
+                on_ready=start_after_setup,
+            )
+            self._render_firewall_inspection(onboarding.inspection)
+            if result.outcome is FirewallSetupOutcome.DECLINED:
+                self._set_status(
+                    "Status: Firewall setup was cancelled. Server not started.",
+                    "orange",
+                )
+            elif result.outcome is not FirewallSetupOutcome.READY:
+                self._set_status(
+                    "Status: Firewall setup did not complete. Server not "
+                    "started.\nTry again or ask your administrator for help.",
+                    "red",
+                )
+        elif choice == "without_setup":
+            self._firewall_start_warning = (
+                "Firewall setup was skipped; remote connections may be blocked."
+            )
+            self._start_server_after_firewall(port, password)
+
+    def _start_server_after_firewall(self, port, password):
         if self.server:
             self.server.stop()
             
@@ -461,8 +708,19 @@ class DeskFlowGUI(ctk.CTk):
                 if self.server.identity.recovered else ""
             )
             self._set_status(
-                f"Status: Server listening on port {port}\nPairing code: {code}{recovery}",
-                "orange" if self.server.identity.recovered else "green",
+                f"Status: Server listening on port {port}\n"
+                f"Pairing code: {code}{recovery}"
+                + (
+                    f"\nWarning: {self._firewall_start_warning}"
+                    if self.__dict__.get("_firewall_start_warning")
+                    else ""
+                ),
+                (
+                    "orange"
+                    if self.server.identity.recovered
+                    or self.__dict__.get("_firewall_start_warning")
+                    else "green"
+                ),
                 white_text=code,
             )
             self.server_start_btn.pack_forget()
@@ -479,7 +737,8 @@ class DeskFlowGUI(ctk.CTk):
         port = parse_port(self.client_port_entry.get())
         if port is None:
             self._set_status(
-                "Status: Invalid port\nEnter a number from 1 to 65535.", "red"
+                "Status: Invalid port\nEnter a base port from 1 to 65533.",
+                "red",
             )
             return
         password = self.client_password_entry.get()
