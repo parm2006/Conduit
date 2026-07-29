@@ -32,6 +32,39 @@ class RuntimeLoggingTests(unittest.TestCase):
             format="%(levelname)s: %(message)s",
         )
 
+    def test_reserved_firewall_prefix_dispatches_without_starting_gui(self):
+        calls = []
+
+        result = run.main(
+            [
+                "--deskflow-firewall-helper",
+                "inspect",
+                "--base-port",
+                "5000",
+            ],
+            helper_runner=lambda arguments: calls.append(
+                ("helper", arguments)
+            )
+            or 17,
+            gui_runner=lambda: calls.append(("gui",)),
+        )
+
+        self.assertEqual(result, 17)
+        self.assertEqual(
+            calls,
+            [("helper", ["inspect", "--base-port", "5000"])],
+        )
+
+    def test_ordinary_launch_configures_logging_and_starts_gui(self):
+        calls = []
+
+        with patch("run.configure_runtime_logging") as configure:
+            result = run.main([], gui_runner=lambda: calls.append("gui"))
+
+        self.assertEqual(result, 0)
+        configure.assert_called_once_with()
+        self.assertEqual(calls, ["gui"])
+
 
 if __name__ == "__main__":
     unittest.main()
