@@ -67,7 +67,7 @@ class PreferencesTests(unittest.TestCase):
     def test_server_port_persistence_and_validation(self):
         with tempfile.TemporaryDirectory() as directory:
             store = UserPreferences(Path(directory))
-            self.assertEqual(store.load_server_port(), 5000)
+            self.assertEqual(store.load_server_port(), 28903)
 
             store.save_server_port(5005)
             self.assertEqual(UserPreferences(Path(directory)).load_server_port(), 5005)
@@ -95,7 +95,7 @@ class PreferencesTests(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            self.assertEqual(UserPreferences(root).load_server_port(), 5000)
+            self.assertEqual(UserPreferences(root).load_server_port(), 28903)
 
     def test_role_store_round_trips_only_supported_roles(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -309,7 +309,14 @@ class SuccessfulRoleTimingTests(unittest.TestCase):
                     def refresh(self, port):
                         return None
 
-                    def configure(self, port, *, consent, on_ready=None):
+                    def configure_async(
+                        self,
+                        port,
+                        *,
+                        consent,
+                        on_complete=None,
+                        on_ready=None,
+                    ):
                         configures.append(port)
                         self.inspection = FirewallInspection(
                             FirewallState.READY,
@@ -317,15 +324,19 @@ class SuccessfulRoleTimingTests(unittest.TestCase):
                         )
                         if on_ready:
                             on_ready()
-                        return FirewallSetupResult(
+                        result = FirewallSetupResult(
                             FirewallSetupOutcome.READY,
                             self.inspection,
                         )
+                        if on_complete:
+                            on_complete(result)
+                        return result
 
                 gui = DeskFlowGUI.__new__(DeskFlowGUI)
                 gui.server_port_entry = Entry("5000")
                 gui.server_password_entry = Entry("secret")
                 gui.firewall_onboarding = Onboarding()
+                gui.server_start_btn = Button()
                 gui._render_firewall_inspection = lambda value: None
                 gui._set_status = lambda *args, **kwargs: None
                 gui._start_server_after_firewall = (

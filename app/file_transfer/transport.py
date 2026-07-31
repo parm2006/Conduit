@@ -6,6 +6,7 @@ import threading
 import logging
 
 from app.crypto import load_identity
+from app.ports import DEFAULT_FILE_PORT
 from app.network import _tls_client_context
 from app.safe_errors import error_name
 from app.session import SessionAuthenticationError
@@ -207,7 +208,7 @@ class FileLaneServer(_FileLane):
         cert_file=None,
         key_file=None,
         host="0.0.0.0",
-        port=5002,
+        port=DEFAULT_FILE_PORT,
         *,
         key_password=None,
         identity=None,

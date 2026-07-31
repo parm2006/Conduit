@@ -255,7 +255,7 @@ multi-second input or ordinary-clipboard stall.
 2. On the server, run:
 
    ```powershell
-   Get-NetTCPConnection -LocalPort 5000,5001,5002 -ErrorAction SilentlyContinue
+   Get-NetTCPConnection -LocalPort 28903,28904,28905 -ErrorAction SilentlyContinue
    ```
 
 3. Confirm no unexpected DeskFlow Python process remains.

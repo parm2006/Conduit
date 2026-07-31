@@ -5,6 +5,7 @@ from types import SimpleNamespace
 from app.client import DeskFlowClient
 from app.server import DeskFlowServer
 from app.network import ConnectionPhase, NetworkClient, ServerUnavailable
+from app.ports import DEFAULT_FILE_PORT
 
 
 class RecordingControl:
@@ -103,7 +104,8 @@ class FileLaneLifecycleTests(unittest.TestCase):
         client.data_network = NetworkClient("unused", role="data")
         client.file_network = FileLane()
 
-        client._on_lane_binding_timeout()
+        with self.assertLogs("app.client", level="ERROR") as logs:
+            client._on_lane_binding_timeout()
 
         self.assertEqual(
             results,
@@ -117,6 +119,10 @@ class FileLaneLifecycleTests(unittest.TestCase):
         self.assertEqual(client.data_network.phase, ConnectionPhase.FAILED)
         self.assertIsInstance(client.data_network.last_error, TimeoutError)
         self.assertEqual(client.file_network.closes, 1)
+        self.assertIn(
+            f"server:{DEFAULT_FILE_PORT}",
+            "\n".join(logs.output),
+        )
 
     def test_disconnect_during_ready_transition_cannot_report_success(self):
         class Lifecycle:

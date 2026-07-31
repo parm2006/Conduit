@@ -5,6 +5,7 @@ from enum import Enum
 from pathlib import Path
 import subprocess
 import sys
+import threading
 
 from app.firewall import FirewallInspection, FirewallRuleSpec, FirewallState
 from app.firewall_helper import (
@@ -94,6 +95,7 @@ class FirewallOnboarding:
         elevation_runner=None,
         executable_path=None,
         scheduler=None,
+        thread_factory=None,
     ):
         self.backend = backend or WindowsFirewallBackend()
         self.elevation_runner = (
@@ -101,6 +103,7 @@ class FirewallOnboarding:
         )
         self.executable_path = executable_path or sys.executable
         self.scheduler = scheduler or _default_scheduler
+        self.thread_factory = thread_factory or threading.Thread
         self.busy = False
         self.inspection = FirewallInspection(
             FirewallState.UNAVAILABLE,
@@ -120,7 +123,7 @@ class FirewallOnboarding:
             )
         return firewall_display(self.inspection)
 
-    def configure(self, base_port, *, consent, on_ready=None):
+    def _begin_configuration(self, base_port, consent):
         if self.busy:
             return FirewallSetupResult(FirewallSetupOutcome.BUSY)
         try:
@@ -136,8 +139,10 @@ class FirewallOnboarding:
             )
 
         self.busy = True
+        return None
+
+    def _finish_configuration(self, base_port, exit_code, on_ready=None):
         try:
-            exit_code = self.elevation_runner(base_port)
             self.refresh(base_port)
         finally:
             self.busy = False
@@ -159,6 +164,57 @@ class FirewallOnboarding:
         if outcome is FirewallSetupOutcome.READY and on_ready is not None:
             self.scheduler(on_ready)
         return FirewallSetupResult(outcome, self.inspection)
+
+    def configure(self, base_port, *, consent, on_ready=None):
+        """Configure synchronously for non-GUI callers and unit tests."""
+        early_result = self._begin_configuration(base_port, consent)
+        if early_result is not None:
+            return early_result
+        try:
+            exit_code = self.elevation_runner(base_port)
+        except Exception:
+            exit_code = EXIT_CONFIGURATION_FAILED
+        return self._finish_configuration(base_port, exit_code, on_ready)
+
+    def configure_async(
+        self,
+        base_port,
+        *,
+        consent,
+        on_complete=None,
+        on_ready=None,
+    ):
+        """Run the elevated helper off the UI thread and schedule completion."""
+        early_result = self._begin_configuration(base_port, consent)
+        if early_result is not None:
+            return early_result
+
+        def worker():
+            try:
+                exit_code = self.elevation_runner(base_port)
+            except Exception:
+                exit_code = EXIT_CONFIGURATION_FAILED
+
+            def complete():
+                result = self._finish_configuration(
+                    base_port,
+                    exit_code,
+                    on_ready,
+                )
+                if on_complete is not None:
+                    on_complete(result)
+
+            self.scheduler(complete)
+
+        try:
+            thread = self.thread_factory(target=worker, daemon=True)
+            thread.start()
+        except Exception:
+            return self._finish_configuration(
+                base_port,
+                EXIT_CONFIGURATION_FAILED,
+            )
+        return None
 
 
 def run_elevated_firewall_install(base_port):

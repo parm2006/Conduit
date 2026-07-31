@@ -39,7 +39,7 @@ show one intentional consent dialog:
 > Allow DeskFlow Server on private local networks?
 >
 > Windows will allow this DeskFlow executable to receive TCP connections on
-> ports 5000-5002 from devices on your local network. Public networks remain
+> ports 28903-28905 from devices on your local network. Public networks remain
 > blocked.
 
 The choices will be **Configure and start**, **Start without setup**, and
@@ -78,7 +78,7 @@ versions and official license links used for each build.
 
 Before copying files, the installer will show a dedicated consent page:
 
-> Allow DeskFlow Server on private local networks (TCP ports 5000-5002).
+> Allow DeskFlow Server on private local networks (TCP ports 28903-28905).
 
 **Yes** continues installation. **No**, closing the consent page, or declining
 the installer's required elevation cancels installation. Cancellation leaves

@@ -7,6 +7,7 @@ from pathlib import Path
 import uuid
 
 from app.safe_errors import error_name
+from app.ports import DEFAULT_BASE_PORT
 
 
 logger = logging.getLogger(__name__)
@@ -30,10 +31,12 @@ class UserPreferences:
 
     def load_server_port(self):
         try:
-            port = int(self._load_values().get("server_port", 5000))
-            return port if 1 <= port <= 65533 else 5000
+            port = int(
+                self._load_values().get("server_port", DEFAULT_BASE_PORT)
+            )
+            return port if 1 <= port <= 65533 else DEFAULT_BASE_PORT
         except (TypeError, ValueError):
-            return 5000
+            return DEFAULT_BASE_PORT
 
     def save_role(self, role):
         if role not in VALID_ROLES:

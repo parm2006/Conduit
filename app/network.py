@@ -13,6 +13,7 @@ import time
 from enum import Enum
 
 from app.crypto import load_identity
+from app.ports import DEFAULT_BASE_PORT
 from app.safe_errors import error_name, public_error_message
 from app.session import SessionAuthenticationError, SessionCoordinator
 from app.trust import PeerTrustStore, PendingPeerTrust
@@ -310,7 +311,7 @@ class NetworkServer(NetworkNode):
         self,
         password,
         host="0.0.0.0",
-        port=5000,
+        port=DEFAULT_BASE_PORT,
         *,
         role="control",
         coordinator=None,

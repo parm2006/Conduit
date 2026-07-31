@@ -17,8 +17,8 @@ done.
 |---|---|---|---|---|
 | [001](001-build-firewall-core-and-helper.md) | Build firewall core and restricted helper | L | — | DONE |
 | [002](002-integrate-server-firewall-onboarding.md) | Integrate Server-mode onboarding | L | 001 | DONE |
-| [003](003-package-executable-and-transactional-installer.md) | Package executable and transactional NSIS installer | L | 001, 002 | IN PROGRESS |
-| [004](004-review-and-validate-firewall-release.md) | Independently review and validate release | M | 001, 002, 003 | TODO |
+| [003](003-package-executable-and-transactional-installer.md) | Package executable and transactional NSIS installer | L | 001, 002 | DONE |
+| [004](004-review-and-validate-firewall-release.md) | Independently review and validate release | M | 001, 002, 003 | IN PROGRESS |
 
 Status values: TODO | IN PROGRESS | DONE | BLOCKED (one-line reason) |
 SUPERSEDED (one-line pointer)
@@ -47,6 +47,17 @@ SUPERSEDED (one-line pointer)
   explicit configure/start-without/cancel flow, UAC cancellation handling,
   development-mode warnings, and the three-lane base-port ceiling. Full
   suite: 380 tests passed. Next: 003.
+- **2026-07-28**: Plan 003 source work completed through the real packaged
+  executable smoke test. Added release metadata, fail-closed license notices,
+  checked-in one-file spec, mandatory-consent/rollback NSIS source, build
+  script, and release documentation. Full suite: 399 tests passed;
+  `DeskFlow.exe` helper exits correctly. Blocked only on installing official
+  NSIS so `makensis` can compile and validate the real installer.
+- **2026-07-28**: Official NSIS 3.12 compiled the transactional installer
+  successfully after correcting installer callback and build-directory
+  assumptions. Plan 004 is now in progress for independent code review and
+  owner-run physical acceptance; no installer has been executed on a user
+  system during this work.
 
 ## Considered and rejected
 

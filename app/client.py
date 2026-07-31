@@ -21,6 +21,7 @@ from app.latest_wins_sender import LatestWinsSender
 from app.input_geometry import client_entry_position
 from app.safe_errors import error_name, public_error_message
 from app.global_hotkey import GlobalHotkeyMonitor
+from app.ports import DEFAULT_FILE_PORT
 
 logger = logging.getLogger(__name__)
 
@@ -180,6 +181,7 @@ class DeskFlowClient:
 
     def connect(self, host, port, callback):
         self.host = host
+        self.port = port
         self.control_connected = False
         self.data_connected = False
         self.connect_error = None
@@ -317,12 +319,13 @@ class DeskFlowClient:
         data_net = getattr(self, 'data_network', None)
         file_net = getattr(self, 'file_network', None)
         logger.error(
-            "Connection deadline expired after %.1fs. Lane status: control=%s (connected=%s), data=%s (connected=%s), file=%s (sock=%s). Check port %s:5002 firewall.",
+            "Connection deadline expired after %.1fs. Lane status: control=%s (connected=%s), data=%s (connected=%s), file=%s (sock=%s). Check port %s:%s firewall.",
             timeout_val,
             getattr(self, 'control_connected', False), getattr(control_net, 'connected', False) if control_net else False,
             getattr(self, 'data_connected', False), getattr(data_net, 'connected', False) if data_net else False,
             getattr(self, 'file_connected', False), getattr(file_net, 'sock', None) is not None if file_net else False,
             getattr(self, 'host', 'server'),
+            getattr(self, 'port', DEFAULT_FILE_PORT - 2) + 2,
         )
         error = TimeoutError(
             f"Secondary lanes failed to bind within {timeout_val}s "

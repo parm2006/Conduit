@@ -12,6 +12,12 @@ EXIT_CONFIGURATION_FAILED = 3
 EXIT_POLICY_MANAGED = 4
 
 
+class _DiscardOutput:
+    @staticmethod
+    def write(value):
+        return len(value)
+
+
 def _write_result(output, inspection):
     output.write(f"firewall_state={inspection.state.value}\n")
     output.write(f"reason={inspection.reason_code}\n")
@@ -51,7 +57,8 @@ def run_firewall_helper(
     output=None,
 ):
     """Run one allowlisted firewall operation and return a stable exit code."""
-    output = output or sys.stdout
+    if output is None:
+        output = sys.stdout or _DiscardOutput()
     request = _parse_request(list(arguments))
     if request is None:
         output.write("firewall_state=invalid\nreason=invalid_request\n")

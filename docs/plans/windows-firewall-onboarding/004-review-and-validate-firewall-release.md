@@ -51,7 +51,7 @@ branch can be called ready.
 | Full suite | `.\venv\Scripts\python.exe -m unittest discover -s tests -q` | all tests pass |
 | Tree check | `git diff --check` | no output |
 | Review diff | `git diff --check be44890..HEAD` | no output |
-| Port reachability | `$serverIp = "192.168.86.87"; Test-NetConnection $serverIp -Port 5000` | `TcpTestSucceeded : True` on permitted Private LAN after confirming the laptop still owns that address |
+| Port reachability | `$serverIp = "192.168.86.87"; Test-NetConnection $serverIp -Port 28903` | `TcpTestSucceeded : True` on permitted Private LAN after confirming the laptop still owns that address |
 
 ## Scope
 

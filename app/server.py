@@ -21,11 +21,12 @@ from app.clipboard_formats import encode_clipboard_message
 from app.latest_wins_sender import LatestWinsSender
 from app.safe_errors import error_name
 from app.global_hotkey import GlobalHotkeyMonitor
+from app.ports import DEFAULT_BASE_PORT
 
 logger = logging.getLogger(__name__)
 
 class DeskFlowServer:
-    def __init__(self, password, port=5000, layout_position='right', on_capture_start=None, on_capture_stop=None, on_transfer_status=None):
+    def __init__(self, password, port=DEFAULT_BASE_PORT, layout_position='right', on_capture_start=None, on_capture_stop=None, on_transfer_status=None):
         self.layout_position = layout_position
         self.on_capture_start = on_capture_start
         self.on_capture_stop = on_capture_stop

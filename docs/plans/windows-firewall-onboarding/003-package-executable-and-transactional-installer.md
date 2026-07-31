@@ -54,7 +54,7 @@ carry DeskFlow's GPL terms, source location, and dependency notices.
 | Packaging tests | `.\venv\Scripts\python.exe -m unittest tests.test_release_packaging -q` | all static/release tests pass |
 | Notice generation | `.\venv\Scripts\python.exe scripts\generate_third_party_notices.py --output build\THIRD_PARTY_NOTICES.txt` | exit 0 and nonempty notices |
 | Executable build | `.\venv\Scripts\pyinstaller.exe --clean --noconfirm DeskFlow.spec` | `dist\DeskFlow.exe` exists |
-| Executable helper smoke | `.\dist\DeskFlow.exe --deskflow-firewall-helper inspect --base-port 5000` | documented safe exit code; no GUI |
+| Executable helper smoke | `.\dist\DeskFlow.exe --deskflow-firewall-helper inspect --base-port 28903` | documented safe exit code; no GUI |
 | Installer build | `makensis /V3 installer\DeskFlow.nsi` | installer executable created under `dist\` |
 | Full suite | `.\venv\Scripts\python.exe -m unittest discover -s tests -q` | all tests pass |
 | Tree check | `git diff --check` | no output |

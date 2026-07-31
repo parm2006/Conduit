@@ -12,6 +12,7 @@ from app.crypto import certificate_fingerprint, pairing_code_from_fingerprint
 from app.pairing_dialog import PairingApprovalController
 from app.safe_errors import error_name, public_error_message
 from app.preferences import UserPreferences
+from app.ports import DEFAULT_BASE_PORT
 from app.global_hotkey import GlobalHotkeyMonitor
 from app.firewall import FirewallInspection, FirewallRuleSpec, FirewallState
 from app.firewall_onboarding import (
@@ -443,7 +444,11 @@ class DeskFlowGUI(ctk.CTk):
         self.client_port_label = ctk.CTkLabel(self.tab_client, text="Port:")
         self.client_port_label.pack(pady=5)
         self.client_port_entry = ctk.CTkEntry(self.tab_client)
-        default_port = str(self.known_hosts[0]['port']) if self.known_hosts else "5000"
+        default_port = (
+            str(self.known_hosts[0]['port'])
+            if self.known_hosts
+            else str(DEFAULT_BASE_PORT)
+        )
         self.client_port_entry.insert(0, default_port)
         self.client_port_entry.pack(pady=5)
         enable_textbox_qol(self.client_port_entry)
@@ -575,19 +580,32 @@ class DeskFlowGUI(ctk.CTk):
             "Configure DeskFlow Firewall",
             _firewall_scope_text(spec),
         )
-        result = self.firewall_onboarding.configure(
+        def complete_setup(result):
+            self._render_firewall_inspection(
+                self.firewall_onboarding.inspection
+            )
+            if result.outcome is FirewallSetupOutcome.DECLINED:
+                self._set_status(
+                    "Status: Firewall setup was cancelled.",
+                    "orange",
+                )
+            elif result.outcome is not FirewallSetupOutcome.READY:
+                self._set_status(
+                    "Status: Firewall setup did not complete.\n"
+                    "Try again or ask your administrator for help.",
+                    "red",
+                )
+
+        result = self.firewall_onboarding.configure_async(
             port,
             consent=lambda scope: consent,
+            on_complete=complete_setup,
         )
-        self._render_firewall_inspection(self.firewall_onboarding.inspection)
-        if result.outcome is FirewallSetupOutcome.DECLINED:
-            self._set_status("Status: Firewall setup was cancelled.", "orange")
-        elif result.outcome is not FirewallSetupOutcome.READY:
-            self._set_status(
-                "Status: Firewall setup did not complete.\n"
-                "Try again or ask your administrator for help.",
-                "red",
-            )
+        if result is None:
+            self.firewall_action_btn.configure(state="disabled")
+            self._set_status("Status: Configuring Windows Firewall...", "orange")
+        else:
+            complete_setup(result)
 
     def start_server(self):
         port = parse_port(self.server_port_entry.get())
@@ -648,23 +666,35 @@ class DeskFlowGUI(ctk.CTk):
                     )
                 self._start_server_after_firewall(port, password)
 
-            result = onboarding.configure(
+            def complete_setup(result):
+                self.server_start_btn.configure(state="normal")
+                self._render_firewall_inspection(onboarding.inspection)
+                if result.outcome is FirewallSetupOutcome.DECLINED:
+                    self._set_status(
+                        "Status: Firewall setup was cancelled. Server not started.",
+                        "orange",
+                    )
+                elif result.outcome is not FirewallSetupOutcome.READY:
+                    self._set_status(
+                        "Status: Firewall setup did not complete. Server not "
+                        "started.\nTry again or ask your administrator for help.",
+                        "red",
+                    )
+
+            result = onboarding.configure_async(
                 port,
                 consent=lambda scope: True,
                 on_ready=start_after_setup,
+                on_complete=complete_setup,
             )
-            self._render_firewall_inspection(onboarding.inspection)
-            if result.outcome is FirewallSetupOutcome.DECLINED:
+            if result is None:
+                self.server_start_btn.configure(state="disabled")
                 self._set_status(
-                    "Status: Firewall setup was cancelled. Server not started.",
+                    "Status: Configuring Windows Firewall...",
                     "orange",
                 )
-            elif result.outcome is not FirewallSetupOutcome.READY:
-                self._set_status(
-                    "Status: Firewall setup did not complete. Server not "
-                    "started.\nTry again or ask your administrator for help.",
-                    "red",
-                )
+            else:
+                complete_setup(result)
         elif choice == "without_setup":
             self._firewall_start_warning = (
                 "Firewall setup was skipped; remote connections may be blocked."

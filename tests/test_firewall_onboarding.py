@@ -1,4 +1,5 @@
 import unittest
+from pathlib import Path
 
 from app.firewall import FirewallInspection, FirewallState
 from app.firewall_helper import (
@@ -195,6 +196,70 @@ class FirewallOnboardingTests(unittest.TestCase):
         result = onboarding.configure(5000, consent=lambda scope: True)
 
         self.assertEqual(result.outcome, FirewallSetupOutcome.BUSY)
+
+    def test_async_configuration_does_not_wait_for_elevation_on_caller_thread(self):
+        runner_calls = []
+        completed = []
+        scheduled = []
+
+        class DeferredThread:
+            def __init__(self, *, target, daemon):
+                self.target = target
+                self.daemon = daemon
+                self.started = False
+
+            def start(self):
+                self.started = True
+
+        threads = []
+        onboarding = FirewallOnboarding(
+            backend=Backend(
+                FirewallInspection(FirewallState.READY, "rule_ready")
+            ),
+            elevation_runner=lambda port: runner_calls.append(port)
+            or EXIT_SUCCESS,
+            executable_path=r"C:\Program Files\DeskFlow\DeskFlow.exe",
+            scheduler=lambda callback: scheduled.append(callback),
+            thread_factory=lambda **kwargs: threads.append(
+                DeferredThread(**kwargs)
+            )
+            or threads[-1],
+        )
+
+        result = onboarding.configure_async(
+            5000,
+            consent=lambda scope: True,
+            on_complete=completed.append,
+        )
+
+        self.assertIsNone(result)
+        self.assertEqual(runner_calls, [])
+        self.assertEqual(len(threads), 1)
+        self.assertTrue(threads[0].started)
+        self.assertTrue(threads[0].daemon)
+
+        threads[0].target()
+        self.assertEqual(runner_calls, [5000])
+        self.assertEqual(len(scheduled), 1)
+        self.assertEqual(completed, [])
+
+        scheduled[0]()
+        self.assertEqual(
+            completed[0].outcome,
+            FirewallSetupOutcome.READY,
+        )
+
+    def test_gui_uses_async_configuration_for_firewall_actions(self):
+        gui_source = (
+            Path(__file__).resolve().parents[1] / "app" / "gui.py"
+        ).read_text(encoding="utf-8")
+        firewall_action = gui_source[
+            gui_source.index("    def _on_firewall_action"):
+            gui_source.index("    def _start_server_after_firewall")
+        ]
+
+        self.assertNotIn("onboarding.configure(", firewall_action)
+        self.assertEqual(firewall_action.count("onboarding.configure_async("), 2)
 
 
 if __name__ == "__main__":

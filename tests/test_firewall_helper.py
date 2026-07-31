@@ -1,5 +1,6 @@
 import io
 import unittest
+from unittest.mock import patch
 
 from app.firewall import FirewallInspection, FirewallState
 from app.firewall_helper import (
@@ -137,6 +138,12 @@ class FirewallHelperTests(unittest.TestCase):
                     output,
                     "firewall_state=invalid\nreason=invalid_request\n",
                 )
+
+    def test_windowed_package_without_stdout_still_returns_an_exit_code(self):
+        with patch("app.firewall_helper.sys.stdout", None):
+            code = run_firewall_helper(["delete-all"])
+
+        self.assertEqual(code, EXIT_INVALID_REQUEST)
 
 
 if __name__ == "__main__":
