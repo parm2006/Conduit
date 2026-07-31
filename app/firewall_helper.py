@@ -2,7 +2,12 @@
 
 import sys
 
-from app.firewall import FirewallInspection, FirewallRuleSpec, FirewallState
+from app.firewall import (
+    FirewallInspection,
+    FirewallRuleSpec,
+    FirewallState,
+    current_process_executable,
+)
 from app.windows_firewall import WindowsFirewallBackend
 
 
@@ -70,7 +75,7 @@ def run_firewall_helper(
     else:
         try:
             spec = FirewallRuleSpec(
-                executable_path or sys.executable,
+                executable_path or current_process_executable(),
                 base_port,
             )
         except ValueError:

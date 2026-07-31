@@ -62,6 +62,28 @@ class FirewallHelperTests(unittest.TestCase):
             "firewall_state=ready\nreason=rule_ready\n",
         )
 
+    def test_default_rule_targets_the_actual_windows_process_image(self):
+        backend = RecordingBackend(
+            FirewallInspection(FirewallState.DEVELOPMENT, "python_scope")
+        )
+        actual_image = (
+            r"C:\Program Files\WindowsApps\PythonSoftwareFoundation."
+            r"Python.3.12\python3.12.exe"
+        )
+
+        with patch(
+            "app.firewall_helper.current_process_executable",
+            return_value=actual_image,
+        ):
+            code = run_firewall_helper(
+                ["install", "--base-port", "28903"],
+                backend_factory=lambda: backend,
+                output=io.StringIO(),
+            )
+
+        self.assertEqual(code, EXIT_SUCCESS)
+        self.assertEqual(backend.calls[0][1].executable_path, actual_image)
+
     def test_inspect_reports_nonmatching_state_as_configuration_failure(self):
         code, backend, output = self.run_helper(
             ["inspect", "--base-port", "5000"],

@@ -7,7 +7,12 @@ import subprocess
 import sys
 import threading
 
-from app.firewall import FirewallInspection, FirewallRuleSpec, FirewallState
+from app.firewall import (
+    FirewallInspection,
+    FirewallRuleSpec,
+    FirewallState,
+    current_process_executable,
+)
 from app.firewall_helper import (
     EXIT_CONFIGURATION_FAILED,
     EXIT_POLICY_MANAGED,
@@ -101,7 +106,9 @@ class FirewallOnboarding:
         self.elevation_runner = (
             elevation_runner or run_elevated_firewall_install
         )
-        self.executable_path = executable_path or sys.executable
+        self.executable_path = (
+            executable_path or current_process_executable()
+        )
         self.scheduler = scheduler or _default_scheduler
         self.thread_factory = thread_factory or threading.Thread
         self.busy = False
@@ -219,7 +226,7 @@ class FirewallOnboarding:
 
 def run_elevated_firewall_install(base_port):
     """Elevate the fixed DeskFlow helper command; return None on UAC cancel."""
-    FirewallRuleSpec(sys.executable, base_port)
+    FirewallRuleSpec(current_process_executable(), base_port)
     project_root = Path(__file__).resolve().parents[1]
     frozen = getattr(sys, "frozen", False)
     arguments = [

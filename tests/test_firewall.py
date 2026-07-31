@@ -1,4 +1,5 @@
 import unittest
+from unittest.mock import patch
 
 from app.firewall import (
     DESKFLOW_FIREWALL_RULE_NAME,
@@ -7,6 +8,7 @@ from app.firewall import (
     FirewallState,
     ObservedFirewallRule,
     compare_firewall_rule,
+    current_process_executable,
 )
 
 
@@ -28,6 +30,20 @@ def matching_rule(spec, **changes):
 
 
 class FirewallRuleSpecTests(unittest.TestCase):
+    def test_current_process_executable_uses_the_windows_process_image(self):
+        actual_image = (
+            r"C:\Program Files\WindowsApps\PythonSoftwareFoundation."
+            r"Python.3.12\python3.12.exe"
+        )
+
+        with patch(
+            "win32api.GetModuleFileName",
+            return_value=actual_image,
+        ):
+            result = current_process_executable()
+
+        self.assertEqual(result, actual_image)
+
     def test_accepts_boundary_base_ports_and_derives_three_port_range(self):
         low = FirewallRuleSpec(r"C:\Program Files\DeskFlow\DeskFlow.exe", 1)
         high = FirewallRuleSpec(r"C:\Program Files\DeskFlow\DeskFlow.exe", 65533)
@@ -55,9 +71,15 @@ class FirewallRuleSpecTests(unittest.TestCase):
             5000,
         )
         source = FirewallRuleSpec(r"C:\Python314\python.exe", 5000)
+        store_source = FirewallRuleSpec(
+            r"C:\Program Files\WindowsApps\PythonSoftwareFoundation."
+            r"Python.3.12\python3.12.exe",
+            5000,
+        )
 
         self.assertFalse(packaged.development_scope)
         self.assertTrue(source.development_scope)
+        self.assertTrue(store_source.development_scope)
 
 
 class FirewallRuleComparisonTests(unittest.TestCase):

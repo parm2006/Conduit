@@ -1,5 +1,6 @@
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from app.firewall import FirewallInspection, FirewallState
 from app.firewall_helper import (
@@ -87,6 +88,27 @@ class FirewallOnboardingTests(unittest.TestCase):
 
         self.assertEqual(display.label, "Setup required")
         self.assertEqual(backend.specs[0].base_port, 5000)
+
+    def test_default_inspection_targets_the_actual_windows_process_image(self):
+        actual_image = (
+            r"C:\Program Files\WindowsApps\PythonSoftwareFoundation."
+            r"Python.3.12\python3.12.exe"
+        )
+        backend = Backend(
+            FirewallInspection(FirewallState.MISSING, "rule_missing")
+        )
+
+        with patch(
+            "app.firewall_onboarding.current_process_executable",
+            return_value=actual_image,
+        ):
+            onboarding = FirewallOnboarding(
+                backend=backend,
+                elevation_runner=lambda port: EXIT_SUCCESS,
+            )
+            onboarding.refresh(28903)
+
+        self.assertEqual(backend.specs[0].executable_path, actual_image)
 
     def test_configure_requires_explicit_consent(self):
         runner_calls = []

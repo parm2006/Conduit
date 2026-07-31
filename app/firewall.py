@@ -4,9 +4,21 @@ from dataclasses import dataclass
 from enum import Enum
 import ntpath
 from pathlib import PureWindowsPath
+import re
+import sys
 
 
 DESKFLOW_FIREWALL_RULE_NAME = "DeskFlow Server - Private LAN"
+
+
+def current_process_executable():
+    """Return the executable image Windows uses for firewall matching."""
+    try:
+        import win32api
+
+        return win32api.GetModuleFileName(None)
+    except Exception:
+        return sys.executable
 
 
 class FirewallState(str, Enum):
@@ -45,10 +57,11 @@ class FirewallRuleSpec:
 
     @property
     def development_scope(self):
-        return ntpath.basename(self.executable_path).casefold() in {
-            "python.exe",
-            "pythonw.exe",
-        }
+        executable_name = ntpath.basename(self.executable_path).casefold()
+        return re.fullmatch(
+            r"python(?:\d+(?:\.\d+)*)?w?\.exe",
+            executable_name,
+        ) is not None
 
 
 @dataclass(frozen=True)
