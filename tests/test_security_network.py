@@ -132,6 +132,29 @@ class SecureControlConnectionTests(unittest.TestCase):
         self.assertTrue(event.wait(3), "connection callback did not run")
         return client, result[0]
 
+    def test_logs_outgoing_client_and_incoming_server_signal(self):
+        with self.assertLogs("app.network", level="INFO") as logs:
+            client, result = self.connect()
+        try:
+            self.assertEqual(result, (True, None))
+            output = "\n".join(logs.output)
+            self.assertIn(
+                "[client][control-lane] OUTGOING TCP connect to 127.0.0.1:",
+                output,
+            )
+            self.assertIn(
+                "[server][control-lane] INCOMING TCP candidate from "
+                "127.0.0.1:",
+                output,
+            )
+            self.assertIn(
+                "[server][control-lane] INCOMING connection authenticated "
+                "from 127.0.0.1:",
+                output,
+            )
+        finally:
+            client.disconnect()
+
     def test_pin_is_committed_only_after_full_lane_binding(self):
         client, result = self.connect()
         peer = self.trust.peer_id("127.0.0.1", self.server.port)

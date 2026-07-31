@@ -363,7 +363,13 @@ class NetworkServer(NetworkNode):
             self._server_generation += 1
             self.accept_thread = threading.Thread(target=self._accept_loop, daemon=True)
             self.accept_thread.start()
-            logger.info("%s server is listening", self.role.capitalize())
+            logger.info(
+                "[server][%s-lane] Listening for INCOMING TCP connections "
+                "on %s:%d",
+                self.role,
+                self.host,
+                self.port,
+            )
             return True
         except Exception as error:
             logger.error(
@@ -380,6 +386,12 @@ class NetworkServer(NetworkNode):
                 continue
             except OSError:
                 return
+            logger.info(
+                "[server][%s-lane] INCOMING TCP candidate from %s:%d",
+                self.role,
+                address[0],
+                address[1],
+            )
             raw.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
             if not self._candidate_slots.acquire(blocking=False):
                 self._close_socket(raw)
@@ -472,6 +484,14 @@ class NetworkServer(NetworkNode):
                 generation = self._attach_socket(secure)
                 self.client_addr = address
                 self.session_id = session_id
+            logger.info(
+                "[server][%s-lane] INCOMING connection authenticated from "
+                "%s:%d (session %s)",
+                self.role,
+                address[0],
+                address[1],
+                str(session_id)[:8],
+            )
             with self._candidate_lock:
                 self._candidate_sockets.discard(secure)
             self.trigger_callbacks("connected", {"addr": address, "session_id": session_id})
@@ -574,7 +594,12 @@ class NetworkClient(NetworkNode):
                         self._set_phase(ConnectionPhase.TLS_CANDIDATE)
                         self.host = host
                         self.port = int(port)
-                        logger.info("[%s-lane] Connecting to %s:%d...", self.role, host, self.port)
+                        logger.info(
+                            "[client][%s-lane] OUTGOING TCP connect to %s:%d",
+                            self.role,
+                            host,
+                            self.port,
+                        )
                         raw = socket.create_connection((host, port), timeout=self.connect_timeout)
                         raw.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
                         raw.settimeout(self.handshake_timeout)
@@ -650,7 +675,11 @@ class NetworkClient(NetworkNode):
                     self._set_phase(ConnectionPhase.CONNECTED)
                 secure.settimeout(None)
                 generation = self._attach_socket(secure)
-                logger.info("[%s-lane] Authenticated successfully and bound to session", self.role)
+                logger.info(
+                    "[client][%s-lane] OUTGOING connection authenticated "
+                    "and bound to session",
+                    self.role,
+                )
                 self.trigger_callbacks("connected", {"host": host, "session_id": response.get("session_id")})
                 self.receive_thread = threading.Thread(
                     target=self._receive_loop,

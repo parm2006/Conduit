@@ -27,7 +27,7 @@ KNOWN_HOSTS_FILE = "known_hosts.json"
 
 
 def configure_main_window(window):
-    window.geometry("400x600")
+    window.geometry("400x650")
     window.resizable(False, False)
 
 
@@ -884,9 +884,18 @@ class DeskFlowGUI(ctk.CTk):
         self.after(0, lambda: self._set_status("Status: Client Connected!", "green"))
         
     def _on_server_client_disconnected(self, data):
-        if self.server:
+        source = self.server
+        if source:
             port = self.server_port_entry.get()
-            self.after(0, lambda: self._set_status(f"Status: Server listening on port {port}", "green"))
+
+            def show_listening_if_active():
+                if self.server is source:
+                    self._set_status(
+                        f"Status: Server listening on port {port}",
+                        "green",
+                    )
+
+            self.after(0, show_listening_if_active)
         self.ensure_visible()
 
     def _set_status(self, message, color="gray", white_text=None, show_ip=None):

@@ -12,6 +12,28 @@ class Client:
 
 
 class GuiConnectionLifecycleTests(unittest.TestCase):
+    def test_late_server_disconnect_status_cannot_overwrite_stopped_status(self):
+        scheduled = []
+        statuses = []
+        gui = DeskFlowGUI.__new__(DeskFlowGUI)
+        gui.server = object()
+        gui.server_port_entry = type(
+            "Entry",
+            (),
+            {"get": lambda self: "28903"},
+        )()
+        gui.after = lambda delay, callback: scheduled.append(callback)
+        gui._set_status = (
+            lambda message, color: statuses.append((message, color))
+        )
+        gui.ensure_visible = lambda: None
+
+        gui._on_server_client_disconnected({})
+        gui.server = None
+        scheduled.pop(0)()
+
+        self.assertEqual(statuses, [])
+
     def test_late_disconnect_from_old_client_cannot_disconnect_replacement(self):
         scheduled = []
         gui = DeskFlowGUI.__new__(DeskFlowGUI)

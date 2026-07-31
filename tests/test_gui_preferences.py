@@ -509,7 +509,7 @@ class FixedWindowConfigurationTests(unittest.TestCase):
 
         configure_main_window(window)
 
-        self.assertEqual(window.geometry_value, "400x600")
+        self.assertEqual(window.geometry_value, "400x650")
         self.assertEqual(window.resizable_value, (False, False))
 
     def test_saved_role_selects_the_matching_tab_and_invalid_values_do_nothing(self):
