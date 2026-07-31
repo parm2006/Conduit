@@ -77,6 +77,25 @@ class WindowsFirewallBackendTests(unittest.TestCase):
         self.assertEqual(self.rules.added, [])
         self.assertEqual(self.rules.removed, [])
 
+    def test_windows_com_missing_rule_is_reported_as_missing(self):
+        class MissingComRuleError(Exception):
+            hresult = -2147352567
+            excepinfo = (0, None, None, None, 0, -2147024894)
+
+        class MissingComRules(FakeRules):
+            def Item(self, name):
+                raise MissingComRuleError("Exception occurred.")
+
+        backend = WindowsFirewallBackend(
+            policy_factory=lambda: FakePolicy(MissingComRules()),
+            rule_factory=FakeRule,
+        )
+
+        result = backend.inspect(self.spec)
+
+        self.assertEqual(result.state, FirewallState.MISSING)
+        self.assertEqual(result.reason_code, "rule_missing")
+
     def test_matching_numeric_com_rule_is_ready(self):
         self.rules.items[DESKFLOW_FIREWALL_RULE_NAME] = FakeRule(
             Name=DESKFLOW_FIREWALL_RULE_NAME,

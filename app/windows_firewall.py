@@ -34,7 +34,16 @@ def _is_missing(error):
         return True
     code = getattr(error, "winerror", None)
     hresult = getattr(error, "hresult", None)
+    excepinfo = getattr(error, "excepinfo", None)
+    nested_hresult = (
+        excepinfo[5]
+        if isinstance(excepinfo, tuple) and len(excepinfo) > 5
+        else None
+    )
     return code in {2, 1168} or hresult in {
+        -2147024894,  # 0x80070002
+        -2147023728,  # 0x80070490
+    } or nested_hresult in {
         -2147024894,  # 0x80070002
         -2147023728,  # 0x80070490
     }
