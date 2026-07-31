@@ -23,18 +23,25 @@ Get-NetTCPConnection -State Listen |
     Where-Object { $_.LocalPort -in 28903,28904,28905 } |
     Select-Object LocalAddress, LocalPort, State, OwningProcess
 
-Get-NetFirewallRule -Name 'DeskFlow Server - Private LAN' |
+$rule = Get-NetFirewallRule -DisplayName 'DeskFlow Server - Private LAN' `
+    -ErrorAction SilentlyContinue
+
+if ($null -eq $rule) {
+    'No DeskFlow firewall rule found. In DeskFlow, choose Configure and start.'
+}
+
+$rule |
     Select-Object DisplayName, Enabled, Direction, Action, Profile
 
-Get-NetFirewallRule -Name 'DeskFlow Server - Private LAN' |
+$rule |
     Get-NetFirewallPortFilter |
     Select-Object Protocol, LocalPort
 
-Get-NetFirewallRule -Name 'DeskFlow Server - Private LAN' |
+$rule |
     Get-NetFirewallApplicationFilter |
     Select-Object Program
 
-Get-NetFirewallRule -Name 'DeskFlow Server - Private LAN' |
+$rule |
     Get-NetFirewallAddressFilter |
     Select-Object RemoteAddress
 ```
