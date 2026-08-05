@@ -5,6 +5,8 @@ This effort implements GitHub issue
 [the original approved design](../../superpowers/specs/2026-07-28-windows-firewall-installer-design.md)
 and the approved
 [effective-conflict repair extension](../../superpowers/specs/2026-08-04-firewall-conflict-repair-design.md).
+Plan 008 additionally implements the approved
+[automatic installer upgrade design](../../superpowers/specs/2026-08-05-automatic-installer-upgrades-design.md).
 The original plans were written at `be44890`; Plans 005-007 were written at
 `75e29dc`. The effort separates the pure/firewall privilege boundary, GUI
 onboarding, release packaging, conflict repair, and independent acceptance so
@@ -24,6 +26,7 @@ done.
 | [005](005-detect-effective-firewall-conflicts.md) | Detect effective firewall conflicts without probes | L | 001, 002 | DONE |
 | [006](006-add-transactional-conflict-repair.md) | Add transactional conflict repair | L | 005 | DONE |
 | [007](007-integrate-conflict-repair-ux.md) | Integrate repair into Server mode and installer | L | 005, 006 | DONE |
+| [008](008-build-safe-automatic-installer-upgrades.md) | Build safe automatic installer upgrades | L | 003, 006, 007 | IN PROGRESS |
 | [004](004-review-and-validate-firewall-release.md) | Independently review and validate release | M | 001, 002, 003, 005, 006, 007 | IN PROGRESS |
 
 Status values: TODO | IN PROGRESS | DONE | BLOCKED (one-line reason) |
@@ -46,7 +49,19 @@ SUPERSEDED (one-line pointer)
 - **005-007 → 004**: final review and physical acceptance must cover the
   effective-policy extension before the release can close.
 
+- **003, 006, and 007 to 008**: automatic replacement must preserve the
+  packaged transaction and invoke the already-reviewed effective repair from a
+  provably fresh executable.
+- **008 to 004**: final physical acceptance must use the fresh automatic
+  upgrader and repeat effective firewall and three-lane validation.
+
 ## Reconciliation log
+
+- **2026-08-05**: Physical setup exposed two release gaps: valid installs
+  could not upgrade automatically, and a newly named installer embedded a
+  stale pre-repair executable. The user accepted no old-binary restoration
+  after removal and approved allowlisted partial-remnant replacement. Plan 008
+  added and started; next: installer/build TDD and fresh artifact assembly.
 
 - **2026-08-05**: Independent review requested changes before physical
   acceptance. Follow-up work makes consented setup create only a Private rule
