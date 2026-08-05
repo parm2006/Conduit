@@ -96,17 +96,18 @@ preserving every tested field.
 Write one failing test per transaction boundary, then implement a backend
 method with the intent `repair(spec) -> FirewallInspection`:
 
-1. reinspect/collect current conflicts from the live policy object;
-2. refuse mutation if any conflict is managed or otherwise not repairable;
-3. snapshot all repairable conflicts;
+1. reinspect/collect current exact conflicts from the live policy object;
+2. snapshot all collected conflicts;
+3. prepare rollback before mutation;
 4. remove them by unique internal identity;
 5. install or replace the exact DeskFlow allow rule;
 6. reinspect effective policy;
 7. return success only for Ready or Development with zero conflicts;
 8. on failure, remove partial DeskFlow state and restore every removed block.
 
-Tests must cover failure before removal, during the second of multiple
-removals, during allow creation, during verification, and during restoration.
+Tests must cover a removal rejected by policy, failure during the second of
+multiple removals, during allow creation, during verification, and during
+restoration.
 Unrelated rules must remain byte-for-byte equivalent in the fake model.
 
 If rollback is incomplete, return a distinct safe Unavailable reason and do
@@ -159,7 +160,7 @@ review each match rather than suppressing the check.
 
 - Snapshot fidelity and collection tests.
 - Successful single/multiple conflict repair.
-- Managed-conflict refusal.
+- Policy-rejected removal and rollback.
 - Rollback at every mutation boundary, including incomplete rollback.
 - Exact helper allowlist and rejection matrix.
 - Full suite after focused red-green cycles.
@@ -169,7 +170,7 @@ review each match rather than suppressing the check.
 - [ ] Every production behavior began with an observed failing test.
 - [ ] Repair cannot accept a caller-supplied executable or rule identity.
 - [ ] Only exact, local, overlapping conflicts are removed.
-- [ ] Managed and unrelated rules are preserved.
+- [ ] Policy-rejected and unrelated rules are preserved.
 - [ ] Every failed transaction restores prior block state or reports explicit
   rollback failure.
 - [ ] Focused and full gates pass.
@@ -182,7 +183,8 @@ Stop if:
 - The COM API does not expose enough properties to restore a removed rule
   faithfully.
 - Unique rule identity cannot safely distinguish duplicate display names.
-- Repair would require deleting a managed policy rule.
+- Windows reports successful removal while effective reinspection still shows
+  a block and the transaction cannot restore prior local mutations.
 - Rollback requires a shell, exported policy file, registry edit, or firewall
   disablement.
 - The helper would need caller-supplied path or rule data.

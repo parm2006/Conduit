@@ -21,7 +21,7 @@ done.
 | [001](001-build-firewall-core-and-helper.md) | Build firewall core and restricted helper | L | — | DONE |
 | [002](002-integrate-server-firewall-onboarding.md) | Integrate Server-mode onboarding | L | 001 | DONE |
 | [003](003-package-executable-and-transactional-installer.md) | Package executable and transactional NSIS installer | L | 001, 002 | DONE |
-| [005](005-detect-effective-firewall-conflicts.md) | Detect effective firewall conflicts without probes | L | 001, 002 | TODO |
+| [005](005-detect-effective-firewall-conflicts.md) | Detect effective firewall conflicts without probes | L | 001, 002 | DONE |
 | [006](006-add-transactional-conflict-repair.md) | Add transactional conflict repair | L | 005 | TODO |
 | [007](007-integrate-conflict-repair-ux.md) | Integrate repair into Server mode and installer | L | 005, 006 | TODO |
 | [004](004-review-and-validate-firewall-release.md) | Independently review and validate release | M | 001, 002, 003, 005, 006, 007 | BLOCKED (awaiting 005-007) |
@@ -47,6 +47,18 @@ SUPERSEDED (one-line pointer)
   effective-policy extension before the release can close.
 
 ## Reconciliation log
+
+- **2026-08-04**: Plan 005 completed. Effective inspection now suppresses
+  Ready/Development for overlapping executable/Private/TCP block rules,
+  reports Public-only active profiles, ignores unreadable irrelevant rules,
+  and exposes safe read-only GUI states without probes or mutation. Full suite:
+  429 tests passed. Next: 006.
+
+- **2026-08-04**: Plan 005 handback found that `INetFwRule` does not expose
+  policy-store origin. [Memo](memo-rule-origin-limitation.md) rejects adding a
+  second CIM boundary: all exact conflicts offer consented Repair, and clean
+  effective reinspection remains the success authority. Plans 005-007 amended;
+  next: resume 005.
 
 - **2026-08-04**: Physical diagnosis found a local `Python` TCP block that
   overrode DeskFlow's correct allow rule. Removing only that block restored a

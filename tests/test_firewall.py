@@ -1,5 +1,8 @@
 import unittest
+from types import SimpleNamespace
 from unittest.mock import patch
+
+import app.firewall as firewall
 
 from app.firewall import (
     DESKFLOW_FIREWALL_RULE_NAME,
@@ -142,6 +145,141 @@ class FirewallRuleComparisonTests(unittest.TestCase):
                 result = compare_firewall_rule(self.spec, observed)
                 self.assertEqual(result.state, FirewallState.STALE)
                 self.assertEqual(result.reason_code, f"stale_{field}")
+
+
+class EffectiveFirewallContractTests(unittest.TestCase):
+    def setUp(self):
+        self.spec = FirewallRuleSpec(
+            r"C:\Program Files\DeskFlow\DeskFlow.exe",
+            5000,
+        )
+
+    def block_rule(self, **changes):
+        values = {
+            "enabled": True,
+            "direction": "inbound",
+            "action": "block",
+            "protocol": "tcp",
+            "local_ports": "any",
+            "application_name": self.spec.executable_path,
+            "profiles": frozenset({"private"}),
+            "remote_addresses": frozenset({"any"}),
+        }
+        values.update(changes)
+        return SimpleNamespace(**values)
+
+    def test_effective_policy_contract_exposes_safe_states_and_matcher(self):
+        self.assertTrue(hasattr(FirewallState, "CONFLICT"))
+        self.assertTrue(hasattr(FirewallState, "PUBLIC_ONLY"))
+        self.assertTrue(hasattr(firewall, "block_rule_conflicts"))
+        self.assertTrue(hasattr(firewall, "evaluate_effective_firewall"))
+
+    def test_tcp_and_any_protocol_port_expressions_overlap(self):
+        overlapping = (
+            ("tcp", ""),
+            ("tcp", "*"),
+            ("tcp", "Any"),
+            ("tcp", "5000"),
+            ("tcp", "4999-5001"),
+            ("tcp", "80, 443, 5002"),
+            ("any", "5000-5002"),
+        )
+
+        for protocol, ports in overlapping:
+            with self.subTest(protocol=protocol, ports=ports):
+                self.assertTrue(
+                    firewall.block_rule_conflicts(
+                        self.spec,
+                        self.block_rule(protocol=protocol, local_ports=ports),
+                    )
+                )
+
+    def test_irrelevant_rules_do_not_conflict(self):
+        irrelevant = (
+            {"enabled": False},
+            {"direction": "outbound"},
+            {"action": "allow"},
+            {"protocol": "udp"},
+            {"local_ports": "4990-4999"},
+            {"application_name": r"C:\Other\DeskFlow.exe"},
+            {"profiles": frozenset({"public"})},
+        )
+
+        for changes in irrelevant:
+            with self.subTest(changes=changes):
+                self.assertFalse(
+                    firewall.block_rule_conflicts(
+                        self.spec,
+                        self.block_rule(**changes),
+                    )
+                )
+
+    def test_matching_rule_with_malformed_ports_is_indeterminate(self):
+        for ports in ("5000-", "later", "5002-5000", "0", "65536"):
+            with self.subTest(ports=ports):
+                with self.assertRaises(ValueError):
+                    firewall.block_rule_conflicts(
+                        self.spec,
+                        self.block_rule(local_ports=ports),
+                    )
+
+    def test_effective_policy_reports_conflict_with_safe_count(self):
+        result = firewall.evaluate_effective_firewall(
+            self.spec,
+            FirewallInspection(FirewallState.READY, "rule_ready"),
+            [self.block_rule()],
+            frozenset({"private"}),
+        )
+
+        self.assertEqual(result.state, FirewallState.CONFLICT)
+        self.assertEqual(result.reason_code, "block_conflict")
+        self.assertEqual(getattr(result, "conflict_count", None), 1)
+        self.assertFalse(hasattr(result, "repairable"))
+
+    def test_effective_policy_does_not_guess_rule_origin(self):
+        result = firewall.evaluate_effective_firewall(
+            self.spec,
+            FirewallInspection(FirewallState.DEVELOPMENT, "python_scope"),
+            [self.block_rule()],
+            frozenset({"private"}),
+        )
+
+        self.assertEqual(result.state, FirewallState.CONFLICT)
+        self.assertEqual(result.reason_code, "block_conflict")
+
+    def test_effective_policy_reports_public_only_without_private_profile(self):
+        result = firewall.evaluate_effective_firewall(
+            self.spec,
+            FirewallInspection(FirewallState.READY, "rule_ready"),
+            [],
+            frozenset({"public"}),
+        )
+
+        self.assertEqual(result.state, FirewallState.PUBLIC_ONLY)
+        self.assertEqual(result.reason_code, "private_profile_inactive")
+
+    def test_nonready_allow_state_is_preserved(self):
+        missing = FirewallInspection(FirewallState.MISSING, "rule_missing")
+
+        result = firewall.evaluate_effective_firewall(
+            self.spec,
+            missing,
+            [self.block_rule()],
+            frozenset({"public"}),
+        )
+
+        self.assertIs(result, missing)
+
+    def test_malformed_relevant_block_never_reports_ready(self):
+        result = firewall.evaluate_effective_firewall(
+            self.spec,
+            FirewallInspection(FirewallState.READY, "rule_ready"),
+            [self.block_rule(local_ports="broken")],
+            frozenset({"private"}),
+        )
+
+        self.assertEqual(result.state, FirewallState.UNAVAILABLE)
+        self.assertEqual(result.reason_code, "block_rule_unreadable")
 
 
 if __name__ == "__main__":

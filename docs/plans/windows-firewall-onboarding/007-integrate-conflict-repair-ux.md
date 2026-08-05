@@ -80,7 +80,7 @@ block cannot make installation silently unusable.
 Write failing coordinator tests first. Add a fixed repair elevation path that
 differs from install only by the allowlisted helper operation. Keep the base
 port as the only variable. The coordinator must choose install for
-Missing/Stale and repair for a repairable conflict.
+Missing/Stale and repair for a conflict.
 
 UAC cancellation, helper failure, managed results, and success-with-failed-
 reinspection must retain the existing no-start behavior. `on_ready` runs only
@@ -92,7 +92,7 @@ after Ready or Development reinspection.
 
 ### Step 2: Implement the approved conflict consent UX
 
-Write failing GUI tests first. For a repairable conflict:
+Write failing GUI tests first. For a conflict:
 
 - render `Firewall: Connection blocked` in red with action `Repair`;
 - show the approved explanation and exact executable/port/Private/LocalSubnet
@@ -104,8 +104,10 @@ Write failing GUI tests first. For a repairable conflict:
 - after verified success, start with the originally latched port/password;
 - do not offer Start without setup for a confirmed block.
 
-Managed conflict and Public-only remain View help with no automatic repair.
-Existing Missing/Stale behavior remains unchanged.
+Every detected conflict offers the same consented Repair attempt. If Windows
+policy refuses removal or effective reinspection still finds the conflict,
+show administrator help and do not start. Public-only remains View help with
+no automatic repair. Existing Missing/Stale behavior remains unchanged.
 
 **Verify**:
 `.\venv\Scripts\python.exe -m unittest tests.test_firewall_onboarding tests.test_gui_preferences -v`
@@ -181,7 +183,7 @@ acceptance before merge.
 
 ## Done criteria
 
-- [ ] Repairable conflict shows Repair; managed/Public states do not.
+- [ ] Conflict shows Repair; Public-only does not.
 - [ ] Confirmed conflict never offers Start without setup.
 - [ ] Source Python warning appears before mutation.
 - [ ] Cancel and UAC decline change nothing and do not start.
@@ -195,8 +197,7 @@ acceptance before merge.
 
 Stop if:
 
-- The GUI cannot distinguish repairable and managed conflicts using safe
-  inspection metadata.
+- The GUI would need policy-origin metadata to decide whether repair succeeded.
 - The installer would remove a block before explicit firewall consent.
 - Installer rollback conflicts with the backend's block restoration.
 - Source-mode repair would occur without the shared-Python warning.

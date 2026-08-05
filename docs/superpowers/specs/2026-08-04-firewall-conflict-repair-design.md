@@ -37,8 +37,8 @@ states:
 
 - **Connection blocked** — an enabled inbound block rule overlaps the running
   executable, Private profile, TCP, and at least one DeskFlow port. The action
-  is **Repair** when every conflict is locally repairable. Otherwise it is
-  **View help**.
+  is **Repair**. Read-only inspection does not guess whether Windows policy
+  will permit removal; verified post-repair inspection is authoritative.
 - **Blocked on Public network** — the machine has no active Private profile.
   The action is **View help**. DeskFlow will not change the network category or
   add a Public exception.
@@ -48,8 +48,7 @@ rule, Managed by administrator, and Unavailable. **Ready** and **Development
 rule** mean both that the named allow rule matches and that no detected block
 rule overrides it on an active Private profile.
 
-When a repairable conflict exists and the user starts Server mode, DeskFlow
-shows:
+When a conflict exists and the user starts Server mode, DeskFlow shows:
 
 > Windows is blocking incoming DeskFlow connections.
 >
@@ -101,16 +100,14 @@ profile, or remote-address expression, DeskFlow reports **Unavailable** rather
 than claiming Ready. It never tests reachability over the network.
 
 The inspection result will include only safe metadata needed for behavior:
-state, reason code, whether the conflict is repairable, and the number of
-conflicts. Normal GUI text and logs will not expose rule GUIDs, usernames,
-private paths, or full policy dumps.
+state, reason code, and the number of conflicts. Normal GUI text and logs will
+not expose rule GUIDs, usernames, private paths, or full policy dumps.
 
-## Repairability rules
+## Repair attempt rules
 
-A conflicting rule is automatically repairable only when all conditions hold:
+A conflicting rule is eligible for the consented repair attempt only when all
+conditions hold:
 
-- it comes from the local policy store rather than Group Policy, MDM, or
-  another managed source;
 - it is enabled, inbound, and block;
 - it targets the exact running executable;
 - it applies to TCP or all protocols;
@@ -118,8 +115,11 @@ A conflicting rule is automatically repairable only when all conditions hold:
 - it applies to the Private profile; and
 - it can be removed by its unique internal rule identity.
 
-Managed conflicts display **View help** and are never modified. The user must
-ask their administrator to change them.
+The selected COM rule interface does not expose policy-store origin. DeskFlow
+therefore does not predict whether Windows will permit removal. If Group
+Policy, MDM, or another managed source prevents the change, the elevated
+operation fails or the conflict remains; DeskFlow restores prior mutations,
+does not start Server mode, and directs the user to their administrator.
 
 For packaged `DeskFlow.exe`, explicit consent authorizes removal of all local
 conflicts satisfying this contract. For source-mode Python, the same repair is
@@ -141,8 +141,8 @@ three ports from the validated base port.
 
 The elevated backend will:
 
-1. Reinspect and collect repairable conflicts to prevent a stale GUI decision
-   from authorizing different rules.
+1. Reinspect and collect exact conflicts to prevent a stale GUI decision from
+   authorizing different rules.
 2. Snapshot every property required to recreate those rules.
 3. Remove only the collected rules by unique internal identity.
 4. Install or replace the stable restricted DeskFlow allow rule.
@@ -207,8 +207,8 @@ Test-first coverage will include:
 - no conflict for UDP-only, disabled, outbound, nonoverlapping port, different
   executable, or non-Private rule;
 - conservative failure for malformed matching rule expressions;
-- local conflict reported as repairable;
-- Group Policy or managed conflict reported without a repair action;
+- exact conflict reported without guessing its policy-store origin;
+- policy-rejected repair reported safely after attempted mutation;
 - Ready/Development suppressed when an overriding block exists;
 - Public-only active profile reported without adding a Public rule;
 - conflict consent, cancellation, UAC decline, success, and failed
@@ -240,11 +240,11 @@ A green GUI label or one reachable TCP port is not sufficient acceptance.
   probe.
 - Ready means the exact allow rule exists, a Private profile is active, and no
   detected explicit block overrides the three DeskFlow TCP ports.
-- A repairable conflict produces clear consent and a UAC-gated repair action.
+- A conflict produces clear consent and a UAC-gated repair action.
 - Cancel or UAC decline leaves firewall state unchanged and does not start the
   server.
-- Repair removes only local conflicts for the exact running executable and
-  overlapping DeskFlow ports.
+- Repair removes only exact conflicts for the running executable and
+  overlapping DeskFlow ports that Windows permits the local API to remove.
 - Managed rules and unrelated rules are never removed.
 - Failed repair restores removed block rules and does not claim success.
 - Source mode warns that Python may be shared.

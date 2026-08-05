@@ -37,6 +37,9 @@ class FakeRules:
             raise KeyError(name)
         return self.items[name]
 
+    def __iter__(self):
+        return iter(self.items.values())
+
     def Add(self, rule):
         if self.add_error:
             raise self.add_error
@@ -53,8 +56,9 @@ class FakeRules:
 
 
 class FakePolicy:
-    def __init__(self, rules=None):
+    def __init__(self, rules=None, current_profiles=2):
         self.Rules = rules or FakeRules()
+        self.CurrentProfileTypes = current_profiles
 
 
 class WindowsFirewallBackendTests(unittest.TestCase):
@@ -68,6 +72,20 @@ class WindowsFirewallBackendTests(unittest.TestCase):
         self.backend = WindowsFirewallBackend(
             policy_factory=lambda: self.policy,
             rule_factory=FakeRule,
+        )
+
+    def add_matching_allow(self):
+        self.rules.items[DESKFLOW_FIREWALL_RULE_NAME] = FakeRule(
+            Name=DESKFLOW_FIREWALL_RULE_NAME,
+            Enabled=True,
+            Direction=1,
+            Action=1,
+            Protocol=6,
+            LocalPorts="5000-5002",
+            ApplicationName=r"C:\Program Files\DeskFlow\DeskFlow.exe",
+            Profiles=2,
+            RemoteAddresses="LocalSubnet",
+            EdgeTraversal=False,
         )
 
     def test_missing_rule_is_reported_without_mutation(self):
@@ -97,7 +115,136 @@ class WindowsFirewallBackendTests(unittest.TestCase):
         self.assertEqual(result.reason_code, "rule_missing")
 
     def test_matching_numeric_com_rule_is_ready(self):
-        self.rules.items[DESKFLOW_FIREWALL_RULE_NAME] = FakeRule(
+        self.add_matching_allow()
+
+        result = self.backend.inspect(self.spec)
+
+        self.assertEqual(result.state, FirewallState.READY)
+
+    def test_matching_block_overrides_ready_allow_without_mutation(self):
+        self.add_matching_allow()
+        self.rules.items["Python TCP block"] = FakeRule(
+            Name="Python TCP block",
+            Enabled=True,
+            Direction=1,
+            Action=0,
+            Protocol=6,
+            LocalPorts="Any",
+            ApplicationName=r"C:\Program Files\DeskFlow\DeskFlow.exe",
+            Profiles=2,
+            RemoteAddresses="Any",
+            EdgeTraversal=False,
+        )
+
+        result = self.backend.inspect(self.spec)
+
+        self.assertEqual(result.state, FirewallState.CONFLICT)
+        self.assertEqual(result.reason_code, "block_conflict")
+        self.assertEqual(result.conflict_count, 1)
+        self.assertEqual(self.rules.added, [])
+        self.assertEqual(self.rules.removed, [])
+
+    def test_any_protocol_block_can_override_ready_allow(self):
+        self.add_matching_allow()
+        self.rules.items["Any protocol block"] = FakeRule(
+            Name="Any protocol block",
+            Enabled=True,
+            Direction=1,
+            Action=0,
+            Protocol=256,
+            LocalPorts="5001",
+            ApplicationName=r"C:\Program Files\DeskFlow\DeskFlow.exe",
+            Profiles=2,
+            RemoteAddresses="LocalSubnet",
+            EdgeTraversal=False,
+        )
+
+        result = self.backend.inspect(self.spec)
+
+        self.assertEqual(result.state, FirewallState.CONFLICT)
+
+    def test_unrelated_block_does_not_override_ready_allow(self):
+        self.add_matching_allow()
+        self.rules.items["Other app block"] = FakeRule(
+            Name="Other app block",
+            Enabled=True,
+            Direction=1,
+            Action=0,
+            Protocol=6,
+            LocalPorts="Any",
+            ApplicationName=r"C:\Other\Other.exe",
+            Profiles=2,
+            RemoteAddresses="Any",
+            EdgeTraversal=False,
+        )
+
+        result = self.backend.inspect(self.spec)
+
+        self.assertEqual(result.state, FirewallState.READY)
+
+    def test_unreadable_property_on_irrelevant_rule_is_ignored(self):
+        class IrrelevantRule(FakeRule):
+            def __getattribute__(self, name):
+                if name == "LocalPorts":
+                    raise RuntimeError("not valid for this protocol")
+                return super().__getattribute__(name)
+
+        self.add_matching_allow()
+        self.rules.items["Irrelevant UDP rule"] = IrrelevantRule(
+            Name="Irrelevant UDP rule",
+            Enabled=True,
+            Direction=1,
+            Action=0,
+            Protocol=17,
+            ApplicationName=r"C:\Other\Other.exe",
+            Profiles=2,
+        )
+
+        result = self.backend.inspect(self.spec)
+
+        self.assertEqual(result.state, FirewallState.READY)
+
+    def test_public_only_active_profile_never_reports_ready(self):
+        self.add_matching_allow()
+        self.policy.CurrentProfileTypes = 4
+
+        result = self.backend.inspect(self.spec)
+
+        self.assertEqual(result.state, FirewallState.PUBLIC_ONLY)
+        self.assertEqual(result.reason_code, "private_profile_inactive")
+
+    def test_malformed_matching_block_never_reports_ready(self):
+        self.add_matching_allow()
+        self.rules.items["Malformed block"] = FakeRule(
+            Name="Malformed block",
+            Enabled=True,
+            Direction=1,
+            Action=0,
+            Protocol=6,
+            LocalPorts="broken",
+            ApplicationName=r"C:\Program Files\DeskFlow\DeskFlow.exe",
+            Profiles=2,
+            RemoteAddresses="Any",
+            EdgeTraversal=False,
+        )
+
+        result = self.backend.inspect(self.spec)
+
+        self.assertEqual(result.state, FirewallState.UNAVAILABLE)
+        self.assertEqual(result.reason_code, "block_rule_unreadable")
+
+    def test_rule_enumeration_failure_is_safely_unavailable(self):
+        class BrokenIterationRules(FakeRules):
+            def __iter__(self):
+                raise RuntimeError("private policy detail")
+
+        rules = BrokenIterationRules()
+        policy = FakePolicy(rules)
+        backend = WindowsFirewallBackend(
+            policy_factory=lambda: policy,
+            rule_factory=FakeRule,
+        )
+        rules.items[DESKFLOW_FIREWALL_RULE_NAME] = FakeRule(
             Name=DESKFLOW_FIREWALL_RULE_NAME,
             Enabled=True,
             Direction=1,
@@ -110,9 +257,10 @@ class WindowsFirewallBackendTests(unittest.TestCase):
             EdgeTraversal=False,
         )
 
-        result = self.backend.inspect(self.spec)
+        result = backend.inspect(self.spec)
 
-        self.assertEqual(result.state, FirewallState.READY)
+        self.assertEqual(result.state, FirewallState.UNAVAILABLE)
+        self.assertEqual(result.reason_code, "inspection_failed")
 
     def test_install_builds_the_complete_private_local_subnet_rule(self):
         result = self.backend.install_or_replace(self.spec)

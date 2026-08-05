@@ -44,6 +44,16 @@ class FirewallDisplayTests(unittest.TestCase):
                 "orange",
                 "View help",
             ),
+            FirewallState.CONFLICT: (
+                "Connection blocked",
+                "red",
+                "View help",
+            ),
+            FirewallState.PUBLIC_ONLY: (
+                "Blocked on Public network",
+                "orange",
+                "View help",
+            ),
             FirewallState.MANAGED: (
                 "Managed by administrator",
                 "orange",

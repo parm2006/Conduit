@@ -94,8 +94,8 @@ state, safe conflict count, and repairability. Required behavior:
   rules do not conflict;
 - malformed potentially relevant expressions return an indeterminate result
   that callers map to Unavailable rather than Ready;
-- add distinct conflict and Public-only states without embedding private rule
-  details in reason codes.
+- add distinct conflict and Public-only states plus a safe conflict count,
+  without embedding private rule details in reason codes.
 
 Keep parsing and matching platform-independent. Do not import COM, sockets, or
 PowerShell.
@@ -108,8 +108,8 @@ model implementation.
 ### Step 2: Inspect the active policy store
 
 Write failing backend tests first in `tests/test_windows_firewall.py`. Extend
-the fakes to expose iterable rules, unique internal names, policy source type,
-and `CurrentProfileTypes`. Then update `WindowsFirewallBackend.inspect` so it:
+the fakes to expose iterable rules, unique internal names, and
+`CurrentProfileTypes`. Then update `WindowsFirewallBackend.inspect` so it:
 
 1. validates the named allow rule;
 2. reads active profiles without changing them;
@@ -117,7 +117,7 @@ and `CurrentProfileTypes`. Then update `WindowsFirewallBackend.inspect` so it:
 4. maps COM fields into pure model objects;
 5. returns conflict ahead of Ready/Development when an overlapping block
    exists;
-6. distinguishes locally repairable conflicts from managed conflicts;
+6. returns one generic conflict result without guessing rule origin;
 7. returns Public-only when no Private profile is active; and
 8. maps unreadable relevant policy to safe Managed or Unavailable results.
 
@@ -133,13 +133,12 @@ Inspection must not mutate the fake or real rules collection.
 Write failing tests in `tests/test_firewall_onboarding.py` and
 `tests/test_gui_preferences.py`. Add display entries:
 
-- repairable conflict: label `Connection blocked`, red, action `View help` in
-  this read-only plan;
-- managed conflict: label `Connection blocked`, red, action `View help`;
+- conflict: label `Connection blocked`, red, action `View help` in this
+  read-only plan;
 - Public-only: label `Blocked on Public network`, orange, action `View help`.
 
-Plan 007 will change the repairable conflict action to Repair after the helper
-exists. Until then, starting Server with a conflict must not claim readiness.
+Plan 007 will change the conflict action to Repair after the helper exists.
+Until then, starting Server with a conflict must not claim readiness.
 The existing explicit Start without setup behavior may remain for this
 intermediate commit, but it must keep a visible warning.
 
@@ -192,7 +191,7 @@ Stop if:
   supported Windows versions.
 - Active profile state cannot be read through the existing policy object.
 - Correct remote-scope handling requires live adapter/IP enumeration.
-- A matching managed block cannot be distinguished safely from local policy.
+- Conflict enumeration requires policy-origin metadata for read-only safety.
 - More than safe state/count/repairability metadata must cross into the GUI.
 - A focused test fails twice after a reasonable fix.
 

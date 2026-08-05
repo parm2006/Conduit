@@ -6,12 +6,16 @@ from app.firewall import (
     FirewallState,
     ObservedFirewallRule,
     compare_firewall_rule,
+    evaluate_effective_firewall,
+    executable_paths_match,
 )
 
 
 _NET_FW_RULE_DIR_IN = 1
+_NET_FW_ACTION_BLOCK = 0
 _NET_FW_ACTION_ALLOW = 1
 _NET_FW_IP_PROTOCOL_TCP = 6
+_NET_FW_IP_PROTOCOL_ANY = 256
 _NET_FW_PROFILE2_DOMAIN = 1
 _NET_FW_PROFILE2_PRIVATE = 2
 _NET_FW_PROFILE2_PUBLIC = 4
@@ -82,6 +86,76 @@ def _address_set(value):
     )
 
 
+def _protocol_name(value):
+    if value == _NET_FW_IP_PROTOCOL_TCP:
+        return "tcp"
+    if value == _NET_FW_IP_PROTOCOL_ANY:
+        return "any"
+    return str(value)
+
+
+def _observed_rule(rule):
+    return ObservedFirewallRule(
+        name=str(rule.Name),
+        enabled=bool(rule.Enabled),
+        direction=(
+            "inbound"
+            if rule.Direction == _NET_FW_RULE_DIR_IN
+            else "outbound"
+        ),
+        action=(
+            "allow"
+            if rule.Action == _NET_FW_ACTION_ALLOW
+            else "block"
+        ),
+        protocol=_protocol_name(rule.Protocol),
+        local_ports=str(rule.LocalPorts),
+        application_name=str(rule.ApplicationName),
+        profiles=_profiles_from_mask(int(rule.Profiles)),
+        remote_addresses=_address_set(rule.RemoteAddresses),
+        edge_traversal=bool(rule.EdgeTraversal),
+    )
+
+
+def _observed_block_rule(rule, spec):
+    if not bool(rule.Enabled):
+        return None
+    if rule.Direction != _NET_FW_RULE_DIR_IN:
+        return None
+    if rule.Action != _NET_FW_ACTION_BLOCK:
+        return None
+    protocol = _protocol_name(rule.Protocol)
+    if protocol not in {"tcp", "any"}:
+        return None
+    if not executable_paths_match(
+        rule.ApplicationName,
+        spec.executable_path,
+    ):
+        return None
+    profiles = _profiles_from_mask(int(rule.Profiles))
+    if "private" not in profiles:
+        return None
+    return ObservedFirewallRule(
+        name=str(rule.Name),
+        enabled=True,
+        direction="inbound",
+        action="block",
+        protocol=protocol,
+        local_ports=str(rule.LocalPorts),
+        application_name=str(rule.ApplicationName),
+        profiles=profiles,
+        remote_addresses=frozenset(),
+        edge_traversal=False,
+    )
+
+
+def _observed_block_rules(rules, spec):
+    for rule in rules:
+        observed = _observed_block_rule(rule, spec)
+        if observed is not None:
+            yield observed
+
+
 class WindowsFirewallBackend:
     def __init__(self, policy_factory=None, rule_factory=None):
         self.policy_factory = policy_factory or _default_policy_factory
@@ -89,7 +163,8 @@ class WindowsFirewallBackend:
 
     def inspect(self, spec):
         try:
-            rules = self.policy_factory().Rules
+            policy = self.policy_factory()
+            rules = policy.Rules
             try:
                 rule = rules.Item(DESKFLOW_FIREWALL_RULE_NAME)
             except Exception as error:
@@ -99,31 +174,21 @@ class WindowsFirewallBackend:
                         "rule_missing",
                     )
                 return _failure_inspection(error, "inspection_failed")
-            observed = ObservedFirewallRule(
-                name=str(rule.Name),
-                enabled=bool(rule.Enabled),
-                direction=(
-                    "inbound"
-                    if rule.Direction == _NET_FW_RULE_DIR_IN
-                    else "outbound"
-                ),
-                action=(
-                    "allow"
-                    if rule.Action == _NET_FW_ACTION_ALLOW
-                    else "block"
-                ),
-                protocol=(
-                    "tcp"
-                    if rule.Protocol == _NET_FW_IP_PROTOCOL_TCP
-                    else str(rule.Protocol)
-                ),
-                local_ports=str(rule.LocalPorts),
-                application_name=str(rule.ApplicationName),
-                profiles=_profiles_from_mask(int(rule.Profiles)),
-                remote_addresses=_address_set(rule.RemoteAddresses),
-                edge_traversal=bool(rule.EdgeTraversal),
+            allow_inspection = compare_firewall_rule(
+                spec,
+                _observed_rule(rule),
             )
-            return compare_firewall_rule(spec, observed)
+            if allow_inspection.state not in {
+                FirewallState.READY,
+                FirewallState.DEVELOPMENT,
+            }:
+                return allow_inspection
+            return evaluate_effective_firewall(
+                spec,
+                allow_inspection,
+                _observed_block_rules(rules, spec),
+                _profiles_from_mask(int(policy.CurrentProfileTypes)),
+            )
         except Exception as error:
             return _failure_inspection(error, "inspection_failed")
 

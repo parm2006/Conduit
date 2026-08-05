@@ -69,6 +69,18 @@ _DISPLAY = {
         "View help",
         "The rule applies to Python because DeskFlow is running from source.",
     ),
+    FirewallState.CONFLICT: FirewallDisplay(
+        "Connection blocked",
+        "red",
+        "View help",
+        "Another Windows Firewall rule blocks incoming DeskFlow connections.",
+    ),
+    FirewallState.PUBLIC_ONLY: FirewallDisplay(
+        "Blocked on Public network",
+        "orange",
+        "View help",
+        "DeskFlow accepts incoming connections only on Private networks.",
+    ),
     FirewallState.MANAGED: FirewallDisplay(
         "Managed by administrator",
         "orange",

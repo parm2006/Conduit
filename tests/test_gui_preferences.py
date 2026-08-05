@@ -229,6 +229,14 @@ class SuccessfulRoleTimingTests(unittest.TestCase):
                 "Firewall: Development rule",
                 "View help",
             ),
+            FirewallState.CONFLICT: (
+                "Firewall: Connection blocked",
+                "View help",
+            ),
+            FirewallState.PUBLIC_ONLY: (
+                "Firewall: Blocked on Public network",
+                "View help",
+            ),
             FirewallState.MANAGED: (
                 "Firewall: Managed by administrator",
                 "View help",
