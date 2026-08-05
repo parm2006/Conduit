@@ -18,7 +18,10 @@
 - **Risk**: HIGH
 - **Depends on**: `001-build-firewall-core-and-helper.md`,
   `002-integrate-server-firewall-onboarding.md`,
-  `003-package-executable-and-transactional-installer.md`
+  `003-package-executable-and-transactional-installer.md`,
+  `005-detect-effective-firewall-conflicts.md`,
+  `006-add-transactional-conflict-repair.md`,
+  `007-integrate-conflict-repair-ux.md`
 - **Planned at**: revision `be44890`, 2026-07-28
 
 ## Why this matters
@@ -35,13 +38,15 @@ branch can be called ready.
   feature requirements.
 - The design is
   `docs/superpowers/specs/2026-07-28-windows-firewall-installer-design.md`.
+- The approved effective-policy extension is
+  `docs/superpowers/specs/2026-08-04-firewall-conflict-repair-design.md`.
 - `docs/plans/security-revamp/VALIDATION.md` is the existing two-PC acceptance
   style: exact PowerShell commands separated by server and client.
 - The user explicitly requires a separate agent used solely for code review
   after implementation. That agent must use the installed code-review skill,
   make no edits, and report findings to the primary agent.
-- Plans 001-003 must already have clean focused and full automated gates plus
-  built executable and installer artifacts.
+- Plans 001-003 and 005-007 must already have clean focused and full automated
+  gates plus built executable and installer artifacts.
 
 ## Commands you will need
 
@@ -160,6 +165,10 @@ Execute `VALIDATION.md` on the physical laptop and desktop. Confirm:
 - ports are reachable only under the intended Private-LAN conditions;
 - pairing, control, data, and file lanes still work;
 - stale port configuration repairs only after consent;
+- a local overlapping TCP block produces Connection blocked without a ping;
+- conflict-repair Cancel and UAC decline preserve the original block;
+- consented repair removes only the exact local conflict and preserves
+  unrelated rules;
 - uninstall removes the DeskFlow rule and installed files.
 
 Record PASS/FAIL with commands and observed results in a new append-only
@@ -187,6 +196,8 @@ When and only when all gates pass:
 - Separate review-only agent with code-review skill.
 - Regression tests for every accepted reviewer finding.
 - Physical two-PC installer/firewall/connection/uninstall matrix.
+- Physical conflicting-block detection, refusal, repair, and preservation
+  matrix.
 - No test or validation step disables UAC, firewall, antivirus, or policy.
 
 ## Done criteria
