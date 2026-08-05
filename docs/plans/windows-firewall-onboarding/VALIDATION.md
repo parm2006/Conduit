@@ -34,8 +34,9 @@ Use the built installer on a PC without an existing packaged DeskFlow install.
 1. Launch setup and decline the initial Windows UAC prompt. Confirm the wizard
    never opens and nothing is installed.
 2. Launch again, approve UAC, then select **No - Cancel installation**. Confirm
-   no DeskFlow program directory, shortcut, uninstall entry, or DeskFlow
-   firewall rule was created.
+   the wizard closes immediately, with no second confirmation and no opportunity
+   to select **Yes** in that installer run. Confirm no DeskFlow program
+   directory, shortcut, uninstall entry, or DeskFlow firewall rule was created.
 3. Repeat, approve UAC, and close the firewall-consent page. Confirm the same
    result.
 4. Launch again, approve UAC, select **Yes**, and confirm installation

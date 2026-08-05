@@ -196,6 +196,39 @@ class NsisInstallerContractTests(unittest.TestCase):
         self.assertIn("!define MUI_CUSTOMFUNCTION_ABORT OnUserAbort", self.script)
         self.assertIn("Function OnUserAbort", self.script)
 
+    def test_firewall_consent_no_is_terminal_for_the_installer_run(self):
+        no_handler = self.script[
+            self.script.index("Function FirewallConsentNo"):
+            self.script.index(
+                "FunctionEnd",
+                self.script.index("Function FirewallConsentNo"),
+            )
+        ]
+        yes_handler = self.script[
+            self.script.index("Function FirewallConsentYes"):
+            self.script.index(
+                "FunctionEnd",
+                self.script.index("Function FirewallConsentYes"),
+            )
+        ]
+
+        self.assertIn('StrCpy $FirewallConsentGranted "denied"', no_handler)
+        self.assertIn(
+            "EnableWindow $FirewallConsentYesButton 0",
+            no_handler,
+        )
+        self.assertIn(
+            "EnableWindow $FirewallConsentNoButton 0",
+            no_handler,
+        )
+        self.assertNotIn("MessageBox", no_handler)
+        self.assertIn("Quit", no_handler)
+        self.assertIn(
+            '${If} $FirewallConsentGranted == "denied"',
+            yes_handler,
+        )
+        self.assertIn("Return", yes_handler)
+
     def test_verified_repair_is_the_final_fallible_step_before_completion(self):
         repair = (
             '"$INSTDIR\\DeskFlow.exe" --deskflow-firewall-helper '

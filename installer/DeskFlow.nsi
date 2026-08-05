@@ -208,6 +208,9 @@ Function FirewallConsentPage
 FunctionEnd
 
 Function FirewallConsentYes
+  ${If} $FirewallConsentGranted == "denied"
+    Return
+  ${EndIf}
   StrCpy $FirewallConsentGranted "1"
   GetDlgItem $0 $HWNDPARENT 1
   EnableWindow $0 1
@@ -215,8 +218,9 @@ Function FirewallConsentYes
 FunctionEnd
 
 Function FirewallConsentNo
-  MessageBox MB_ICONINFORMATION|MB_OK \
-    "DeskFlow was not installed because firewall consent is required."
+  StrCpy $FirewallConsentGranted "denied"
+  EnableWindow $FirewallConsentYesButton 0
+  EnableWindow $FirewallConsentNoButton 0
   SetErrorLevel 2
   Quit
 FunctionEnd
