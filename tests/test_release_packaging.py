@@ -224,9 +224,10 @@ class NsisInstallerContractTests(unittest.TestCase):
         self.assertNotIn("MessageBox", no_handler)
         self.assertIn("Pop $0", no_handler)
         self.assertIn(
-            "SendMessage $HWNDPARENT ${WM_CLOSE} 0 0",
+            "SendMessage $HWNDPARENT ${WM_COMMAND} 2 0",
             no_handler,
         )
+        self.assertNotIn("${WM_CLOSE}", no_handler)
         self.assertNotIn("Quit", no_handler)
         self.assertIn(
             '${If} $FirewallConsentGranted == "denied"',

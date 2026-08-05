@@ -225,7 +225,7 @@ Function FirewallConsentNo
   EnableWindow $FirewallConsentYesButton 0
   EnableWindow $FirewallConsentNoButton 0
   SetErrorLevel 2
-  SendMessage $HWNDPARENT ${WM_CLOSE} 0 0
+  SendMessage $HWNDPARENT ${WM_COMMAND} 2 0
 FunctionEnd
 
 Function FirewallConsentLeave
