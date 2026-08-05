@@ -209,6 +209,7 @@ Function FirewallConsentPage
 FunctionEnd
 
 Function FirewallConsentYes
+  Pop $0
   ${If} $FirewallConsentGranted == "denied"
     Return
   ${EndIf}
@@ -219,11 +220,12 @@ Function FirewallConsentYes
 FunctionEnd
 
 Function FirewallConsentNo
+  Pop $0
   StrCpy $FirewallConsentGranted "denied"
   EnableWindow $FirewallConsentYesButton 0
   EnableWindow $FirewallConsentNoButton 0
   SetErrorLevel 2
-  Quit
+  SendMessage $HWNDPARENT ${WM_CLOSE} 0 0
 FunctionEnd
 
 Function FirewallConsentLeave

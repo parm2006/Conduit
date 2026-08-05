@@ -222,11 +222,17 @@ class NsisInstallerContractTests(unittest.TestCase):
             no_handler,
         )
         self.assertNotIn("MessageBox", no_handler)
-        self.assertIn("Quit", no_handler)
+        self.assertIn("Pop $0", no_handler)
+        self.assertIn(
+            "SendMessage $HWNDPARENT ${WM_CLOSE} 0 0",
+            no_handler,
+        )
+        self.assertNotIn("Quit", no_handler)
         self.assertIn(
             '${If} $FirewallConsentGranted == "denied"',
             yes_handler,
         )
+        self.assertIn("Pop $0", yes_handler)
         self.assertIn("Return", yes_handler)
 
     def test_installer_shortcuts_explicitly_use_packaged_deskflow_icon(self):
