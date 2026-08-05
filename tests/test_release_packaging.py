@@ -235,15 +235,57 @@ class NsisInstallerContractTests(unittest.TestCase):
         ]
 
         self.assertIn("could not remove its firewall rule", uninstall)
+        self.assertIn("IfSilent uninstall_firewall_warning_done 0", uninstall)
+        self.assertLess(
+            uninstall.index("IfSilent uninstall_firewall_warning_done 0"),
+            uninstall.index("could not remove its firewall rule"),
+        )
+        self.assertGreater(
+            uninstall.index("uninstall_firewall_warning_done:"),
+            uninstall.index("could not remove its firewall rule"),
+        )
         self.assertIn('Delete "$INSTDIR\\DeskFlow.exe"', uninstall)
         self.assertNotIn("Uninstall was cancelled", uninstall)
         self.assertNotIn("SetErrorLevel 4", uninstall)
         self.assertNotIn("Quit", uninstall)
 
-    def test_installer_never_runs_or_deletes_a_preexisting_target(self):
+    def test_installer_classifies_exact_packaged_upgrade_and_partial_remnants(self):
         self.assertNotIn("MUI_PAGE_DIRECTORY", self.script)
         self.assertIn('StrCpy $INSTDIR "$PROGRAMFILES64\\DeskFlow"', self.script)
-        self.assertIn('IfFileExists "$INSTDIR\\*.*" existing_install', self.script)
+        self.assertIn("Var ExistingInstallState", self.script)
+        self.assertIn("Function ClassifyExistingInstall", self.script)
+        self.assertIn('ReadRegStr $0 HKLM "Software\\DeskFlow" "InstallDir"', self.script)
+        self.assertIn(
+            'ReadRegStr $1 HKLM "${UNINSTALL_KEY}" "UninstallString"',
+            self.script,
+        )
+        self.assertIn('StrCmp $0 "$INSTDIR"', self.script)
+        self.assertIn("FindFirst", self.script)
+        for filename in (
+            "DeskFlow.exe",
+            "Uninstall.exe",
+            "DeskFlow Source.url",
+            "DeskFlow.installing",
+            "THIRD_PARTY_NOTICES.txt",
+            "LICENSE",
+        ):
+            with self.subTest(filename=filename):
+                self.assertIn(filename, self.script)
+        self.assertIn('StrCpy $ExistingInstallState "upgrade"', self.script)
+        self.assertIn('StrCpy $ExistingInstallState "partial"', self.script)
+        self.assertIn("unknown_install_contents", self.script)
+        self.assertNotIn('$"', self.script)
+        self.assertIn("classify_done:\n  ClearErrors\n  Return", self.script)
+
+    def test_existing_install_is_not_mutated_before_firewall_consent(self):
+        consent = self.script.index("Function FirewallConsentLeave")
+        preparation = self.script.index("Function PrepareExistingInstall")
+        section = self.script.index('Section "DeskFlow"')
+        prepare_call = self.script.index("Call PrepareExistingInstall", section)
+
+        self.assertLess(consent, section)
+        self.assertLess(preparation, section)
+        self.assertGreater(prepare_call, section)
         self.assertIn("Var TransactionFilesWritten", self.script)
         self.assertIn('StrCpy $TransactionFilesWritten "1"', self.script)
         abort = self.script[
@@ -252,6 +294,88 @@ class NsisInstallerContractTests(unittest.TestCase):
         ]
         self.assertIn('${If} $TransactionFilesWritten == "1"', abort)
         self.assertNotIn('IfFileExists "$INSTDIR\\DeskFlow.exe"', abort)
+
+    def test_install_cannot_be_cancelled_after_existing_install_mutation_starts(self):
+        section = self.script[
+            self.script.index('Section "DeskFlow"'):
+            self.script.index("SectionEnd", self.script.index('Section "DeskFlow"'))
+        ]
+        disable_cancel = section.index("GetDlgItem $2 $HWNDPARENT 2")
+        prepare = section.index("Call PrepareExistingInstall")
+
+        self.assertLess(disable_cancel, prepare)
+        self.assertIn("EnableWindow $2 0", section[disable_cancel:prepare])
+
+    def test_upgrade_uses_reversible_exact_executable_lock_preflight(self):
+        preflight = self.script[
+            self.script.index("Function PreflightUpgrade"):
+            self.script.index(
+                "FunctionEnd",
+                self.script.index("Function PreflightUpgrade"),
+            )
+        ]
+        self.assertIn("DeskFlow.upgrade-lock-test", preflight)
+        self.assertIn(
+            'Rename "$INSTDIR\\DeskFlow.exe" '
+            '"$INSTDIR\\DeskFlow.upgrade-lock-test"',
+            preflight,
+        )
+        self.assertIn(
+            'Rename "$INSTDIR\\DeskFlow.upgrade-lock-test" '
+            '"$INSTDIR\\DeskFlow.exe"',
+            preflight,
+        )
+        self.assertIn("IfErrors", preflight)
+
+    def test_upgrade_waits_for_exact_uninstaller_before_new_file_copy(self):
+        section = self.script[self.script.index('Section "DeskFlow"'):]
+        prepare = section.index("Call PrepareExistingInstall")
+        old_uninstall = section.index(
+            "ExecWait '\"$INSTDIR\\Uninstall.exe\" /S _?=$INSTDIR'"
+        )
+        delete_old_uninstaller = section.index(
+            'Delete "$INSTDIR\\Uninstall.exe"', old_uninstall
+        )
+        enumerate_remaining = section.index(
+            'FindFirst $2 $3 "$INSTDIR\\*"', old_uninstall
+        )
+        verify_empty = section.index("upgrade_directory_not_empty")
+        copy_new = section.index('File "..\\dist\\DeskFlow.exe"')
+
+        self.assertLess(prepare, old_uninstall)
+        self.assertLess(old_uninstall, delete_old_uninstaller)
+        self.assertLess(delete_old_uninstaller, enumerate_remaining)
+        self.assertLess(old_uninstall, verify_empty)
+        self.assertLess(verify_empty, copy_new)
+        self.assertIn("upgrade_ready:\n    ClearErrors", section)
+        self.assertNotIn(
+            'IfFileExists "$INSTDIR\\*.*" upgrade_directory_not_empty',
+            section,
+        )
+
+    def test_partial_recovery_deletes_allowlist_without_executing_disk_content(self):
+        partial = self.script[
+            self.script.index("Function CleanupPartialInstall"):
+            self.script.index(
+                "FunctionEnd",
+                self.script.index("Function CleanupPartialInstall"),
+            )
+        ]
+        for filename in (
+            "DeskFlow.exe",
+            "Uninstall.exe",
+            "DeskFlow Source.url",
+            "DeskFlow.installing",
+            "THIRD_PARTY_NOTICES.txt",
+            "LICENSE",
+        ):
+            with self.subTest(filename=filename):
+                self.assertIn(f'Delete "$INSTDIR\\{filename}"', partial)
+        self.assertIn("IfErrors", partial)
+        self.assertNotIn("Exec", partial)
+        self.assertNotIn("ExecWait", partial)
+        self.assertNotIn("RMDir /r", partial)
+        self.assertNotIn("$LOCALAPPDATA", self.script)
 
     def test_install_rollback_does_not_mutate_firewall_outside_repair(self):
         rollback = self.script[
@@ -270,19 +394,6 @@ class NsisInstallerContractTests(unittest.TestCase):
         self.assertIn(
             'Delete "$INSTDIR\\DeskFlow.exe"',
             cleanup,
-        )
-
-    def test_partial_install_recovery_never_auto_executes_disk_content(self):
-        self.assertNotIn("recover_partial_install", self.script)
-        self.assertIn("ClearErrors\n  FileOpen", self.script)
-        self.assertIn("IfErrors marker_write_failed", self.script)
-        repair = self.script.index(
-            '"$INSTDIR\\DeskFlow.exe" --deskflow-firewall-helper '
-            "repair --base-port 28903"
-        )
-        self.assertLess(
-            self.script.index('WriteUninstaller "$INSTDIR\\Uninstall.exe"'),
-            repair,
         )
 
     def test_installer_carries_license_source_and_notices(self):
@@ -340,6 +451,53 @@ class ReleaseBuildScriptTests(unittest.TestCase):
         self.assertIn("-PassThru", self.script)
         self.assertIn("helper exit code", self.lower)
 
+    def test_release_build_removes_exact_stale_outputs_before_packaging(self):
+        executable_cleanup = 'Remove-Item -LiteralPath $DeskFlowExecutable'
+        installer_cleanup = 'Remove-Item -LiteralPath $InstallerExecutable'
+        pyinstaller = '# pyinstaller.exe'
+
+        self.assertIn(executable_cleanup, self.script)
+        self.assertIn(installer_cleanup, self.script)
+        self.assertLess(
+            self.script.index(executable_cleanup),
+            self.script.index("# compileall"),
+        )
+        self.assertLess(
+            self.script.index(installer_cleanup),
+            self.script.index("# compileall"),
+        )
+        self.assertLess(
+            self.script.index("# compileall"),
+            self.script.index(pyinstaller),
+        )
+
+    def test_supported_build_is_the_only_nsis_entry_point(self):
+        root = Path(__file__).resolve().parents[1]
+        installer = (root / "installer" / "DeskFlow.nsi").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("!ifndef DESKFLOW_RELEASE_BUILD", installer)
+        self.assertIn("!error", installer)
+        self.assertIn("DESKFLOW_RELEASE_BUILD", self.script)
+        self.assertIn('/DDESKFLOW_RELEASE_BUILD=1', self.script)
+
+    def test_fresh_helper_smoke_precedes_nsis_assembly(self):
+        executable_check = 'Test-Path -LiteralPath $DeskFlowExecutable'
+        helper_smoke = '# --deskflow-firewall-helper'
+        nsis = '# makensis'
+        installer_check = 'Test-Path -LiteralPath $InstallerExecutable'
+
+        self.assertLess(
+            self.script.index(executable_check),
+            self.script.index(helper_smoke),
+        )
+        self.assertLess(self.script.index(helper_smoke), self.script.index(nsis))
+        self.assertGreater(
+            self.script.rindex(installer_check),
+            self.script.index(nsis),
+        )
+
     def test_nsis_is_found_locally_and_never_downloaded(self):
         self.assertIn("MakensisPath", self.script)
         self.assertIn("Get-Command", self.script)
@@ -374,6 +532,7 @@ class ReleaseDocumentationTests(unittest.TestCase):
             SOURCE_URL,
             "Uninstall",
             "firewall rule",
+            "removes old release outputs before compilation",
         )
         for marker in required:
             with self.subTest(marker=marker):

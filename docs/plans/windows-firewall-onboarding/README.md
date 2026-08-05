@@ -26,7 +26,7 @@ done.
 | [005](005-detect-effective-firewall-conflicts.md) | Detect effective firewall conflicts without probes | L | 001, 002 | DONE |
 | [006](006-add-transactional-conflict-repair.md) | Add transactional conflict repair | L | 005 | DONE |
 | [007](007-integrate-conflict-repair-ux.md) | Integrate repair into Server mode and installer | L | 005, 006 | DONE |
-| [008](008-build-safe-automatic-installer-upgrades.md) | Build safe automatic installer upgrades | L | 003, 006, 007 | IN PROGRESS |
+| [008](008-build-safe-automatic-installer-upgrades.md) | Build safe automatic installer upgrades | L | 003, 006, 007 | DONE |
 | [004](004-review-and-validate-firewall-release.md) | Independently review and validate release | M | 001, 002, 003, 005, 006, 007 | IN PROGRESS |
 
 Status values: TODO | IN PROGRESS | DONE | BLOCKED (one-line reason) |
@@ -56,6 +56,14 @@ SUPERSEDED (one-line pointer)
   upgrader and repeat effective firewall and three-lane validation.
 
 ## Reconciliation log
+
+- **2026-08-05**: Plan 008 completed test-first. Valid packaged installs now
+  upgrade after consent, allowlisted partial remnants recover without
+  execution, unknown content fails closed, running DeskFlow stops before old
+  removal, and direct NSIS builds cannot embed stale output. The independent
+  follow-up review returned APPROVE after silent-uninstall warning handling was
+  fixed. Full supported release build passed with 458 tests. Next: Plan 004
+  owner-run physical validation using the fresh ignored setup artifact.
 
 - **2026-08-05**: Physical setup exposed two release gaps: valid installs
   could not upgrade automatically, and a newly named installer embedded a

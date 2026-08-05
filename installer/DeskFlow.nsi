@@ -2,6 +2,10 @@ Unicode True
 RequestExecutionLevel admin
 SetCompressor /SOLID lzma
 
+!ifndef DESKFLOW_RELEASE_BUILD
+!error "Build with scripts\\build_release.ps1; DESKFLOW_RELEASE_BUILD is missing."
+!endif
+
 !include "MUI2.nsh"
 !include "LogicLib.nsh"
 !include "nsDialogs.nsh"
@@ -32,6 +36,7 @@ Var FirewallConsentYesButton
 Var FirewallConsentNoButton
 Var InstallComplete
 Var TransactionFilesWritten
+Var ExistingInstallState
 
 !insertmacro MUI_PAGE_WELCOME
 !insertmacro MUI_PAGE_LICENSE "..\LICENSE"
@@ -49,6 +54,7 @@ Function .onInit
   StrCpy $FirewallConsentGranted "0"
   StrCpy $InstallComplete "0"
   StrCpy $TransactionFilesWritten "0"
+  StrCpy $ExistingInstallState "fresh"
   IfSilent silent_install interactive_install
 
 silent_install:
@@ -58,15 +64,122 @@ silent_install:
   Quit
 
 interactive_install:
-  IfFileExists "$INSTDIR\*.*" existing_install allow_install
+  Call ClassifyExistingInstall
+FunctionEnd
 
-existing_install:
-    MessageBox MB_ICONSTOP|MB_OK \
-      "DeskFlow will not overwrite existing files. If this is an incomplete installation, run its Uninstall.exe to retry firewall cleanup first."
+Function ClassifyExistingInstall
+  ; Classify without mutating disk. Every directory and every unknown filename
+  ; fails closed, even when valid DeskFlow registry metadata is present.
+  FindFirst $2 $3 "$INSTDIR\*"
+  IfErrors classify_done
+
+classify_next_entry:
+  StrCmp $3 "" classify_scan_done
+  StrCmp $3 "." classify_advance
+  StrCmp $3 ".." classify_advance
+  IfFileExists "$INSTDIR\$3\*.*" unknown_install_contents
+
+  StrCmp $3 "DeskFlow.exe" classify_allowed_entry
+  StrCmp $3 "Uninstall.exe" classify_allowed_entry
+  StrCmp $3 "DeskFlow Source.url" classify_allowed_entry
+  StrCmp $3 "DeskFlow.installing" classify_allowed_entry
+  StrCmp $3 "THIRD_PARTY_NOTICES.txt" classify_allowed_entry
+  StrCmp $3 "LICENSE" classify_allowed_entry
+  Goto unknown_install_contents
+
+classify_allowed_entry:
+  StrCpy $ExistingInstallState "partial"
+
+classify_advance:
+  FindNext $2 $3
+  Goto classify_next_entry
+
+classify_scan_done:
+  FindClose $2
+  ${If} $ExistingInstallState == "partial"
+    IfFileExists "$INSTDIR\DeskFlow.exe" 0 classify_done
+    IfFileExists "$INSTDIR\Uninstall.exe" 0 classify_done
+    ReadRegStr $0 HKLM "Software\DeskFlow" "InstallDir"
+    ReadRegStr $1 HKLM "${UNINSTALL_KEY}" "UninstallString"
+    StrCmp $0 "$INSTDIR" 0 classify_done
+    StrCmp $1 '"$INSTDIR\Uninstall.exe"' 0 classify_done
+    StrCpy $ExistingInstallState "upgrade"
+  ${EndIf}
+
+classify_done:
+  ClearErrors
+  Return
+
+unknown_install_contents:
+  FindClose $2
+  MessageBox MB_ICONSTOP|MB_OK \
+    "DeskFlow setup found an unknown file or folder in $INSTDIR. Setup will not overwrite it. Remove or move the unknown content, then retry."
+  SetErrorLevel 3
+  Quit
+FunctionEnd
+
+Function PreflightUpgrade
+  IfFileExists "$INSTDIR\DeskFlow.upgrade-lock-test" upgrade_reserved_exists 0
+
+  ClearErrors
+  Rename "$INSTDIR\DeskFlow.exe" "$INSTDIR\DeskFlow.upgrade-lock-test"
+  IfErrors upgrade_executable_locked
+
+  ClearErrors
+  Rename "$INSTDIR\DeskFlow.upgrade-lock-test" "$INSTDIR\DeskFlow.exe"
+  IfErrors upgrade_restore_failed
+  Return
+
+upgrade_reserved_exists:
+  MessageBox MB_ICONSTOP|MB_OK \
+    "DeskFlow cannot verify the existing installation because $INSTDIR\DeskFlow.upgrade-lock-test already exists. Remove that recovery file only after confirming DeskFlow.exe is present, then retry."
   SetErrorLevel 3
   Quit
 
-allow_install:
+upgrade_executable_locked:
+  MessageBox MB_ICONSTOP|MB_OK \
+    "DeskFlow appears to be running or locked. Close DeskFlow completely, then run setup again. The existing installation was not removed."
+  SetErrorLevel 3
+  Quit
+
+upgrade_restore_failed:
+  MessageBox MB_ICONSTOP|MB_OK \
+    "DeskFlow could not restore its lock test. Rename $INSTDIR\DeskFlow.upgrade-lock-test to $INSTDIR\DeskFlow.exe, then retry setup. The existing uninstaller was not started."
+  SetErrorLevel 3
+  Quit
+FunctionEnd
+
+Function CleanupPartialInstall
+  ; These are the complete installer-owned file allowlist. Never execute them.
+  ClearErrors
+  Delete "$INSTDIR\DeskFlow.exe"
+  Delete "$INSTDIR\Uninstall.exe"
+  Delete "$INSTDIR\DeskFlow Source.url"
+  Delete "$INSTDIR\DeskFlow.installing"
+  Delete "$INSTDIR\THIRD_PARTY_NOTICES.txt"
+  Delete "$INSTDIR\LICENSE"
+  IfErrors partial_cleanup_failed
+  RMDir "$INSTDIR"
+  IfErrors partial_cleanup_failed
+
+  Delete "$DESKTOP\DeskFlow.lnk"
+  DeleteRegKey HKLM "${UNINSTALL_KEY}"
+  DeleteRegKey HKLM "Software\DeskFlow"
+  Return
+
+partial_cleanup_failed:
+  MessageBox MB_ICONSTOP|MB_OK \
+    "DeskFlow could not remove its incomplete installer-owned files. Close DeskFlow and retry. Unknown files were not removed."
+  SetErrorLevel 3
+  Quit
+FunctionEnd
+
+Function PrepareExistingInstall
+  ${If} $ExistingInstallState == "upgrade"
+    Call PreflightUpgrade
+  ${ElseIf} $ExistingInstallState == "partial"
+    Call CleanupPartialInstall
+  ${EndIf}
 FunctionEnd
 
 Function FirewallConsentPage
@@ -151,6 +264,54 @@ Function AbortAfterRollback
 FunctionEnd
 
 Section "DeskFlow" SEC_DESKFLOW
+  ; Consent is complete. Do not allow interruption once an existing packaged
+  ; install or partial remnant can be mutated.
+  GetDlgItem $2 $HWNDPARENT 2
+  EnableWindow $2 0
+  Call PrepareExistingInstall
+
+  ${If} $ExistingInstallState == "upgrade"
+    ExecWait '"$INSTDIR\Uninstall.exe" /S _?=$INSTDIR' $0
+    ${If} $0 != 0
+      MessageBox MB_ICONSTOP|MB_OK \
+        "The existing DeskFlow uninstaller failed. The new version was not installed."
+      SetErrorLevel 3
+      Quit
+    ${EndIf}
+    ; _?= keeps the old uninstaller in place so ExecWait observes its real
+    ; completion. The elevated parent can delete that exact verified file once
+    ; it returns, then enumerate rather than confusing existence with content.
+    ClearErrors
+    Delete "$INSTDIR\Uninstall.exe"
+    IfErrors upgrade_directory_not_empty
+    FindFirst $2 $3 "$INSTDIR\*"
+    IfErrors upgrade_ready
+
+upgrade_check_next_entry:
+    StrCmp $3 "" upgrade_scan_empty
+    StrCmp $3 "." upgrade_check_advance
+    StrCmp $3 ".." upgrade_check_advance
+    FindClose $2
+    Goto upgrade_directory_not_empty
+
+upgrade_check_advance:
+    FindNext $2 $3
+    Goto upgrade_check_next_entry
+
+upgrade_scan_empty:
+    FindClose $2
+    Goto upgrade_ready
+
+upgrade_directory_not_empty:
+    MessageBox MB_ICONSTOP|MB_OK \
+      "The previous DeskFlow installation left files behind in $INSTDIR. The new version was not installed."
+    SetErrorLevel 3
+    Quit
+
+upgrade_ready:
+    ClearErrors
+  ${EndIf}
+
   SetOutPath "$INSTDIR"
   File "..\dist\DeskFlow.exe"
   File "..\LICENSE"
@@ -182,8 +343,6 @@ Section "DeskFlow" SEC_DESKFLOW
   ; Repair performs its own effective reinspection and rollback. Keep it as
   ; the final fallible step so no later installer failure can strand disabled
   ; conflict rules outside that exact-object transaction.
-  GetDlgItem $2 $HWNDPARENT 2
-  EnableWindow $2 0
   ExecWait \
     '"$INSTDIR\DeskFlow.exe" --deskflow-firewall-helper repair --base-port 28903' $0
   ${If} $0 != 0
@@ -208,8 +367,10 @@ Section "Uninstall"
   ExecWait \
     '"$INSTDIR\DeskFlow.exe" --deskflow-firewall-helper remove' $0
   ${If} $0 != 0
+    IfSilent uninstall_firewall_warning_done 0
     MessageBox MB_ICONEXCLAMATION|MB_OK \
       "DeskFlow could not remove its firewall rule. Windows policy may already have removed or may manage the rule. Uninstall will continue."
+uninstall_firewall_warning_done:
   ${EndIf}
 
   Delete "$DESKTOP\DeskFlow.lnk"

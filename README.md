@@ -37,6 +37,13 @@ firewall decision before it copies files. Choosing No cancels installation.
 Closing the consent page, declining elevation, using silent mode, or failing
 firewall verification also cancels and rolls back the installation.
 
+Running a new installer automatically replaces a complete packaged DeskFlow
+installation after consent. DeskFlow must be closed first. Installer-owned
+partial remnants can be cleaned and replaced, while unknown files or folders
+in `C:\Program Files\DeskFlow` stop setup without being overwritten. Local
+identity, peer trust, and preferences under `%LOCALAPPDATA%\DeskFlow` are
+preserved.
+
 The installed rule is restricted to TCP ports 28903-28905, Private networks,
 the local subnet, and the installed `DeskFlow.exe`. Uninstall removes the
 DeskFlow firewall rule before removing the executable. It never removes other
@@ -67,11 +74,13 @@ Install Python dependencies and official NSIS, then run:
 powershell -ExecutionPolicy Bypass -File scripts\build_release.ps1
 ```
 
-The build runs compilation, all tests, and whitespace checks first. It then
-generates dependency notices, builds the one-file `DeskFlow.exe`, smoke-tests
-the restricted firewall helper, and builds the NSIS installer. The script does
-not download NSIS or other tools. You can pass `-MakensisPath` when NSIS is not
-on `PATH`.
+The build removes old release outputs before compilation so a failed build
+cannot leave a stale executable or installer looking current. It then runs all
+tests and whitespace checks, generates dependency notices, builds the one-file
+`DeskFlow.exe`, smoke-tests the restricted firewall helper, and builds the NSIS
+installer. The NSIS source rejects direct compilation, so a new installer
+cannot silently embed a stale executable. The script does not download NSIS or
+other tools. You can pass `-MakensisPath` when NSIS is not on `PATH`.
 
 Optional signing accepts an explicit `-SigningToolPath` and
 `-SigningArguments`; the repository contains no certificate or secret.

@@ -64,6 +64,14 @@ if (-not (Test-Path -LiteralPath $PyInstallerPath -PathType Leaf)) {
 
 Push-Location $RepoRoot
 try {
+    # remove stale release outputs
+    if (Test-Path -LiteralPath $DeskFlowExecutable) {
+        Remove-Item -LiteralPath $DeskFlowExecutable -Force
+    }
+    if (Test-Path -LiteralPath $InstallerExecutable) {
+        Remove-Item -LiteralPath $InstallerExecutable -Force
+    }
+
     # compileall
     Invoke-Checked -Description "Python compilation" -FilePath $PythonPath -ArgumentList @(
         "-m", "compileall", "-q", "app", "tests", "run.py"
@@ -120,7 +128,7 @@ try {
     # makensis
     $ResolvedMakensis = Resolve-Makensis
     Invoke-Checked -Description "NSIS installer build" -FilePath $ResolvedMakensis -ArgumentList @(
-        "/V3", $InstallerScript
+        "/V3", "/DDESKFLOW_RELEASE_BUILD=1", $InstallerScript
     )
     if (-not (Test-Path -LiteralPath $InstallerExecutable -PathType Leaf)) {
         throw "The DeskFlow installer was not produced."
