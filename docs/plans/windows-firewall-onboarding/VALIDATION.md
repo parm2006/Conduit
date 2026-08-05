@@ -40,7 +40,8 @@ Use the built installer on a PC without an existing packaged DeskFlow install.
 3. Repeat, approve UAC, and close the firewall-consent page. Confirm the same
    result.
 4. Launch again, approve UAC, select **Yes**, and confirm installation
-   completes.
+   completes. Open Windows Search and confirm the installed **DeskFlow** entry
+   uses the blue DeskFlow square icon rather than a Python icon.
 
 Pass when every refusal leaves no completed install and Yes creates the
 packaged application.

@@ -163,6 +163,7 @@ Function CleanupPartialInstall
   IfErrors partial_cleanup_failed
 
   Delete "$DESKTOP\DeskFlow.lnk"
+  Delete "$SMPROGRAMS\DeskFlow.lnk"
   DeleteRegKey HKLM "${UNINSTALL_KEY}"
   DeleteRegKey HKLM "Software\DeskFlow"
   Return
@@ -240,6 +241,7 @@ FunctionEnd
 
 Function CleanupTransactionFiles
   Delete "$DESKTOP\DeskFlow.lnk"
+  Delete "$SMPROGRAMS\DeskFlow.lnk"
   Delete "$INSTDIR\Uninstall.exe"
   Delete "$INSTDIR\DeskFlow Source.url"
   Delete "$INSTDIR\DeskFlow.installing"
@@ -331,7 +333,8 @@ upgrade_ready:
   FileWrite $1 "[InternetShortcut]$\r$\nURL=${SOURCE_URL}$\r$\n"
   FileClose $1
 
-  CreateShortCut "$DESKTOP\DeskFlow.lnk" "$INSTDIR\DeskFlow.exe"
+  CreateShortCut "$DESKTOP\DeskFlow.lnk" "$INSTDIR\DeskFlow.exe" "" "$INSTDIR\DeskFlow.exe" 0
+  CreateShortCut "$SMPROGRAMS\DeskFlow.lnk" "$INSTDIR\DeskFlow.exe" "" "$INSTDIR\DeskFlow.exe" 0
   WriteRegStr HKLM "Software\DeskFlow" "InstallDir" "$INSTDIR"
   WriteRegStr HKLM "${UNINSTALL_KEY}" "DisplayName" "${PRODUCT_NAME}"
   WriteRegStr HKLM "${UNINSTALL_KEY}" \
@@ -378,6 +381,7 @@ uninstall_firewall_warning_done:
   ${EndIf}
 
   Delete "$DESKTOP\DeskFlow.lnk"
+  Delete "$SMPROGRAMS\DeskFlow.lnk"
   Delete "$INSTDIR\DeskFlow Source.url"
   Delete "$INSTDIR\THIRD_PARTY_NOTICES.txt"
   Delete "$INSTDIR\LICENSE"

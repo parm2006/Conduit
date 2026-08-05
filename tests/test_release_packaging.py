@@ -229,6 +229,23 @@ class NsisInstallerContractTests(unittest.TestCase):
         )
         self.assertIn("Return", yes_handler)
 
+    def test_installer_shortcuts_explicitly_use_packaged_deskflow_icon(self):
+        desktop_shortcut = (
+            'CreateShortCut "$DESKTOP\\DeskFlow.lnk" '
+            '"$INSTDIR\\DeskFlow.exe" "" "$INSTDIR\\DeskFlow.exe" 0'
+        )
+        start_menu_shortcut = (
+            'CreateShortCut "$SMPROGRAMS\\DeskFlow.lnk" '
+            '"$INSTDIR\\DeskFlow.exe" "" "$INSTDIR\\DeskFlow.exe" 0'
+        )
+
+        self.assertIn(desktop_shortcut, self.script)
+        self.assertIn(start_menu_shortcut, self.script)
+        self.assertGreaterEqual(
+            self.script.count('Delete "$SMPROGRAMS\\DeskFlow.lnk"'),
+            2,
+        )
+
     def test_verified_repair_is_the_final_fallible_step_before_completion(self):
         repair = (
             '"$INSTDIR\\DeskFlow.exe" --deskflow-firewall-helper '
