@@ -152,6 +152,29 @@ class FirewallHelperTests(unittest.TestCase):
 
         self.assertEqual(code, EXIT_CONFIGURATION_FAILED)
 
+    def test_public_only_setup_succeeds_without_making_inspect_ready(self):
+        public = FirewallInspection(
+            FirewallState.PUBLIC_ONLY,
+            "private_profile_inactive",
+        )
+
+        install_code, _, _ = self.run_helper(
+            ["install", "--base-port", "5000"],
+            public,
+        )
+        repair_code, _, _ = self.run_helper(
+            ["repair", "--base-port", "5000"],
+            public,
+        )
+        inspect_code, _, _ = self.run_helper(
+            ["inspect", "--base-port", "5000"],
+            public,
+        )
+
+        self.assertEqual(install_code, EXIT_SUCCESS)
+        self.assertEqual(repair_code, EXIT_SUCCESS)
+        self.assertEqual(inspect_code, EXIT_CONFIGURATION_FAILED)
+
     def test_rejects_arbitrary_or_malformed_arguments_without_backend_call(self):
         invalid = (
             [],

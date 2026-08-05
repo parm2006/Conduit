@@ -94,6 +94,10 @@ this order:
 7. Require the rule's profile mask to include Private or all profiles.
 8. Require its remote scope to include `LocalSubnet`, `*`, `Any`, or another
    scope that cannot safely be proven disjoint from local-subnet clients.
+   Preserve the observed scope for this decision; loopback-only scopes are
+   provably irrelevant, while arbitrary addresses and CIDRs remain
+   conservative because DeskFlow does not enumerate adapters or guess a
+   future client's address.
 
 Inspection is conservative. If a matching block rule has an unreadable port,
 profile, or remote-address expression, DeskFlow reports **Unavailable** rather
@@ -176,6 +180,9 @@ connections and do not need the inbound rule.
 DeskFlow does not open inbound access on a Public profile. On café, airport,
 hotel, or other untrusted Wi-Fi, the GUI explains that Server mode is blocked
 by design. It does not offer to reclassify the network or broaden the rule.
+After explicit setup or installer consent, DeskFlow may create the Private-only
+allow rule while Public is active, but it does not disable conflicting blocks
+until a Private profile is active.
 
 Users who need DeskFlow away from home should use a trusted private LAN, a
 private phone hotspot, or a separately secured private network whose Windows
@@ -184,7 +191,9 @@ firewall feature does not configure those networks.
 
 ## Failure handling
 
-- **No active Private profile:** show Blocked on Public network; do not mutate.
+- **No active Private profile:** show Blocked on Public network; do not disable
+  conflicts or start Server mode. Explicit setup may create only the
+  Private-profile allow rule for later use.
 - **Repair consent declined:** leave all rules unchanged and do not start.
 - **UAC declined:** leave all rules unchanged and do not start.
 - **Policy-rejected conflict:** keep the conflict visible, show administrator

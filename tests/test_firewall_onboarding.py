@@ -200,6 +200,26 @@ class FirewallOnboardingTests(unittest.TestCase):
 
         self.assertEqual(result.outcome, FirewallSetupOutcome.FAILED)
 
+    def test_public_only_setup_never_continues_server_start(self):
+        continued = []
+        onboarding, _, _ = self.make_onboarding(
+            [
+                FirewallInspection(
+                    FirewallState.PUBLIC_ONLY,
+                    "private_profile_inactive",
+                )
+            ]
+        )
+
+        result = onboarding.configure(
+            5000,
+            consent=lambda scope: True,
+            on_ready=lambda: continued.append(True),
+        )
+
+        self.assertEqual(result.outcome, FirewallSetupOutcome.FAILED)
+        self.assertEqual(continued, [])
+
     def test_development_scope_is_identified_and_can_continue(self):
         backend = Backend(
             FirewallInspection(FirewallState.DEVELOPMENT, "python_scope")

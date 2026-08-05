@@ -211,6 +211,18 @@ class WindowsFirewallBackendTests(unittest.TestCase):
 
         self.assertEqual(result.state, FirewallState.READY)
 
+    def test_loopback_only_block_is_not_disabled_as_a_lan_conflict(self):
+        self.add_matching_allow()
+        block = self.add_matching_block("Loopback-only block")
+        block.RemoteAddresses = "127.0.0.1,::1"
+
+        inspection = self.backend.inspect(self.spec)
+        repair = self.backend.repair(self.spec)
+
+        self.assertEqual(inspection.state, FirewallState.READY)
+        self.assertEqual(repair.state, FirewallState.READY)
+        self.assertTrue(block.Enabled)
+
     def test_unreadable_property_on_irrelevant_rule_is_ignored(self):
         class IrrelevantRule(FakeRule):
             def __getattribute__(self, name):
@@ -439,7 +451,7 @@ class WindowsFirewallBackendTests(unittest.TestCase):
         self.assertIn(DESKFLOW_FIREWALL_RULE_NAME, self.rules.items)
         self.assertEqual(len(self.rules.added), 1)
 
-    def test_repair_on_public_profile_makes_no_changes(self):
+    def test_repair_on_public_creates_private_allow_without_disabling_block(self):
         self.policy.CurrentProfileTypes = 4
         conflict = self.add_matching_block()
 
@@ -447,7 +459,8 @@ class WindowsFirewallBackendTests(unittest.TestCase):
 
         self.assertEqual(result.state, FirewallState.PUBLIC_ONLY)
         self.assertTrue(conflict.Enabled)
-        self.assertEqual(self.rules.added, [])
+        self.assertEqual(len(self.rules.added), 1)
+        self.assertIn(DESKFLOW_FIREWALL_RULE_NAME, self.rules.items)
 
     def test_second_disable_failure_rolls_back_first_exact_object(self):
         self.add_matching_allow()

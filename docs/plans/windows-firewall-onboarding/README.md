@@ -48,6 +48,14 @@ SUPERSEDED (one-line pointer)
 
 ## Reconciliation log
 
+- **2026-08-05**: Independent review requested changes before physical
+  acceptance. Follow-up work makes consented setup create only a Private rule
+  while Public is active, keeps Server mode blocked there, makes uninstall
+  continue with a warning when policy denies cleanup, and preserves remote
+  scope so provably loopback-only rules are never disabled. Arbitrary CIDRs
+  remain conservative because the app does not enumerate adapters or guess a
+  future client address.
+
 - **2026-08-05**: Plan 007 completed. Confirmed conflicts expose only Repair
   and Cancel, source Python scope is disclosed, Cancel/UAC failure cannot start
   Server mode, and fresh setup can progress from Missing to Conflict without

@@ -2,6 +2,7 @@
 
 from dataclasses import dataclass
 from enum import Enum
+import ipaddress
 import ntpath
 from pathlib import PureWindowsPath
 import re
@@ -116,6 +117,31 @@ def _port_intervals(expression):
     return tuple(intervals)
 
 
+def _scope_is_loopback_only(scope):
+    token = str(scope).strip()
+    try:
+        if "-" in token:
+            first, last = token.split("-", 1)
+            first_address = ipaddress.ip_address(first.strip())
+            last_address = ipaddress.ip_address(last.strip())
+            return (
+                first_address.version == last_address.version
+                and int(first_address) <= int(last_address)
+                and first_address.is_loopback
+                and last_address.is_loopback
+            )
+        return ipaddress.ip_network(token, strict=False).is_loopback
+    except ValueError:
+        return False
+
+
+def remote_scope_may_overlap_local_subnet(addresses):
+    scopes = tuple(addresses)
+    if not scopes:
+        return True
+    return any(not _scope_is_loopback_only(scope) for scope in scopes)
+
+
 def block_rule_conflicts(spec, observed):
     if not observed.enabled:
         return False
@@ -132,6 +158,10 @@ def block_rule_conflicts(spec, observed):
         return False
     profiles = {str(profile).casefold() for profile in observed.profiles}
     if "private" not in profiles and "all" not in profiles:
+        return False
+    if not remote_scope_may_overlap_local_subnet(
+        observed.remote_addresses
+    ):
         return False
 
     deskflow_start = spec.base_port

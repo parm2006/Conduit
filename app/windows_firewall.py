@@ -145,7 +145,7 @@ def _observed_block_rule(rule, spec):
         local_ports=str(rule.LocalPorts),
         application_name=str(rule.ApplicationName),
         profiles=profiles,
-        remote_addresses=frozenset(),
+        remote_addresses=_address_set(rule.RemoteAddresses),
         edge_traversal=False,
     )
 
@@ -237,11 +237,7 @@ class WindowsFirewallBackend:
             active_profiles = _profiles_from_mask(
                 int(policy.CurrentProfileTypes)
             )
-            if "private" not in active_profiles:
-                return FirewallInspection(
-                    FirewallState.PUBLIC_ONLY,
-                    "private_profile_inactive",
-                )
+            private_active = "private" in active_profiles
 
             try:
                 allow_rule = rules.Item(DESKFLOW_FIREWALL_RULE_NAME)
@@ -266,7 +262,11 @@ class WindowsFirewallBackend:
             }:
                 return allow_inspection
 
-            conflicts = list(_matching_block_rule_objects(rules, spec))
+            conflicts = (
+                list(_matching_block_rule_objects(rules, spec))
+                if private_active
+                else []
+            )
         except (AttributeError, TypeError, ValueError):
             return FirewallInspection(
                 FirewallState.UNAVAILABLE,
@@ -298,7 +298,10 @@ class WindowsFirewallBackend:
         if result.state in {
             FirewallState.READY,
             FirewallState.DEVELOPMENT,
-        }:
+        } or (
+            not private_active
+            and result.state is FirewallState.PUBLIC_ONLY
+        ):
             return result
 
         if not self._rollback_repair(

@@ -228,6 +228,18 @@ class NsisInstallerContractTests(unittest.TestCase):
         delete_at = self.script.index('Delete "$INSTDIR\\DeskFlow.exe"', uninstall)
         self.assertLess(remove_at, delete_at)
 
+    def test_uninstall_continues_when_firewall_cleanup_is_denied(self):
+        uninstall = self.script[
+            self.script.index('Section "Uninstall"'):
+            self.script.index("SectionEnd", self.script.index('Section "Uninstall"'))
+        ]
+
+        self.assertIn("could not remove its firewall rule", uninstall)
+        self.assertIn('Delete "$INSTDIR\\DeskFlow.exe"', uninstall)
+        self.assertNotIn("Uninstall was cancelled", uninstall)
+        self.assertNotIn("SetErrorLevel 4", uninstall)
+        self.assertNotIn("Quit", uninstall)
+
     def test_installer_never_runs_or_deletes_a_preexisting_target(self):
         self.assertNotIn("MUI_PAGE_DIRECTORY", self.script)
         self.assertIn('StrCpy $INSTDIR "$PROGRAMFILES64\\DeskFlow"', self.script)

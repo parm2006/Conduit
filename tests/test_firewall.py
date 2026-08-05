@@ -203,6 +203,7 @@ class EffectiveFirewallContractTests(unittest.TestCase):
             {"local_ports": "4990-4999"},
             {"application_name": r"C:\Other\DeskFlow.exe"},
             {"profiles": frozenset({"public"})},
+            {"remote_addresses": frozenset({"127.0.0.1", "::1"})},
         )
 
         for changes in irrelevant:
@@ -213,6 +214,25 @@ class EffectiveFirewallContractTests(unittest.TestCase):
                         self.block_rule(**changes),
                     )
                 )
+
+    def test_indeterminate_remote_cidr_remains_conservatively_conflicting(self):
+        self.assertTrue(
+            firewall.block_rule_conflicts(
+                self.spec,
+                self.block_rule(
+                    remote_addresses=frozenset({"192.0.2.0/24"})
+                ),
+            )
+        )
+
+        self.assertTrue(
+            firewall.block_rule_conflicts(
+                self.spec,
+                self.block_rule(
+                    remote_addresses=frozenset({"127.0.0.1-::1"})
+                ),
+            )
+        )
 
     def test_matching_rule_with_malformed_ports_is_indeterminate(self):
         for ports in ("5000-", "later", "5002-5000", "0", "65536"):

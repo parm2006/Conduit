@@ -47,6 +47,11 @@ def _parse_request(arguments):
 def _exit_code(operation, inspection):
     if inspection.state in {FirewallState.READY, FirewallState.DEVELOPMENT}:
         return EXIT_SUCCESS
+    if (
+        operation in {"install", "repair"}
+        and inspection.state is FirewallState.PUBLIC_ONLY
+    ):
+        return EXIT_SUCCESS
     if operation == "remove" and inspection.state is FirewallState.MISSING:
         return EXIT_SUCCESS
     if inspection.state is FirewallState.MANAGED:

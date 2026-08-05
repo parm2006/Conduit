@@ -208,10 +208,8 @@ Section "Uninstall"
   ExecWait \
     '"$INSTDIR\DeskFlow.exe" --deskflow-firewall-helper remove' $0
   ${If} $0 != 0
-    MessageBox MB_ICONSTOP|MB_OK \
-      "DeskFlow could not remove its firewall rule. Uninstall was cancelled."
-    SetErrorLevel 4
-    Quit
+    MessageBox MB_ICONEXCLAMATION|MB_OK \
+      "DeskFlow could not remove its firewall rule. Windows policy may already have removed or may manage the rule. Uninstall will continue."
   ${EndIf}
 
   Delete "$DESKTOP\DeskFlow.lnk"
