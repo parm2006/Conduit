@@ -451,6 +451,73 @@ class WindowsFirewallBackendTests(unittest.TestCase):
         self.assertIn(DESKFLOW_FIREWALL_RULE_NAME, self.rules.items)
         self.assertEqual(len(self.rules.added), 1)
 
+    def test_repair_updates_stale_deskflow_rule_for_packaged_executable(self):
+        self.add_matching_allow()
+        stale = self.rules.items[DESKFLOW_FIREWALL_RULE_NAME]
+        stale.ApplicationName = r"C:\Python314\python.exe"
+
+        result = self.backend.repair(self.spec)
+
+        self.assertEqual(result.state, FirewallState.READY)
+        self.assertIs(
+            self.rules.items[DESKFLOW_FIREWALL_RULE_NAME],
+            stale,
+        )
+        self.assertEqual(stale.ApplicationName, self.spec.executable_path)
+        self.assertEqual(stale.LocalPorts, self.spec.local_ports)
+        self.assertEqual(self.rules.removed, [])
+
+    def test_stale_rule_is_restored_when_repair_verification_fails(self):
+        self.add_matching_allow()
+        stale = self.rules.items[DESKFLOW_FIREWALL_RULE_NAME]
+        stale.ApplicationName = r"C:\Python314\python.exe"
+        stale.LocalPorts = "5000"
+        calls = 0
+
+        def policy_factory():
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                return self.policy
+            return FakePolicy(self.rules, current_profiles=4)
+
+        backend = WindowsFirewallBackend(
+            policy_factory=policy_factory,
+            rule_factory=FakeRule,
+        )
+
+        result = backend.repair(self.spec)
+
+        self.assertEqual(result.state, FirewallState.UNAVAILABLE)
+        self.assertEqual(result.reason_code, "verification_failed")
+        self.assertEqual(stale.ApplicationName, r"C:\Python314\python.exe")
+        self.assertEqual(stale.LocalPorts, "5000")
+
+    def test_stale_rule_restore_failure_is_reported(self):
+        self.add_matching_allow()
+        stale = self.rules.items[DESKFLOW_FIREWALL_RULE_NAME]
+        stale.ApplicationName = r"C:\Python314\python.exe"
+        stale._enabled = False
+        stale.enabled_set_errors = [None, RuntimeError("private")]
+        calls = 0
+
+        def policy_factory():
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                return self.policy
+            return FakePolicy(self.rules, current_profiles=4)
+
+        backend = WindowsFirewallBackend(
+            policy_factory=policy_factory,
+            rule_factory=FakeRule,
+        )
+
+        result = backend.repair(self.spec)
+
+        self.assertEqual(result.state, FirewallState.UNAVAILABLE)
+        self.assertEqual(result.reason_code, "rollback_failed")
+
     def test_repair_on_public_creates_private_allow_without_disabling_block(self):
         self.policy.CurrentProfileTypes = 4
         conflict = self.add_matching_block()

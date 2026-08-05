@@ -101,6 +101,9 @@ $installedHashBefore = (Get-FileHash (Join-Path $installDir 'DeskFlow.exe')).Has
 Pass when the identity/preference comparisons are `True`, the disposable block
 is disabled, and the restricted DeskFlow allow rule is enabled. This verifies
 the installer invoked effective repair from the newly packaged executable.
+If the pre-install DeskFlow rule targeted `python.exe` from an earlier source
+launch, do not remove it manually: the completed install must retarget that
+same DeskFlow-owned rule to `C:\Program Files\DeskFlow\DeskFlow.exe`.
 
 ## 3. Partial recovery and unknown-content refusal
 

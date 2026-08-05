@@ -231,6 +231,8 @@ class WindowsFirewallBackend:
         """Disable exact conflicting objects and verify the effective policy."""
         disabled_rules = []
         allow_created = False
+        allow_rule = None
+        allow_snapshot = None
         try:
             policy = self.policy_factory()
             rules = policy.Rules
@@ -259,6 +261,7 @@ class WindowsFirewallBackend:
                 FirewallState.MISSING,
                 FirewallState.READY,
                 FirewallState.DEVELOPMENT,
+                FirewallState.STALE,
             }:
                 return allow_inspection
 
@@ -282,11 +285,16 @@ class WindowsFirewallBackend:
             if allow_inspection.state is FirewallState.MISSING:
                 allow_created = True
                 self._add_allow_rule(rules, spec)
+            elif allow_inspection.state is FirewallState.STALE:
+                allow_snapshot = self._snapshot_allow_rule(allow_rule)
+                self._configure_allow_rule(allow_rule, spec)
         except Exception as error:
             if not self._rollback_repair(
                 rules,
                 disabled_rules,
                 allow_created,
+                allow_rule,
+                allow_snapshot,
             ):
                 return FirewallInspection(
                     FirewallState.UNAVAILABLE,
@@ -308,6 +316,8 @@ class WindowsFirewallBackend:
             rules,
             disabled_rules,
             allow_created,
+            allow_rule,
+            allow_snapshot,
         ):
             return FirewallInspection(
                 FirewallState.UNAVAILABLE,
@@ -340,6 +350,28 @@ class WindowsFirewallBackend:
 
     def _add_allow_rule(self, rules, spec):
         rule = self.rule_factory()
+        self._configure_allow_rule(rule, spec)
+        rules.Add(rule)
+
+    @staticmethod
+    def _snapshot_allow_rule(rule):
+        fields = (
+            "Description",
+            "Grouping",
+            "Protocol",
+            "LocalPorts",
+            "ApplicationName",
+            "Profiles",
+            "RemoteAddresses",
+            "Direction",
+            "Action",
+            "EdgeTraversal",
+            "Enabled",
+        )
+        return tuple((field, getattr(rule, field)) for field in fields)
+
+    @staticmethod
+    def _configure_allow_rule(rule, spec):
         rule.Name = DESKFLOW_FIREWALL_RULE_NAME
         rule.Description = (
             f"Allow DeskFlow Server on private local networks "
@@ -355,14 +387,26 @@ class WindowsFirewallBackend:
         rule.Action = _NET_FW_ACTION_ALLOW
         rule.EdgeTraversal = False
         rule.Enabled = True
-        rules.Add(rule)
 
-    def _rollback_repair(self, rules, disabled_rules, allow_created):
+    def _rollback_repair(
+        self,
+        rules,
+        disabled_rules,
+        allow_created,
+        allow_rule=None,
+        allow_snapshot=None,
+    ):
         complete = True
         if allow_created:
             removal = self._remove_from(rules)
             if removal is not None:
                 complete = False
+        if allow_snapshot is not None:
+            for field, value in allow_snapshot:
+                try:
+                    setattr(allow_rule, field, value)
+                except Exception:
+                    complete = False
         for rule in reversed(disabled_rules):
             try:
                 rule.Enabled = True
