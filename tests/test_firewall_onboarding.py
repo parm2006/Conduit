@@ -47,7 +47,7 @@ class FirewallDisplayTests(unittest.TestCase):
             FirewallState.CONFLICT: (
                 "Connection blocked",
                 "red",
-                "View help",
+                "Repair",
             ),
             FirewallState.PUBLIC_ONLY: (
                 "Blocked on Public network",
@@ -78,12 +78,13 @@ class FirewallDisplayTests(unittest.TestCase):
 
 
 class FirewallOnboardingTests(unittest.TestCase):
-    def make_onboarding(self, results, runner=None):
+    def make_onboarding(self, results, runner=None, repair_runner=None):
         backend = Backend(*results)
         calls = []
         onboarding = FirewallOnboarding(
             backend=backend,
             elevation_runner=runner or (lambda port: EXIT_SUCCESS),
+            repair_runner=repair_runner,
             executable_path=r"C:\Program Files\DeskFlow\DeskFlow.exe",
             scheduler=lambda callback: calls.append(callback) or callback(),
         )
@@ -218,6 +219,65 @@ class FirewallOnboardingTests(unittest.TestCase):
 
         self.assertEqual(result.outcome, FirewallSetupOutcome.READY)
         self.assertEqual(continued, [True])
+
+    def test_confirmed_conflict_routes_only_to_repair_runner(self):
+        install_calls = []
+        repair_calls = []
+        onboarding, _, _ = self.make_onboarding(
+            [FirewallInspection(FirewallState.READY, "rule_ready")],
+            runner=lambda port: install_calls.append(port) or EXIT_SUCCESS,
+            repair_runner=lambda port: repair_calls.append(port)
+            or EXIT_SUCCESS,
+        )
+        onboarding.inspection = FirewallInspection(
+            FirewallState.CONFLICT,
+            "block_conflict",
+        )
+
+        result = onboarding.configure(5000, consent=lambda scope: True)
+
+        self.assertEqual(result.outcome, FirewallSetupOutcome.READY)
+        self.assertEqual(install_calls, [])
+        self.assertEqual(repair_calls, [5000])
+
+    def test_declined_conflict_never_invokes_either_runner(self):
+        install_calls = []
+        repair_calls = []
+        onboarding, _, _ = self.make_onboarding(
+            [FirewallInspection(FirewallState.CONFLICT, "block_conflict")],
+            runner=lambda port: install_calls.append(port),
+            repair_runner=lambda port: repair_calls.append(port),
+        )
+        onboarding.inspection = FirewallInspection(
+            FirewallState.CONFLICT,
+            "block_conflict",
+        )
+
+        result = onboarding.configure(5000, consent=lambda scope: False)
+
+        self.assertEqual(result.outcome, FirewallSetupOutcome.DECLINED)
+        self.assertEqual(install_calls, [])
+        self.assertEqual(repair_calls, [])
+
+    def test_conflict_uac_cancel_refreshes_and_never_continues(self):
+        continued = []
+        onboarding, _, _ = self.make_onboarding(
+            [FirewallInspection(FirewallState.CONFLICT, "block_conflict")],
+            repair_runner=lambda port: None,
+        )
+        onboarding.inspection = FirewallInspection(
+            FirewallState.CONFLICT,
+            "block_conflict",
+        )
+
+        result = onboarding.configure(
+            5000,
+            consent=lambda scope: True,
+            on_ready=lambda: continued.append(True),
+        )
+
+        self.assertEqual(result.outcome, FirewallSetupOutcome.DECLINED)
+        self.assertEqual(continued, [])
 
     def test_repeated_configuration_is_rejected_while_busy(self):
         onboarding, _, _ = self.make_onboarding(

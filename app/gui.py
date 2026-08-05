@@ -106,19 +106,50 @@ def _firewall_scope_text(spec):
     return message
 
 
-def ask_firewall_start_choice(parent, spec, *, configure_allowed=True):
+def _firewall_conflict_text(spec):
+    message = (
+        "Windows is blocking incoming DeskFlow connections.\n\n"
+        "Repair will disable only the conflicting firewall rule for this "
+        "exact executable, then verify DeskFlow's restricted rule.\n\n"
+        f"Executable: {spec.executable_path}\n"
+        f"TCP ports: {spec.local_ports}\n"
+        "Scope: Private networks and LocalSubnet only. Public networks remain "
+        "blocked."
+    )
+    if spec.development_scope:
+        message += (
+            "\n\nThis development build runs through Python. Disabling the "
+            "conflicting rule affects this Python executable, which other "
+            "Python applications may share. Packaged releases use a "
+            "DeskFlow-specific executable."
+        )
+    return message
+
+
+def ask_firewall_start_choice(
+    parent,
+    spec,
+    *,
+    configure_allowed=True,
+    repair_required=False,
+):
     """Show the explicit three-way Server start decision."""
     dialog = ctk.CTkToplevel(parent)
     dialog.title("DeskFlow Firewall")
-    dialog.geometry("430x330" if spec.development_scope else "430x270")
+    tall_dialog = spec.development_scope or repair_required
+    dialog.geometry("480x390" if tall_dialog else "430x270")
     dialog.resizable(False, False)
     dialog.transient(parent)
     result = {"value": "cancel"}
 
     ctk.CTkLabel(
         dialog,
-        text=_firewall_scope_text(spec),
-        wraplength=390,
+        text=(
+            _firewall_conflict_text(spec)
+            if repair_required
+            else _firewall_scope_text(spec)
+        ),
+        wraplength=440 if repair_required else 390,
         justify="left",
     ).pack(fill="x", padx=20, pady=(20, 14))
 
@@ -126,17 +157,24 @@ def ask_firewall_start_choice(parent, spec, *, configure_allowed=True):
         result["value"] = value
         dialog.destroy()
 
-    if configure_allowed:
+    if repair_required:
+        ctk.CTkButton(
+            dialog,
+            text="Repair and start",
+            command=lambda: choose("repair"),
+        ).pack(fill="x", padx=40, pady=4)
+    elif configure_allowed:
         ctk.CTkButton(
             dialog,
             text="Configure and start",
             command=lambda: choose("configure"),
         ).pack(fill="x", padx=40, pady=4)
-    ctk.CTkButton(
-        dialog,
-        text="Start without setup",
-        command=lambda: choose("without_setup"),
-    ).pack(fill="x", padx=40, pady=4)
+    if not repair_required:
+        ctk.CTkButton(
+            dialog,
+            text="Start without setup",
+            command=lambda: choose("without_setup"),
+        ).pack(fill="x", padx=40, pady=4)
     ctk.CTkButton(
         dialog,
         text="Cancel",
@@ -572,13 +610,22 @@ class DeskFlowGUI(ctk.CTk):
         if self.firewall_onboarding.inspection.state not in {
             FirewallState.MISSING,
             FirewallState.STALE,
+            FirewallState.CONFLICT,
         }:
             self._show_firewall_help()
             return
         spec = FirewallRuleSpec(self.firewall_onboarding.executable_path, port)
+        conflict = (
+            self.firewall_onboarding.inspection.state
+            is FirewallState.CONFLICT
+        )
         consent = messagebox.askyesno(
-            "Configure DeskFlow Firewall",
-            _firewall_scope_text(spec),
+            "Repair DeskFlow Firewall"
+            if conflict
+            else "Configure DeskFlow Firewall",
+            _firewall_conflict_text(spec)
+            if conflict
+            else _firewall_scope_text(spec),
         )
         def complete_setup(result):
             self._render_firewall_inspection(
@@ -603,7 +650,12 @@ class DeskFlowGUI(ctk.CTk):
         )
         if result is None:
             self.firewall_action_btn.configure(state="disabled")
-            self._set_status("Status: Configuring Windows Firewall...", "orange")
+            self._set_status(
+                "Status: Repairing Windows Firewall..."
+                if conflict
+                else "Status: Configuring Windows Firewall...",
+                "orange",
+            )
         else:
             complete_setup(result)
 
@@ -648,12 +700,16 @@ class DeskFlowGUI(ctk.CTk):
             FirewallState.MISSING,
             FirewallState.STALE,
         }
+        repair_required = (
+            onboarding.inspection.state is FirewallState.CONFLICT
+        )
         choice = ask_firewall_start_choice(
             self,
             spec,
             configure_allowed=configure_allowed,
+            repair_required=repair_required,
         )
-        if choice == "configure":
+        if choice in {"configure", "repair"}:
             self._firewall_start_warning = None
 
             def start_after_setup():
@@ -690,7 +746,9 @@ class DeskFlowGUI(ctk.CTk):
             if result is None:
                 self.server_start_btn.configure(state="disabled")
                 self._set_status(
-                    "Status: Configuring Windows Firewall...",
+                    "Status: Repairing Windows Firewall..."
+                    if choice == "repair"
+                    else "Status: Configuring Windows Firewall...",
                     "orange",
                 )
             else:

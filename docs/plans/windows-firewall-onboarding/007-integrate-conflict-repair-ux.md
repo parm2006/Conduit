@@ -35,8 +35,9 @@ block cannot make installation silently unusable.
   command with `subprocess.list2cmdline` and Windows `runas`.
 - `app/gui.py:563-702` offers configure/start-without/cancel for non-ready
   states. A confirmed conflict must instead offer Repair and start or Cancel.
-- `installer/DeskFlow.nsi:181-187` invokes install and then inspect. Preserve
-  mandatory installer consent and rollback ordering.
+- `installer/DeskFlow.nsi` invokes the restricted helper after consent. Keep
+  the internally verified repair as the final fallible install step so no
+  later failure can escape its exact-object rollback boundary.
 - `tests/test_gui_preferences.py:287-367` is the Server-start choice exemplar;
   extend it rather than introducing live GUI or firewall dependencies.
 - `tests/test_release_packaging.py:185-321` statically guards installer consent,
@@ -121,14 +122,16 @@ the installed `DeskFlow.exe` cannot override the new allow rule. Preserve:
 
 - firewall consent before file copy;
 - No/close/silent/UAC refusal cancellation;
-- helper verification before completed install metadata;
+- helper verification before the install is marked complete;
 - rollback on helper or verification failure;
 - removal of only DeskFlow-owned state on uninstall;
 - no Public, Any-remote, port-only, shell, PowerShell, or `netsh` behavior.
 
 The backend repair transaction owns re-enabling pre-existing blocks if its
-operation fails. The NSIS rollback continues to remove the partial DeskFlow
-allow rule and installation files.
+operation fails. Place registry/file preparation before repair, disable the
+installer Cancel action during that final helper call, and mark completion
+immediately after success. NSIS rollback removes transaction files but does
+not perform a second firewall mutation outside the exact-object transaction.
 
 **Verify**:
 `.\venv\Scripts\python.exe -m unittest tests.test_release_packaging -v`

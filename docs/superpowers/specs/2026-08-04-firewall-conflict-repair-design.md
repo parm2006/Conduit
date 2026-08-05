@@ -38,7 +38,7 @@ states:
 - **Connection blocked** — an enabled inbound block rule overlaps the running
   executable, Private profile, TCP, and at least one DeskFlow port. The action
   is **Repair**. Read-only inspection does not guess whether Windows policy
-  will permit removal; verified post-repair inspection is authoritative.
+  will permit modification; verified post-repair inspection is authoritative.
 - **Blocked on Public network** — the machine has no active Private profile.
   The action is **View help**. DeskFlow will not change the network category or
   add a Public exception.
@@ -116,7 +116,7 @@ conditions hold:
 - it is represented by the exact COM rule object enumerated for the repair.
 
 The selected COM rule interface does not expose policy-store origin. DeskFlow
-therefore does not predict whether Windows will permit removal. If Group
+therefore does not predict whether Windows will permit disabling. If Group
 Policy, MDM, or another managed source prevents the change, the elevated
 operation fails or the conflict remains; DeskFlow restores prior mutations,
 does not start Server mode, and directs the user to their administrator.
@@ -187,7 +187,8 @@ firewall feature does not configure those networks.
 - **No active Private profile:** show Blocked on Public network; do not mutate.
 - **Repair consent declined:** leave all rules unchanged and do not start.
 - **UAC declined:** leave all rules unchanged and do not start.
-- **Managed conflict:** show View help and do not offer automatic removal.
+- **Policy-rejected conflict:** keep the conflict visible, show administrator
+  help, and do not start Server mode.
 - **Unreadable policy or expression:** show Unavailable rather than Ready.
 - **Repair verification failed:** roll back disabled blocks and partial
   DeskFlow state; do not start.

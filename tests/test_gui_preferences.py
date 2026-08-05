@@ -6,7 +6,8 @@ from unittest.mock import patch
 from app.firewall import FirewallInspection, FirewallState
 from app.firewall_onboarding import FirewallSetupOutcome, FirewallSetupResult
 from app.gui import (
-    DeskFlowGUI, configure_main_window, parse_port, restore_saved_role,
+    DeskFlowGUI, _firewall_conflict_text, configure_main_window, parse_port,
+    restore_saved_role,
     write_status_message,
 )
 from app.preferences import UserPreferences
@@ -117,6 +118,20 @@ class PreferencesTests(unittest.TestCase):
 
 
 class SuccessfulRoleTimingTests(unittest.TestCase):
+    def test_conflict_copy_discloses_exact_scope_and_shared_python_effect(self):
+        from app.firewall import FirewallRuleSpec
+
+        spec = FirewallRuleSpec(r"C:\Python314\python.exe", 28903)
+
+        message = _firewall_conflict_text(spec)
+
+        self.assertIn(spec.executable_path, message)
+        self.assertIn("28903-28905", message)
+        self.assertIn("Private", message)
+        self.assertIn("LocalSubnet", message)
+        self.assertIn("Public networks remain blocked", message)
+        self.assertIn("other Python applications may share", message)
+
     def test_server_and_client_base_port_parser_reserves_three_lanes(self):
         for port in (1, 5000, 65533):
             with self.subTest(port=port):
@@ -231,7 +246,7 @@ class SuccessfulRoleTimingTests(unittest.TestCase):
             ),
             FirewallState.CONFLICT: (
                 "Firewall: Connection blocked",
-                "View help",
+                "Repair",
             ),
             FirewallState.PUBLIC_ONLY: (
                 "Firewall: Blocked on Public network",
@@ -361,6 +376,108 @@ class SuccessfulRoleTimingTests(unittest.TestCase):
                 self.assertEqual(len(configures), expected_configures)
                 if choice == "without_setup":
                     self.assertTrue(gui._firewall_start_warning)
+
+    def test_conflict_allows_only_repair_or_cancel_and_latches_start_values(self):
+        class Entry:
+            def __init__(self, value):
+                self.value = value
+
+            def get(self):
+                return self.value
+
+        starts = []
+        configures = []
+
+        class Onboarding:
+            busy = False
+            executable_path = r"C:\Python314\python.exe"
+            inspection = FirewallInspection(
+                FirewallState.CONFLICT,
+                "block_conflict",
+            )
+
+            def refresh(self, port):
+                return None
+
+            def configure_async(
+                self,
+                port,
+                *,
+                consent,
+                on_complete=None,
+                on_ready=None,
+            ):
+                configures.append((port, consent(None)))
+                self.inspection = FirewallInspection(
+                    FirewallState.READY,
+                    "rule_ready",
+                )
+                if on_ready:
+                    on_ready()
+                result = FirewallSetupResult(
+                    FirewallSetupOutcome.READY,
+                    self.inspection,
+                )
+                if on_complete:
+                    on_complete(result)
+                return result
+
+        gui = DeskFlowGUI.__new__(DeskFlowGUI)
+        gui.server_port_entry = Entry("28903")
+        gui.server_password_entry = Entry("latched-secret")
+        gui.firewall_onboarding = Onboarding()
+        gui.server_start_btn = Button()
+        gui._render_firewall_inspection = lambda value: None
+        gui._set_status = lambda *args, **kwargs: None
+        gui._start_server_after_firewall = (
+            lambda port, password: starts.append((port, password))
+        )
+
+        with patch(
+            "app.gui.ask_firewall_start_choice",
+            return_value="repair",
+        ) as choice:
+            gui.start_server()
+
+        self.assertEqual(configures, [(28903, True)])
+        self.assertEqual(starts, [(28903, "latched-secret")])
+        self.assertTrue(choice.call_args.kwargs["repair_required"])
+
+    def test_conflict_cancel_never_starts_or_configures(self):
+        class Entry:
+            def __init__(self, value):
+                self.value = value
+
+            def get(self):
+                return self.value
+
+        class Onboarding:
+            busy = False
+            executable_path = r"C:\Program Files\DeskFlow\DeskFlow.exe"
+            inspection = FirewallInspection(
+                FirewallState.CONFLICT,
+                "block_conflict",
+            )
+
+            def refresh(self, port):
+                return None
+
+        starts = []
+        gui = DeskFlowGUI.__new__(DeskFlowGUI)
+        gui.server_port_entry = Entry("28903")
+        gui.server_password_entry = Entry("secret")
+        gui.firewall_onboarding = Onboarding()
+        gui._render_firewall_inspection = lambda value: None
+        gui._start_server_after_firewall = lambda *args: starts.append(args)
+
+        with patch(
+            "app.gui.ask_firewall_start_choice",
+            return_value="cancel",
+        ) as choice:
+            gui.start_server()
+
+        self.assertEqual(starts, [])
+        self.assertTrue(choice.call_args.kwargs["repair_required"])
 
     def test_client_role_is_saved_only_after_successful_full_connection(self):
         roles = []

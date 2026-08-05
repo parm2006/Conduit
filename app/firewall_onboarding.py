@@ -72,7 +72,7 @@ _DISPLAY = {
     FirewallState.CONFLICT: FirewallDisplay(
         "Connection blocked",
         "red",
-        "View help",
+        "Repair",
         "Another Windows Firewall rule blocks incoming DeskFlow connections.",
     ),
     FirewallState.PUBLIC_ONLY: FirewallDisplay(
@@ -110,6 +110,7 @@ class FirewallOnboarding:
         *,
         backend=None,
         elevation_runner=None,
+        repair_runner=None,
         executable_path=None,
         scheduler=None,
         thread_factory=None,
@@ -117,6 +118,9 @@ class FirewallOnboarding:
         self.backend = backend or WindowsFirewallBackend()
         self.elevation_runner = (
             elevation_runner or run_elevated_firewall_install
+        )
+        self.repair_runner = (
+            repair_runner or run_elevated_firewall_repair
         )
         self.executable_path = (
             executable_path or current_process_executable()
@@ -186,11 +190,16 @@ class FirewallOnboarding:
 
     def configure(self, base_port, *, consent, on_ready=None):
         """Configure synchronously for non-GUI callers and unit tests."""
+        runner = (
+            self.repair_runner
+            if self.inspection.state is FirewallState.CONFLICT
+            else self.elevation_runner
+        )
         early_result = self._begin_configuration(base_port, consent)
         if early_result is not None:
             return early_result
         try:
-            exit_code = self.elevation_runner(base_port)
+            exit_code = runner(base_port)
         except Exception:
             exit_code = EXIT_CONFIGURATION_FAILED
         return self._finish_configuration(base_port, exit_code, on_ready)
@@ -204,13 +213,18 @@ class FirewallOnboarding:
         on_ready=None,
     ):
         """Run the elevated helper off the UI thread and schedule completion."""
+        runner = (
+            self.repair_runner
+            if self.inspection.state is FirewallState.CONFLICT
+            else self.elevation_runner
+        )
         early_result = self._begin_configuration(base_port, consent)
         if early_result is not None:
             return early_result
 
         def worker():
             try:
-                exit_code = self.elevation_runner(base_port)
+                exit_code = runner(base_port)
             except Exception:
                 exit_code = EXIT_CONFIGURATION_FAILED
 
@@ -236,14 +250,16 @@ class FirewallOnboarding:
         return None
 
 
-def run_elevated_firewall_install(base_port):
-    """Elevate the fixed DeskFlow helper command; return None on UAC cancel."""
+def _run_elevated_firewall_operation(base_port, operation):
+    """Elevate one fixed DeskFlow helper operation; None means UAC cancel."""
     FirewallRuleSpec(current_process_executable(), base_port)
+    if operation not in {"install", "repair"}:
+        return EXIT_CONFIGURATION_FAILED
     project_root = Path(__file__).resolve().parents[1]
     frozen = getattr(sys, "frozen", False)
     arguments = [
         "--deskflow-firewall-helper",
-        "install",
+        operation,
         "--base-port",
         str(base_port),
     ]
@@ -281,3 +297,11 @@ def run_elevated_firewall_install(base_port):
         if code == 1223:
             return None
         return EXIT_CONFIGURATION_FAILED
+
+
+def run_elevated_firewall_install(base_port):
+    return _run_elevated_firewall_operation(base_port, "install")
+
+
+def run_elevated_firewall_repair(base_port):
+    return _run_elevated_firewall_operation(base_port, "repair")

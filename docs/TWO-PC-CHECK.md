@@ -14,7 +14,9 @@ git pull
 
 In DeskFlow, select **Server**, set the port to `28903`, enter a password,
 then choose **Start Server**. If DeskFlow offers firewall setup, choose
-**Configure and start** and approve the Windows prompt.
+**Configure and start** and approve the Windows prompt. If it reports
+**Connection blocked**, choose **Repair and start** only after confirming the
+executable and ports shown in the consent dialog.
 
 After the server starts, run these in a second PowerShell window:
 
@@ -50,6 +52,36 @@ Expected: all three ports are listening. The rule is enabled, inbound, allow,
 Private, TCP `28903-28905`, scoped to the DeskFlow Python/executable path, and
 has remote address `LocalSubnet`.
 
+To inspect relevant enabled block rules without changing anything or probing
+another PC, run:
+
+```powershell
+$listener = Get-NetTCPConnection -State Listen -LocalPort 28903 |
+    Select-Object -First 1
+$program = if ($null -ne $listener) {
+    (Get-Process -Id $listener.OwningProcess).Path
+}
+
+Get-NetFirewallRule -PolicyStore ActiveStore -Enabled True `
+    -Direction Inbound -Action Block |
+    ForEach-Object {
+        $app = $_ | Get-NetFirewallApplicationFilter
+        $port = $_ | Get-NetFirewallPortFilter
+        if ($app.Program -ieq $program) {
+            [PSCustomObject]@{
+                DisplayName = $_.DisplayName
+                Profile = $_.Profile
+                Program = $app.Program
+                Protocol = $port.Protocol
+                LocalPort = $port.LocalPort
+            }
+        }
+    } | Format-List
+```
+
+This command is local and read-only. DeskFlow itself does not ping or probe a
+remote PC to decide whether the firewall is configured.
+
 ## Client PC
 
 Open PowerShell in the DeskFlow folder and run:
@@ -63,11 +95,10 @@ In DeskFlow, select **Client**, enter the Server PC's IPv4 address, use port
 `28903`, enter the same password, and select **Connect**. Approve the pairing
 code on both PCs.
 
-Before connecting, replace the address below with the Server PC's IPv4
-address and run:
+Before connecting, enter the Server PC's IPv4 address when prompted and run:
 
 ```powershell
-$serverIp = '192.168.86.87'
+$serverIp = Read-Host 'Server PC IPv4 address'
 28903,28904,28905 | ForEach-Object {
     Test-NetConnection $serverIp -Port $_ |
         Select-Object ComputerName, RemotePort, TcpTestSucceeded
@@ -75,6 +106,8 @@ $serverIp = '192.168.86.87'
 ```
 
 Expected: every `TcpTestSucceeded` value is `True` while the Server is running.
+This is an owner-run TCP acceptance check, not application behavior; DeskFlow
+does not run this probe automatically.
 
 ## Quick behavior check
 

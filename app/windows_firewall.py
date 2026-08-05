@@ -213,16 +213,19 @@ class WindowsFirewallBackend:
             return _failure_inspection(error, "configuration_failed")
 
         result = self.inspect(spec)
-        if result.state not in {
+        if result.state in {
             FirewallState.READY,
             FirewallState.DEVELOPMENT,
+            FirewallState.CONFLICT,
+            FirewallState.PUBLIC_ONLY,
         }:
+            return result
+        else:
             self._cleanup_after_failure()
             return FirewallInspection(
                 FirewallState.UNAVAILABLE,
                 "verification_failed",
             )
-        return result
 
     def repair(self, spec):
         """Disable exact conflicting objects and verify the effective policy."""

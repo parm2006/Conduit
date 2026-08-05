@@ -23,8 +23,8 @@ done.
 | [003](003-package-executable-and-transactional-installer.md) | Package executable and transactional NSIS installer | L | 001, 002 | DONE |
 | [005](005-detect-effective-firewall-conflicts.md) | Detect effective firewall conflicts without probes | L | 001, 002 | DONE |
 | [006](006-add-transactional-conflict-repair.md) | Add transactional conflict repair | L | 005 | DONE |
-| [007](007-integrate-conflict-repair-ux.md) | Integrate repair into Server mode and installer | L | 005, 006 | TODO |
-| [004](004-review-and-validate-firewall-release.md) | Independently review and validate release | M | 001, 002, 003, 005, 006, 007 | BLOCKED (awaiting 005-007) |
+| [007](007-integrate-conflict-repair-ux.md) | Integrate repair into Server mode and installer | L | 005, 006 | DONE |
+| [004](004-review-and-validate-firewall-release.md) | Independently review and validate release | M | 001, 002, 003, 005, 006, 007 | IN PROGRESS |
 
 Status values: TODO | IN PROGRESS | DONE | BLOCKED (one-line reason) |
 SUPERSEDED (one-line pointer)
@@ -47,6 +47,18 @@ SUPERSEDED (one-line pointer)
   effective-policy extension before the release can close.
 
 ## Reconciliation log
+
+- **2026-08-05**: Plan 007 completed. Confirmed conflicts expose only Repair
+  and Cancel, source Python scope is disclosed, Cancel/UAC failure cannot start
+  Server mode, and fresh setup can progress from Missing to Conflict without
+  deleting the correct allow rule. The consented NSIS repair is the final
+  fallible install step and compiled successfully with NSIS. Full suite: 446
+  tests passed. Next: Plan 004 independent review and physical acceptance.
+
+- **2026-08-05**: Plan 007 integration uses Repair-only conflict consent,
+  prevents start-without-setup for confirmed blocks, and makes the internally
+  verified repair the installer's final fallible step. The installer does not
+  perform a second firewall rollback outside the exact-object transaction.
 
 - **2026-08-05**: Plan 006 completed with exact-object transactional disable,
   missing-allow creation, effective reinspection, and rollback that re-enables

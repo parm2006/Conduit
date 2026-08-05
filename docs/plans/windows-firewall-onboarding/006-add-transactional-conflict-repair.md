@@ -179,8 +179,7 @@ review each match rather than suppressing the check.
 
 Stop if:
 
-- The COM API does not expose enough properties to restore a removed rule
-  faithfully.
+- The COM API cannot safely disable and re-enable the exact enumerated object.
 - Exact enumerated rule objects cannot be disabled and re-enabled safely.
 - Windows reports successful disable while effective reinspection still shows
   a block and the transaction cannot restore prior local mutations.

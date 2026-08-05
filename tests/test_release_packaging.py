@@ -187,6 +187,7 @@ class NsisInstallerContractTests(unittest.TestCase):
         self.assertIn("Yes - Continue", self.script)
         self.assertIn("No - Cancel installation", self.script)
         self.assertIn("Public networks remain blocked", self.script)
+        self.assertIn("disable only that exact executable", self.script)
         self.assertLess(
             self.script.index("Page custom FirewallConsentPage"),
             self.script.index('File "..\\dist\\DeskFlow.exe"'),
@@ -195,32 +196,33 @@ class NsisInstallerContractTests(unittest.TestCase):
         self.assertIn("!define MUI_CUSTOMFUNCTION_ABORT OnUserAbort", self.script)
         self.assertIn("Function OnUserAbort", self.script)
 
-    def test_helper_install_and_inspect_are_mandatory_before_completion(self):
-        install = (
+    def test_verified_repair_is_the_final_fallible_step_before_completion(self):
+        repair = (
             '"$INSTDIR\\DeskFlow.exe" --deskflow-firewall-helper '
-            "install --base-port 28903"
+            "repair --base-port 28903"
         )
-        inspect = (
+        self.assertIn(repair, self.script)
+        self.assertNotIn(
             '"$INSTDIR\\DeskFlow.exe" --deskflow-firewall-helper '
-            "inspect --base-port 28903"
+            "inspect --base-port 28903",
+            self.script,
         )
-        self.assertIn(install, self.script)
-        self.assertIn(inspect, self.script)
         self.assertIn("Call RollbackInstall", self.script)
-        self.assertLess(
-            self.script.index(install),
+        self.assertGreater(
+            self.script.index(repair),
             self.script.index("WriteRegStr HKLM \"Software\\DeskFlow\""),
         )
+        after_repair = self.script[self.script.index(repair):]
         self.assertLess(
-            self.script.index(inspect),
-            self.script.index("WriteRegStr HKLM \"Software\\DeskFlow\""),
+            after_repair.index('StrCpy $InstallComplete "1"'),
+            after_repair.index("install_complete:"),
         )
 
-    def test_rollback_and_uninstall_remove_rule_before_executable(self):
+    def test_uninstall_removes_rule_before_executable(self):
         remove = (
             '"$INSTDIR\\DeskFlow.exe" --deskflow-firewall-helper remove'
         )
-        self.assertGreaterEqual(self.script.count(remove), 2)
+        self.assertEqual(self.script.count(remove), 1)
         uninstall = self.script.index('Section "Uninstall"')
         remove_at = self.script.index(remove, uninstall)
         delete_at = self.script.index('Delete "$INSTDIR\\DeskFlow.exe"', uninstall)
@@ -239,18 +241,12 @@ class NsisInstallerContractTests(unittest.TestCase):
         self.assertIn('${If} $TransactionFilesWritten == "1"', abort)
         self.assertNotIn('IfFileExists "$INSTDIR\\DeskFlow.exe"', abort)
 
-    def test_rollback_preserves_recovery_binary_when_rule_removal_fails(self):
+    def test_install_rollback_does_not_mutate_firewall_outside_repair(self):
         rollback = self.script[
             self.script.index("Function RollbackInstall"):
             self.script.index("FunctionEnd", self.script.index("Function RollbackInstall"))
         ]
-        self.assertIn("Var FirewallRemovalFailed", self.script)
-        self.assertIn('${If} $0 != 0', rollback)
-        self.assertIn('StrCpy $FirewallRemovalFailed "1"', rollback)
-        self.assertIn(
-            'StrCpy $FirewallRemovalFailed "1"\n    Return',
-            rollback,
-        )
+        self.assertNotIn("--deskflow-firewall-helper", rollback)
         self.assertIn("Call CleanupTransactionFiles", rollback)
         cleanup = self.script[
             self.script.index("Function CleanupTransactionFiles"):
@@ -268,13 +264,13 @@ class NsisInstallerContractTests(unittest.TestCase):
         self.assertNotIn("recover_partial_install", self.script)
         self.assertIn("ClearErrors\n  FileOpen", self.script)
         self.assertIn("IfErrors marker_write_failed", self.script)
-        install = self.script.index(
+        repair = self.script.index(
             '"$INSTDIR\\DeskFlow.exe" --deskflow-firewall-helper '
-            "install --base-port 28903"
+            "repair --base-port 28903"
         )
         self.assertLess(
             self.script.index('WriteUninstaller "$INSTDIR\\Uninstall.exe"'),
-            install,
+            repair,
         )
 
     def test_installer_carries_license_source_and_notices(self):

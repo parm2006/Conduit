@@ -32,7 +32,6 @@ Var FirewallConsentYesButton
 Var FirewallConsentNoButton
 Var InstallComplete
 Var TransactionFilesWritten
-Var FirewallRemovalFailed
 
 !insertmacro MUI_PAGE_WELCOME
 !insertmacro MUI_PAGE_LICENSE "..\LICENSE"
@@ -50,7 +49,6 @@ Function .onInit
   StrCpy $FirewallConsentGranted "0"
   StrCpy $InstallComplete "0"
   StrCpy $TransactionFilesWritten "0"
-  StrCpy $FirewallRemovalFailed "0"
   IfSilent silent_install interactive_install
 
 silent_install:
@@ -79,7 +77,7 @@ Function FirewallConsentPage
   ${EndIf}
 
   ${NSD_CreateLabel} 0 0 100% 70u \
-    "Allow DeskFlow Server on private local networks (TCP ports 28903-28905).$\r$\n$\r$\nOnly this DeskFlow executable may receive connections from the local subnet. Public networks remain blocked."
+    "Allow DeskFlow Server on private local networks (TCP ports 28903-28905).$\r$\n$\r$\nOnly this DeskFlow executable may receive connections from the local subnet. If Windows has a matching block, setup may disable only that exact executable rule. Public networks remain blocked."
   Pop $0
 
   ${NSD_CreateButton} 8% 85u 84% 22u "Yes - Continue"
@@ -118,12 +116,8 @@ Function FirewallConsentLeave
 FunctionEnd
 
 Function RollbackInstall
-  ExecWait \
-    '"$INSTDIR\DeskFlow.exe" --deskflow-firewall-helper remove' $0
-  ${If} $0 != 0
-    StrCpy $FirewallRemovalFailed "1"
-    Return
-  ${EndIf}
+  ; The repair helper owns all firewall rollback before it returns failure.
+  ; Before repair runs, this installer has not changed firewall state.
   Call CleanupTransactionFiles
 FunctionEnd
 
@@ -144,23 +138,14 @@ Function OnUserAbort
   ${If} $InstallComplete != "1"
     ${If} $TransactionFilesWritten == "1"
       Call RollbackInstall
-      ${If} $FirewallRemovalFailed == "1"
-        MessageBox MB_ICONSTOP|MB_OK \
-          "DeskFlow could not remove its firewall rule. Its partial installation was kept so recovery can be retried safely."
-      ${EndIf}
     ${EndIf}
   ${EndIf}
 FunctionEnd
 
 Function AbortAfterRollback
   Call RollbackInstall
-  ${If} $FirewallRemovalFailed == "1"
-    MessageBox MB_ICONSTOP|MB_OK \
-      "Windows Firewall setup failed and its rule could not be removed. DeskFlow files were kept so recovery can be retried safely."
-  ${Else}
-    MessageBox MB_ICONSTOP|MB_OK \
-      "Windows Firewall setup failed. DeskFlow was not installed."
-  ${EndIf}
+  MessageBox MB_ICONSTOP|MB_OK \
+    "Windows Firewall setup failed. DeskFlow was not installed."
   SetErrorLevel 3
   Quit
 FunctionEnd
@@ -176,18 +161,6 @@ Section "DeskFlow" SEC_DESKFLOW
   FileClose $1
   StrCpy $TransactionFilesWritten "1"
   WriteUninstaller "$INSTDIR\Uninstall.exe"
-
-  ExecWait \
-    '"$INSTDIR\DeskFlow.exe" --deskflow-firewall-helper install --base-port 28903' $0
-  ${If} $0 != 0
-    Call AbortAfterRollback
-  ${EndIf}
-
-  ExecWait \
-    '"$INSTDIR\DeskFlow.exe" --deskflow-firewall-helper inspect --base-port 28903' $0
-  ${If} $0 != 0
-    Call AbortAfterRollback
-  ${EndIf}
 
   FileOpen $1 "$INSTDIR\DeskFlow Source.url" w
   FileWrite $1 "[InternetShortcut]$\r$\nURL=${SOURCE_URL}$\r$\n"
@@ -205,8 +178,20 @@ Section "DeskFlow" SEC_DESKFLOW
   WriteRegStr HKLM "${UNINSTALL_KEY}" "URLInfoAbout" "${SOURCE_URL}"
   WriteRegDWORD HKLM "${UNINSTALL_KEY}" "NoModify" 1
   WriteRegDWORD HKLM "${UNINSTALL_KEY}" "NoRepair" 1
-  Delete "$INSTDIR\DeskFlow.installing"
+
+  ; Repair performs its own effective reinspection and rollback. Keep it as
+  ; the final fallible step so no later installer failure can strand disabled
+  ; conflict rules outside that exact-object transaction.
+  GetDlgItem $2 $HWNDPARENT 2
+  EnableWindow $2 0
+  ExecWait \
+    '"$INSTDIR\DeskFlow.exe" --deskflow-firewall-helper repair --base-port 28903' $0
+  ${If} $0 != 0
+    Call AbortAfterRollback
+  ${EndIf}
+
   StrCpy $InstallComplete "1"
+  Delete "$INSTDIR\DeskFlow.installing"
   Goto install_complete
 
 marker_write_failed:

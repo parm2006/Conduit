@@ -56,7 +56,7 @@ branch can be called ready.
 | Full suite | `.\venv\Scripts\python.exe -m unittest discover -s tests -q` | all tests pass |
 | Tree check | `git diff --check` | no output |
 | Review diff | `git diff --check be44890..HEAD` | no output |
-| Port reachability | `$serverIp = "192.168.86.87"; Test-NetConnection $serverIp -Port 28903` | `TcpTestSucceeded : True` on permitted Private LAN after confirming the laptop still owns that address |
+| Port reachability | `$serverIp = Read-Host 'Server PC IPv4 address'; Test-NetConnection $serverIp -Port 28903` | `TcpTestSucceeded : True` on the permitted Private LAN |
 
 ## Scope
 
@@ -167,9 +167,10 @@ Execute `VALIDATION.md` on the physical laptop and desktop. Confirm:
 - stale port configuration repairs only after consent;
 - a local overlapping TCP block produces Connection blocked without a ping;
 - conflict-repair Cancel and UAC decline preserve the original block;
-- consented repair removes only the exact local conflict and preserves
+- consented repair disables only the exact local conflict and preserves
   unrelated rules;
-- uninstall removes the DeskFlow rule and installed files.
+- uninstall removes the DeskFlow rule and installed files. A disabled packaged
+  conflict may remain as an inert rule for the now-removed executable.
 
 Record PASS/FAIL with commands and observed results in a new append-only
 handoff. Do not claim unrun checks.

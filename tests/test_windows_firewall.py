@@ -352,6 +352,23 @@ class WindowsFirewallBackendTests(unittest.TestCase):
         self.assertEqual(result.reason_code, "verification_failed")
         self.assertNotIn(DESKFLOW_FIREWALL_RULE_NAME, self.rules.items)
 
+    def test_install_preserves_exact_allow_when_effective_block_remains(self):
+        conflict = self.add_matching_block()
+
+        result = self.backend.install_or_replace(self.spec)
+
+        self.assertEqual(result.state, FirewallState.CONFLICT)
+        self.assertTrue(conflict.Enabled)
+        self.assertIn(DESKFLOW_FIREWALL_RULE_NAME, self.rules.items)
+
+    def test_install_preserves_private_allow_but_never_starts_on_public(self):
+        self.policy.CurrentProfileTypes = 4
+
+        result = self.backend.install_or_replace(self.spec)
+
+        self.assertEqual(result.state, FirewallState.PUBLIC_ONLY)
+        self.assertIn(DESKFLOW_FIREWALL_RULE_NAME, self.rules.items)
+
     def test_remove_is_idempotent(self):
         first = self.backend.remove()
         self.rules.items[DESKFLOW_FIREWALL_RULE_NAME] = FakeRule(
