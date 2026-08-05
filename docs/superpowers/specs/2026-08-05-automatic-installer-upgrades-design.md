@@ -23,8 +23,14 @@ At startup, the installer classifies that location without changing it:
 2. **Valid DeskFlow installation:** `DeskFlow.exe` and `Uninstall.exe` exist,
    and the DeskFlow uninstall registry entry points to that exact directory.
    Mark the run as an upgrade and continue to the normal consent pages.
-3. **Unknown or partial contents:** stop with recovery instructions. Never
-   execute an arbitrary uninstaller or overwrite the directory.
+3. **Recoverable partial DeskFlow installation:** every item in the directory
+   is a file from DeskFlow's fixed installer-owned allowlist, but the complete
+   executable, uninstaller, and registry identity are not all present. Continue
+   to consent, then delete those allowlisted remnants without executing any of
+   them before installing the new version.
+4. **Unknown contents:** any unrecognized file or any subdirectory stops the
+   installer with recovery instructions. Never execute or overwrite unknown
+   disk content.
 
 Selecting No, closing the consent page, requesting silent installation, or
 declining the installer's UAC prompt leaves the old installation untouched.
@@ -71,6 +77,13 @@ written by the new transaction. Firewall repair retains its existing
 exact-object rollback contract. The accepted design does not restore the old
 binary.
 
+For a recoverable partial installation, the installer skips the old
+uninstaller. After consent, it removes only the known installer-owned files,
+shortcut, and registry remnants. Any failed deletion stops the transaction
+before the new executable is copied. The effective firewall repair at the end
+then replaces or repairs the DeskFlow-owned firewall configuration for the new
+executable.
+
 ## UAC behavior
 
 `RequestExecutionLevel admin` remains on the installer. A normal interactive
@@ -91,7 +104,8 @@ powershell -ExecutionPolicy Bypass -File scripts\build_release.ps1
 ```
 
 The build script will delete prior executable and installer outputs, build and
-smoke-test a fresh `dist\DeskFlow.exe`, then invoke NSIS with a private
+smoke-test a fresh `dist\DeskFlow.exe`, including its packaged firewall-helper
+entry point, then invoke NSIS with a private
 compile-time define. `installer\DeskFlow.nsi` will fail compilation when that
 define is absent. This prevents a direct `makensis` invocation from silently
 embedding an older executable after application code changes.
@@ -106,6 +120,8 @@ in Git history.
 
 ## Error handling
 
+- **Recoverable partial DeskFlow contents:** remove only the installer-owned
+  allowlist after consent; stop if any deletion fails.
 - **Unknown Program Files contents:** stop; never overwrite or execute them.
 - **DeskFlow running or executable locked:** leave the old install intact and
   ask the user to close DeskFlow.
@@ -124,7 +140,8 @@ Automated tests will statically verify:
 
 - fresh install remains supported;
 - a valid exact-path installation enters upgrade mode;
-- unknown or partial directories remain blocked;
+- allowlisted partial DeskFlow remnants are replaced without being executed;
+- unknown files and all subdirectories remain blocked;
 - consent refusal occurs before old-version mutation;
 - the exact executable lock check precedes uninstall;
 - the existing uninstaller is the only executable launched for removal;
@@ -135,7 +152,9 @@ Automated tests will statically verify:
 - the release script removes stale outputs and passes the required define;
 - the full test and packaging gates remain green.
 
-Physical Windows validation will cover fresh install, same-version reinstall,
-upgrade with DeskFlow closed, upgrade refusal while DeskFlow runs, No/close/UAC
-refusal preserving the old version, preferences and pairing preservation,
-firewall rule replacement, and uninstall after upgrade.
+Physical Windows validation will cover fresh install, recoverable partial
+replacement, same-version reinstall, upgrade with DeskFlow closed, upgrade
+refusal while DeskFlow runs, No/close/UAC refusal preserving the old version,
+preferences and pairing preservation, effective firewall rule replacement and
+an inbound connection from a second private-subnet PC, and uninstall after
+upgrade.
