@@ -105,7 +105,7 @@ Write failing GUI tests first. For a conflict:
 - do not offer Start without setup for a confirmed block.
 
 Every detected conflict offers the same consented Repair attempt. If Windows
-policy refuses removal or effective reinspection still finds the conflict,
+policy refuses disabling or effective reinspection still finds the conflict,
 show administrator help and do not start. Public-only remains View help with
 no automatic repair. Existing Missing/Stale behavior remains unchanged.
 
@@ -126,7 +126,7 @@ the installed `DeskFlow.exe` cannot override the new allow rule. Preserve:
 - removal of only DeskFlow-owned state on uninstall;
 - no Public, Any-remote, port-only, shell, PowerShell, or `netsh` behavior.
 
-The backend repair transaction owns restoration of pre-existing blocks if its
+The backend repair transaction owns re-enabling pre-existing blocks if its
 operation fails. The NSIS rollback continues to remove the partial DeskFlow
 allow rule and installation files.
 
@@ -145,7 +145,7 @@ includes:
   executable;
 - confirm Connection blocked appears without a network probe;
 - Cancel and UAC decline preserve the block and do not start;
-- Repair removes the exact conflict, preserves unrelated rules, and creates
+- Repair disables the exact conflict, preserves unrelated rules, and creates
   the restricted allow;
 - all three ports and the full secure session work afterward;
 - Public profile remains blocked without reclassification.

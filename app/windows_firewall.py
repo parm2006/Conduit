@@ -5,6 +5,7 @@ from app.firewall import (
     FirewallInspection,
     FirewallState,
     ObservedFirewallRule,
+    block_rule_conflicts,
     compare_firewall_rule,
     evaluate_effective_firewall,
     executable_paths_match,
@@ -156,6 +157,13 @@ def _observed_block_rules(rules, spec):
             yield observed
 
 
+def _matching_block_rule_objects(rules, spec):
+    for rule in rules:
+        observed = _observed_block_rule(rule, spec)
+        if observed is not None and block_rule_conflicts(spec, observed):
+            yield rule
+
+
 class WindowsFirewallBackend:
     def __init__(self, policy_factory=None, rule_factory=None):
         self.policy_factory = policy_factory or _default_policy_factory
@@ -199,23 +207,7 @@ class WindowsFirewallBackend:
             if removal is not None:
                 return removal
 
-            rule = self.rule_factory()
-            rule.Name = DESKFLOW_FIREWALL_RULE_NAME
-            rule.Description = (
-                f"Allow DeskFlow Server on private local networks "
-                f"(TCP {spec.local_ports})."
-            )
-            rule.Grouping = "DeskFlow"
-            rule.Protocol = _NET_FW_IP_PROTOCOL_TCP
-            rule.LocalPorts = spec.local_ports
-            rule.ApplicationName = spec.executable_path
-            rule.Profiles = _NET_FW_PROFILE2_PRIVATE
-            rule.RemoteAddresses = "LocalSubnet"
-            rule.Direction = _NET_FW_RULE_DIR_IN
-            rule.Action = _NET_FW_ACTION_ALLOW
-            rule.EdgeTraversal = False
-            rule.Enabled = True
-            rules.Add(rule)
+            self._add_allow_rule(rules, spec)
         except Exception as error:
             self._cleanup_after_failure()
             return _failure_inspection(error, "configuration_failed")
@@ -231,6 +223,94 @@ class WindowsFirewallBackend:
                 "verification_failed",
             )
         return result
+
+    def repair(self, spec):
+        """Disable exact conflicting objects and verify the effective policy."""
+        disabled_rules = []
+        allow_created = False
+        try:
+            policy = self.policy_factory()
+            rules = policy.Rules
+            active_profiles = _profiles_from_mask(
+                int(policy.CurrentProfileTypes)
+            )
+            if "private" not in active_profiles:
+                return FirewallInspection(
+                    FirewallState.PUBLIC_ONLY,
+                    "private_profile_inactive",
+                )
+
+            try:
+                allow_rule = rules.Item(DESKFLOW_FIREWALL_RULE_NAME)
+            except Exception as error:
+                if _is_missing(error):
+                    allow_inspection = FirewallInspection(
+                        FirewallState.MISSING,
+                        "rule_missing",
+                    )
+                else:
+                    return _failure_inspection(error, "inspection_failed")
+            else:
+                allow_inspection = compare_firewall_rule(
+                    spec,
+                    _observed_rule(allow_rule),
+                )
+
+            if allow_inspection.state not in {
+                FirewallState.MISSING,
+                FirewallState.READY,
+                FirewallState.DEVELOPMENT,
+            }:
+                return allow_inspection
+
+            conflicts = list(_matching_block_rule_objects(rules, spec))
+        except (AttributeError, TypeError, ValueError):
+            return FirewallInspection(
+                FirewallState.UNAVAILABLE,
+                "block_rule_unreadable",
+            )
+        except Exception as error:
+            return _failure_inspection(error, "inspection_failed")
+
+        try:
+            for rule in conflicts:
+                rule.Enabled = False
+                disabled_rules.append(rule)
+            if allow_inspection.state is FirewallState.MISSING:
+                allow_created = True
+                self._add_allow_rule(rules, spec)
+        except Exception as error:
+            if not self._rollback_repair(
+                rules,
+                disabled_rules,
+                allow_created,
+            ):
+                return FirewallInspection(
+                    FirewallState.UNAVAILABLE,
+                    "rollback_failed",
+                )
+            return _failure_inspection(error, "configuration_failed")
+
+        result = self.inspect(spec)
+        if result.state in {
+            FirewallState.READY,
+            FirewallState.DEVELOPMENT,
+        }:
+            return result
+
+        if not self._rollback_repair(
+            rules,
+            disabled_rules,
+            allow_created,
+        ):
+            return FirewallInspection(
+                FirewallState.UNAVAILABLE,
+                "rollback_failed",
+            )
+        return FirewallInspection(
+            FirewallState.UNAVAILABLE,
+            "verification_failed",
+        )
 
     def remove(self):
         try:
@@ -251,6 +331,38 @@ class WindowsFirewallBackend:
                 return None
             return _failure_inspection(error, "removal_failed")
         return None
+
+    def _add_allow_rule(self, rules, spec):
+        rule = self.rule_factory()
+        rule.Name = DESKFLOW_FIREWALL_RULE_NAME
+        rule.Description = (
+            f"Allow DeskFlow Server on private local networks "
+            f"(TCP {spec.local_ports})."
+        )
+        rule.Grouping = "DeskFlow"
+        rule.Protocol = _NET_FW_IP_PROTOCOL_TCP
+        rule.LocalPorts = spec.local_ports
+        rule.ApplicationName = spec.executable_path
+        rule.Profiles = _NET_FW_PROFILE2_PRIVATE
+        rule.RemoteAddresses = "LocalSubnet"
+        rule.Direction = _NET_FW_RULE_DIR_IN
+        rule.Action = _NET_FW_ACTION_ALLOW
+        rule.EdgeTraversal = False
+        rule.Enabled = True
+        rules.Add(rule)
+
+    def _rollback_repair(self, rules, disabled_rules, allow_created):
+        complete = True
+        if allow_created:
+            removal = self._remove_from(rules)
+            if removal is not None:
+                complete = False
+        for rule in reversed(disabled_rules):
+            try:
+                rule.Enabled = True
+            except Exception:
+                complete = False
+        return complete
 
     def _cleanup_after_failure(self):
         try:

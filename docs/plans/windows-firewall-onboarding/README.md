@@ -22,7 +22,7 @@ done.
 | [002](002-integrate-server-firewall-onboarding.md) | Integrate Server-mode onboarding | L | 001 | DONE |
 | [003](003-package-executable-and-transactional-installer.md) | Package executable and transactional NSIS installer | L | 001, 002 | DONE |
 | [005](005-detect-effective-firewall-conflicts.md) | Detect effective firewall conflicts without probes | L | 001, 002 | DONE |
-| [006](006-add-transactional-conflict-repair.md) | Add transactional conflict repair | L | 005 | TODO |
+| [006](006-add-transactional-conflict-repair.md) | Add transactional conflict repair | L | 005 | DONE |
 | [007](007-integrate-conflict-repair-ux.md) | Integrate repair into Server mode and installer | L | 005, 006 | TODO |
 | [004](004-review-and-validate-firewall-release.md) | Independently review and validate release | M | 001, 002, 003, 005, 006, 007 | BLOCKED (awaiting 005-007) |
 
@@ -47,6 +47,24 @@ SUPERSEDED (one-line pointer)
   effective-policy extension before the release can close.
 
 ## Reconciliation log
+
+- **2026-08-05**: Plan 006 completed with exact-object transactional disable,
+  missing-allow creation, effective reinspection, and rollback that re-enables
+  every changed block or reports `rollback_failed`. The elevated helper accepts
+  only `repair --base-port <integer>` and derives the executable internally.
+  Full suite: 438 tests passed. Next: 007.
+
+- **2026-08-05**: User approved the safe Plan 006 fork. Repair will disable the
+  exact enumerated conflicting COM objects and re-enable them on rollback; it
+  will never delete a conflicting block by friendly name. Plans and design
+  amended before privileged code changes.
+
+- **2026-08-04**: Plan 006 stopped before mutation. `INetFwRules.Remove`
+  accepts only the rule's friendly `Name`, and the Microsoft API contract does
+  not document that value as a unique identity. Name-based deletion therefore
+  cannot satisfy the approved exact-rule removal invariant. Safe fork awaiting
+  approval: transactionally disable the exact enumerated COM rule object and
+  re-enable it on rollback, rather than delete by name.
 
 - **2026-08-04**: Plan 005 completed. Effective inspection now suppresses
   Ready/Development for overlapping executable/Private/TCP block rules,

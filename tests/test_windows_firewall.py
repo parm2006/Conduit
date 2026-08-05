@@ -12,7 +12,8 @@ class FakeRule:
     def __init__(self, **values):
         self.Name = values.get("Name", "")
         self.Description = values.get("Description", "")
-        self.Enabled = values.get("Enabled", False)
+        self._enabled = values.get("Enabled", False)
+        self.enabled_set_errors = []
         self.Direction = values.get("Direction", 0)
         self.Action = values.get("Action", 0)
         self.Protocol = values.get("Protocol", 0)
@@ -22,6 +23,18 @@ class FakeRule:
         self.RemoteAddresses = values.get("RemoteAddresses", "")
         self.EdgeTraversal = values.get("EdgeTraversal", True)
         self.Grouping = values.get("Grouping", "")
+
+    @property
+    def Enabled(self):
+        return self._enabled
+
+    @Enabled.setter
+    def Enabled(self, value):
+        if self.enabled_set_errors:
+            error = self.enabled_set_errors.pop(0)
+            if error is not None:
+                raise error
+        self._enabled = value
 
 
 class FakeRules:
@@ -87,6 +100,22 @@ class WindowsFirewallBackendTests(unittest.TestCase):
             RemoteAddresses="LocalSubnet",
             EdgeTraversal=False,
         )
+
+    def add_matching_block(self, name="Python TCP block"):
+        rule = FakeRule(
+            Name=name,
+            Enabled=True,
+            Direction=1,
+            Action=0,
+            Protocol=6,
+            LocalPorts="Any",
+            ApplicationName=r"C:\Program Files\DeskFlow\DeskFlow.exe",
+            Profiles=2,
+            RemoteAddresses="Any",
+            EdgeTraversal=False,
+        )
+        self.rules.items[name] = rule
+        return rule
 
     def test_missing_rule_is_reported_without_mutation(self):
         result = self.backend.inspect(self.spec)
@@ -364,6 +393,124 @@ class WindowsFirewallBackendTests(unittest.TestCase):
 
         self.assertEqual(result.state, FirewallState.UNAVAILABLE)
         self.assertEqual(result.reason_code, "inspection_failed")
+
+    def test_repair_disables_exact_conflict_object_and_preserves_allow(self):
+        self.add_matching_allow()
+        allow_rule = self.rules.items[DESKFLOW_FIREWALL_RULE_NAME]
+        conflict = self.add_matching_block()
+        unrelated = FakeRule(Name="Unrelated", Enabled=True)
+        self.rules.items[unrelated.Name] = unrelated
+
+        result = self.backend.repair(self.spec)
+
+        self.assertEqual(result.state, FirewallState.READY)
+        self.assertFalse(conflict.Enabled)
+        self.assertTrue(unrelated.Enabled)
+        self.assertIs(
+            self.rules.items[DESKFLOW_FIREWALL_RULE_NAME],
+            allow_rule,
+        )
+        self.assertNotIn(conflict.Name, self.rules.removed)
+
+    def test_repair_can_create_missing_allow_rule(self):
+        conflict = self.add_matching_block()
+
+        result = self.backend.repair(self.spec)
+
+        self.assertEqual(result.state, FirewallState.READY)
+        self.assertFalse(conflict.Enabled)
+        self.assertIn(DESKFLOW_FIREWALL_RULE_NAME, self.rules.items)
+        self.assertEqual(len(self.rules.added), 1)
+
+    def test_repair_on_public_profile_makes_no_changes(self):
+        self.policy.CurrentProfileTypes = 4
+        conflict = self.add_matching_block()
+
+        result = self.backend.repair(self.spec)
+
+        self.assertEqual(result.state, FirewallState.PUBLIC_ONLY)
+        self.assertTrue(conflict.Enabled)
+        self.assertEqual(self.rules.added, [])
+
+    def test_second_disable_failure_rolls_back_first_exact_object(self):
+        self.add_matching_allow()
+        first = self.add_matching_block("First block")
+        second = self.add_matching_block("Second block")
+        second.enabled_set_errors = [PermissionError(5, "private")]
+
+        result = self.backend.repair(self.spec)
+
+        self.assertEqual(result.state, FirewallState.MANAGED)
+        self.assertTrue(first.Enabled)
+        self.assertTrue(second.Enabled)
+        self.assertEqual(self.rules.added, [])
+
+    def test_allow_creation_failure_reenables_disabled_conflict(self):
+        conflict = self.add_matching_block()
+        self.rules.add_error = RuntimeError("private")
+
+        result = self.backend.repair(self.spec)
+
+        self.assertEqual(result.state, FirewallState.UNAVAILABLE)
+        self.assertEqual(result.reason_code, "configuration_failed")
+        self.assertTrue(conflict.Enabled)
+
+    def test_verification_failure_removes_new_allow_and_restores_block(self):
+        conflict = self.add_matching_block()
+        calls = 0
+
+        def policy_factory():
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                return self.policy
+            return FakePolicy(self.rules, current_profiles=4)
+
+        backend = WindowsFirewallBackend(
+            policy_factory=policy_factory,
+            rule_factory=FakeRule,
+        )
+
+        result = backend.repair(self.spec)
+
+        self.assertEqual(result.state, FirewallState.UNAVAILABLE)
+        self.assertEqual(result.reason_code, "verification_failed")
+        self.assertTrue(conflict.Enabled)
+        self.assertNotIn(DESKFLOW_FIREWALL_RULE_NAME, self.rules.items)
+
+    def test_incomplete_reenable_reports_distinct_rollback_failure(self):
+        self.add_matching_allow()
+        conflict = self.add_matching_block()
+        conflict.enabled_set_errors = [None, RuntimeError("private")]
+        calls = 0
+
+        def policy_factory():
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                return self.policy
+            return FakePolicy(self.rules, current_profiles=4)
+
+        backend = WindowsFirewallBackend(
+            policy_factory=policy_factory,
+            rule_factory=FakeRule,
+        )
+
+        result = backend.repair(self.spec)
+
+        self.assertEqual(result.state, FirewallState.UNAVAILABLE)
+        self.assertEqual(result.reason_code, "rollback_failed")
+
+    def test_malformed_relevant_block_prevents_repair_without_mutation(self):
+        self.add_matching_allow()
+        conflict = self.add_matching_block()
+        conflict.LocalPorts = "broken"
+
+        result = self.backend.repair(self.spec)
+
+        self.assertEqual(result.state, FirewallState.UNAVAILABLE)
+        self.assertEqual(result.reason_code, "block_rule_unreadable")
+        self.assertTrue(conflict.Enabled)
 
 
 if __name__ == "__main__":

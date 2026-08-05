@@ -22,9 +22,9 @@
 ## Why this matters
 
 Detection alone still leaves users copying administrative PowerShell. This
-plan adds a fixed elevated repair operation that removes only verified local
-conflicts, installs the restricted DeskFlow allow rule, and restores the old
-blocks if the operation cannot finish.
+plan adds a fixed elevated repair operation that disables only verified local
+conflicts, installs the restricted DeskFlow allow rule when missing, and
+re-enables the old blocks if the operation cannot finish.
 
 ## Current state
 
@@ -74,14 +74,12 @@ blocks if the operation cannot finish.
 
 ## Steps
 
-### Step 1: Define lossless local-rule snapshots
+### Step 1: Define exact-object rollback records
 
 Write failing pure and fake-COM tests before production changes. Add an
-immutable snapshot shape containing every COM property required to recreate a
-removed conflict under the same unique identity and policy semantics. Include
-at least name, description, grouping, enabled, direction, action, protocol,
-ports, application, profiles, remote addresses, edge traversal, and any other
-field the live rule requires for equivalent restoration.
+immutable rollback shape retaining each exact enumerated COM object and its
+enabled state. Conflicting block rules are disabled in place and never deleted
+or recreated by friendly name.
 
 The snapshot is internal mutation data. It must not be serialized, logged, or
 returned to the GUI.
@@ -97,17 +95,18 @@ Write one failing test per transaction boundary, then implement a backend
 method with the intent `repair(spec) -> FirewallInspection`:
 
 1. reinspect/collect current exact conflicts from the live policy object;
-2. snapshot all collected conflicts;
+2. retain exact-object rollback records for all collected conflicts;
 3. prepare rollback before mutation;
-4. remove them by unique internal identity;
-5. install or replace the exact DeskFlow allow rule;
+4. disable those exact objects in place;
+5. preserve an already-correct DeskFlow allow rule or create it if missing;
 6. reinspect effective policy;
 7. return success only for Ready or Development with zero conflicts;
-8. on failure, remove partial DeskFlow state and restore every removed block.
+8. on failure, remove newly created DeskFlow state and re-enable every block
+   disabled by the transaction.
 
-Tests must cover a removal rejected by policy, failure during the second of
-multiple removals, during allow creation, during verification, and during
-restoration.
+Tests must cover a disable rejected by policy, failure during the second of
+multiple disables, during allow creation, during verification, and during
+re-enabling.
 Unrelated rules must remain byte-for-byte equivalent in the fake model.
 
 If rollback is incomplete, return a distinct safe Unavailable reason and do
@@ -158,9 +157,9 @@ review each match rather than suppressing the check.
 
 ## Test plan
 
-- Snapshot fidelity and collection tests.
+- Exact-object rollback-record and collection tests.
 - Successful single/multiple conflict repair.
-- Policy-rejected removal and rollback.
+- Policy-rejected disable and rollback.
 - Rollback at every mutation boundary, including incomplete rollback.
 - Exact helper allowlist and rejection matrix.
 - Full suite after focused red-green cycles.
@@ -169,7 +168,7 @@ review each match rather than suppressing the check.
 
 - [ ] Every production behavior began with an observed failing test.
 - [ ] Repair cannot accept a caller-supplied executable or rule identity.
-- [ ] Only exact, local, overlapping conflicts are removed.
+- [ ] Only exact, local, overlapping conflicts are disabled.
 - [ ] Policy-rejected and unrelated rules are preserved.
 - [ ] Every failed transaction restores prior block state or reports explicit
   rollback failure.
@@ -182,8 +181,8 @@ Stop if:
 
 - The COM API does not expose enough properties to restore a removed rule
   faithfully.
-- Unique rule identity cannot safely distinguish duplicate display names.
-- Windows reports successful removal while effective reinspection still shows
+- Exact enumerated rule objects cannot be disabled and re-enabled safely.
+- Windows reports successful disable while effective reinspection still shows
   a block and the transaction cannot restore prior local mutations.
 - Rollback requires a shell, exported policy file, registry edit, or firewall
   disablement.
@@ -195,5 +194,5 @@ not weaken rollback or broaden the helper protocol.
 
 ## Maintenance notes
 
-Treat changes to matching, snapshot, removal, and restoration as one security
+Treat changes to matching, disabling, and restoration as one security
 boundary. Review them together whenever Windows Firewall support changes.

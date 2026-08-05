@@ -29,6 +29,10 @@ class RecordingBackend:
         self.calls.append(("remove",))
         return self.result
 
+    def repair(self, spec):
+        self.calls.append(("repair", spec))
+        return self.result
+
 
 class FirewallHelperTests(unittest.TestCase):
     def run_helper(self, arguments, result):
@@ -83,6 +87,20 @@ class FirewallHelperTests(unittest.TestCase):
 
         self.assertEqual(code, EXIT_SUCCESS)
         self.assertEqual(backend.calls[0][1].executable_path, actual_image)
+
+    def test_repair_accepts_only_a_valid_base_port(self):
+        code, backend, output = self.run_helper(
+            ["repair", "--base-port", "28903"],
+            FirewallInspection(FirewallState.READY, "rule_ready"),
+        )
+
+        self.assertEqual(code, EXIT_SUCCESS)
+        self.assertEqual(backend.calls[0][0], "repair")
+        self.assertEqual(backend.calls[0][1].base_port, 28903)
+        self.assertEqual(
+            output,
+            "firewall_state=ready\nreason=rule_ready\n",
+        )
 
     def test_inspect_reports_nonmatching_state_as_configuration_failure(self):
         code, backend, output = self.run_helper(
@@ -143,6 +161,16 @@ class FirewallHelperTests(unittest.TestCase):
             ["install", "--base-port", "65534"],
             ["install", "--base-port", "5000-5002"],
             ["install", "--program", r"C:\malware.exe"],
+            ["repair"],
+            [
+                "repair",
+                "--base-port",
+                "5000",
+                "--program",
+                r"C:\malware.exe",
+            ],
+            ["repair", "--rule-name", "Python", "--base-port", "5000"],
+            ["repair", "--profile", "public", "--base-port", "5000"],
             ["install", "--profile", "public", "--base-port", "5000"],
             ["install", "--command", "Disable-NetFirewallProfile"],
             ["delete-all"],

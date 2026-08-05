@@ -33,7 +33,7 @@ def _parse_request(arguments):
         return "remove", None
     if (
         len(arguments) == 3
-        and arguments[0] in {"install", "inspect"}
+        and arguments[0] in {"install", "inspect", "repair"}
         and arguments[1] == "--base-port"
     ):
         try:
@@ -84,6 +84,8 @@ def run_firewall_helper(
         backend = backend_factory()
         if operation == "install":
             inspection = backend.install_or_replace(spec)
+        elif operation == "repair":
+            inspection = backend.repair(spec)
         else:
             inspection = backend.inspect(spec)
 

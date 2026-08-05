@@ -52,7 +52,7 @@ When a conflict exists and the user starts Server mode, DeskFlow shows:
 
 > Windows is blocking incoming DeskFlow connections.
 >
-> Repair will remove the conflicting TCP block for this executable and restore
+> Repair will disable the conflicting TCP block for this executable and restore
 > DeskFlow's restricted Private-network rule for ports 28903-28905. Public
 > networks remain blocked.
 
@@ -62,7 +62,7 @@ a confirmed block because that path is known not to accept connections.
 
 Source mode adds this warning:
 
-> This development build runs through Python. Removing the conflicting rule
+> This development build runs through Python. Disabling the conflicting rule
 > affects this Python executable, which other Python applications may share.
 > Packaged DeskFlow releases use a DeskFlow-specific executable.
 
@@ -113,7 +113,7 @@ conditions hold:
 - it applies to TCP or all protocols;
 - it overlaps DeskFlow's three ports;
 - it applies to the Private profile; and
-- it can be removed by its unique internal rule identity.
+- it is represented by the exact COM rule object enumerated for the repair.
 
 The selected COM rule interface does not expose policy-store origin. DeskFlow
 therefore does not predict whether Windows will permit removal. If Group
@@ -121,7 +121,7 @@ Policy, MDM, or another managed source prevents the change, the elevated
 operation fails or the conflict remains; DeskFlow restores prior mutations,
 does not start Server mode, and directs the user to their administrator.
 
-For packaged `DeskFlow.exe`, explicit consent authorizes removal of all local
+For packaged `DeskFlow.exe`, explicit consent authorizes disabling all local
 conflicts satisfying this contract. For source-mode Python, the same repair is
 available only after the additional shared-executable warning. This is never a
 silent background action.
@@ -143,14 +143,15 @@ The elevated backend will:
 
 1. Reinspect and collect exact conflicts to prevent a stale GUI decision from
    authorizing different rules.
-2. Snapshot every property required to recreate those rules.
-3. Remove only the collected rules by unique internal identity.
-4. Install or replace the stable restricted DeskFlow allow rule.
+2. Retain the exact enumerated COM objects and their enabled state for rollback.
+3. Disable only those exact objects; never delete a block by friendly name.
+4. Preserve an already-correct DeskFlow allow rule, or create the stable
+   restricted rule when it is missing.
 5. Reinspect the complete effective state.
 6. Return success only for Ready or Development rule with no remaining
    conflict.
-7. If any step fails, remove any partial DeskFlow allow rule and restore every
-   removed block from its snapshot. Report failure if restoration is not
+7. If any step fails, remove any newly created DeskFlow allow rule and re-enable
+   every block disabled by the transaction. Report failure if restoration is not
    complete.
 
 This rollback preserves the user's previous protection if DeskFlow cannot
@@ -188,7 +189,7 @@ firewall feature does not configure those networks.
 - **UAC declined:** leave all rules unchanged and do not start.
 - **Managed conflict:** show View help and do not offer automatic removal.
 - **Unreadable policy or expression:** show Unavailable rather than Ready.
-- **Repair verification failed:** roll back removed blocks and partial
+- **Repair verification failed:** roll back disabled blocks and partial
   DeskFlow state; do not start.
 - **Rollback incomplete:** report a safe failure and direct the user to
   Windows Firewall settings; never claim the firewall is ready.
@@ -216,8 +217,8 @@ Test-first coverage will include:
 - source-mode shared-Python warning;
 - helper rejection of arbitrary paths, rule identities, operations, and port
   ranges;
-- exact conflict removal with unrelated rules preserved;
-- snapshot restoration after remove, allow-install, or verification failure;
+- exact conflict disabling with unrelated rules preserved;
+- exact-object restoration after disable, allow-install, or verification failure;
 - Start Server continuation only after clean effective reinspection;
 - static checks proving no ping, socket probe, PowerShell, `netsh`, firewall
   disablement, network reclassification, or Public exception was added.
@@ -243,10 +244,10 @@ A green GUI label or one reachable TCP port is not sufficient acceptance.
 - A conflict produces clear consent and a UAC-gated repair action.
 - Cancel or UAC decline leaves firewall state unchanged and does not start the
   server.
-- Repair removes only exact conflicts for the running executable and
-  overlapping DeskFlow ports that Windows permits the local API to remove.
-- Managed rules and unrelated rules are never removed.
-- Failed repair restores removed block rules and does not claim success.
+- Repair disables only exact conflicts for the running executable and
+  overlapping DeskFlow ports that Windows permits the local API to modify.
+- Managed rules and unrelated rules are never disabled or removed.
+- Failed repair re-enables disabled block rules and does not claim success.
 - Source mode warns that Python may be shared.
 - Public networks remain blocked and cannot be enabled from this flow.
 - Successful reinspection is required before Server mode starts.
