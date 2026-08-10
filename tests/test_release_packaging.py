@@ -390,8 +390,8 @@ class NsisInstallerContractTests(unittest.TestCase):
         old_uninstall = section.index(
             "ExecWait '\"$INSTDIR\\Uninstall.exe\" /S _?=$INSTDIR'"
         )
-        delete_old_uninstaller = section.index(
-            'Delete "$INSTDIR\\Uninstall.exe"', old_uninstall
+        cleanup_old_install = section.index(
+            "Call CleanupUpgradeRemnants", old_uninstall
         )
         enumerate_remaining = section.index(
             'FindFirst $2 $3 "$INSTDIR\\*"', old_uninstall
@@ -400,8 +400,8 @@ class NsisInstallerContractTests(unittest.TestCase):
         copy_new = section.index('File "..\\dist\\DeskFlow.exe"')
 
         self.assertLess(prepare, old_uninstall)
-        self.assertLess(old_uninstall, delete_old_uninstaller)
-        self.assertLess(delete_old_uninstaller, enumerate_remaining)
+        self.assertLess(old_uninstall, cleanup_old_install)
+        self.assertLess(cleanup_old_install, enumerate_remaining)
         self.assertLess(old_uninstall, verify_empty)
         self.assertLess(verify_empty, copy_new)
         self.assertIn("upgrade_ready:\n    ClearErrors", section)
@@ -409,6 +409,39 @@ class NsisInstallerContractTests(unittest.TestCase):
             'IfFileExists "$INSTDIR\\*.*" upgrade_directory_not_empty',
             section,
         )
+
+    def test_upgrade_cleans_only_known_installer_remnants_after_uninstall(self):
+        section = self.script[self.script.index('Section "DeskFlow"'):]
+        old_uninstall = section.index(
+            "ExecWait '\"$INSTDIR\\Uninstall.exe\" /S _?=$INSTDIR'"
+        )
+        cleanup_call = section.index("Call CleanupUpgradeRemnants", old_uninstall)
+        enumerate_remaining = section.index(
+            'FindFirst $2 $3 "$INSTDIR\\*"',
+            cleanup_call,
+        )
+        self.assertLess(old_uninstall, cleanup_call)
+        self.assertLess(cleanup_call, enumerate_remaining)
+
+        cleanup = self.script[
+            self.script.index("Function CleanupUpgradeRemnants"):
+            self.script.index(
+                "FunctionEnd",
+                self.script.index("Function CleanupUpgradeRemnants"),
+            )
+        ]
+        for filename in (
+            "DeskFlow.exe",
+            "Uninstall.exe",
+            "DeskFlow Source.url",
+            "DeskFlow.installing",
+            "THIRD_PARTY_NOTICES.txt",
+            "LICENSE",
+        ):
+            with self.subTest(filename=filename):
+                self.assertIn(f'Delete "$INSTDIR\\{filename}"', cleanup)
+        self.assertNotIn("RMDir /r", cleanup)
+        self.assertIn("Close DeskFlow completely", cleanup)
 
     def test_partial_recovery_deletes_allowlist_without_executing_disk_content(self):
         partial = self.script[

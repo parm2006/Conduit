@@ -42,7 +42,91 @@ class ConfigWidget:
         self.visible = False
 
 
+class ValueWidget(ConfigWidget):
+    def __init__(self, value=""):
+        super().__init__()
+        self.value = value
+
+    def get(self):
+        return self.value
+
+    def set(self, value):
+        self.value = value
+
+    def delete(self, start, end):
+        self.value = ""
+
+    def insert(self, index, value):
+        self.value = str(value)
+
+
 class PreferencesTests(unittest.TestCase):
+    def test_successful_hosts_round_trip_newest_first_and_preserve_settings(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            store = UserPreferences(root)
+            store.save_role("server")
+            store.save_successful_host("192.168.86.87", 28903)
+            store.save_successful_host("192.168.86.208", 28903)
+            store.save_successful_host("192.168.86.87", 28903)
+
+            reloaded = UserPreferences(root)
+            self.assertEqual(
+                reloaded.load_successful_hosts(),
+                [
+                    {"ip": "192.168.86.87", "port": 28903},
+                    {"ip": "192.168.86.208", "port": 28903},
+                ],
+            )
+            self.assertEqual(reloaded.load_role(), "server")
+
+    def test_successful_hosts_reject_invalid_values_and_limit_history(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = UserPreferences(Path(directory))
+            for final_octet in range(1, 13):
+                store.save_successful_host(
+                    f"192.168.86.{final_octet}",
+                    28903,
+                )
+
+            hosts = store.load_successful_hosts()
+            self.assertEqual(len(hosts), 10)
+            self.assertEqual(hosts[0]["ip"], "192.168.86.12")
+            self.assertEqual(hosts[-1]["ip"], "192.168.86.3")
+
+            with self.assertRaises(ValueError):
+                store.save_successful_host("not-an-ip", 28903)
+            with self.assertRaises(ValueError):
+                store.save_successful_host("192.168.86.87", 65534)
+
+    def test_saving_an_ip_again_replaces_its_old_port(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = UserPreferences(Path(directory))
+            store.save_successful_host("192.168.86.87", 28903)
+            store.save_successful_host("192.168.86.87", 30000)
+
+            self.assertEqual(
+                store.load_successful_hosts(),
+                [{"ip": "192.168.86.87", "port": 30000}],
+            )
+
+    def test_invalid_saved_hosts_are_ignored(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "preferences.json").write_text(
+                '{"successful_hosts":['
+                '{"ip":"192.168.86.87","port":28903},'
+                '{"ip":"invalid","port":28903},'
+                '{"ip":"192.168.86.208","port":65534},'
+                '"wrong-shape"]}',
+                encoding="utf-8",
+            )
+
+            self.assertEqual(
+                UserPreferences(root).load_successful_hosts(),
+                [{"ip": "192.168.86.87", "port": 28903}],
+            )
+
     def test_client_position_round_trips_and_preserves_saved_role(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -118,6 +202,96 @@ class PreferencesTests(unittest.TestCase):
 
 
 class SuccessfulRoleTimingTests(unittest.TestCase):
+    def test_successful_connection_refreshes_saved_host_dropdown_and_default(self):
+        with tempfile.TemporaryDirectory() as directory:
+            source = object()
+            gui = DeskFlowGUI.__new__(DeskFlowGUI)
+            gui.client = source
+            gui.preferences = UserPreferences(Path(directory))
+            gui.known_hosts = []
+            gui.client_ip_entry = ValueWidget("192.168.86.87")
+            gui.client_port_entry = ValueWidget("28903")
+            gui.client_connect_btn = Button()
+            gui.client_disconnect_btn = Button()
+            gui._set_status = lambda *args, **kwargs: None
+
+            gui._handle_connect_result(
+                source,
+                True,
+                None,
+                "192.168.86.208",
+                28903,
+            )
+
+            self.assertEqual(
+                gui.preferences.load_successful_hosts(),
+                [{"ip": "192.168.86.208", "port": 28903}],
+            )
+            self.assertEqual(
+                gui.client_ip_entry.values["values"],
+                ["192.168.86.208"],
+            )
+            self.assertEqual(gui.client_ip_entry.get(), "192.168.86.208")
+            self.assertEqual(gui.client_port_entry.get(), "28903")
+
+    def test_failed_connection_does_not_save_attempted_host(self):
+        with tempfile.TemporaryDirectory() as directory:
+            source = object()
+            gui = DeskFlowGUI.__new__(DeskFlowGUI)
+            gui.client = source
+            gui.preferences = UserPreferences(Path(directory))
+            gui.known_hosts = []
+            gui.client_ip_entry = ValueWidget("192.168.86.87")
+            gui.client_port_entry = ValueWidget("28903")
+            gui.client_connect_btn = Button()
+            gui.client_disconnect_btn = Button()
+            gui._set_status = lambda *args, **kwargs: None
+
+            gui._handle_connect_result(
+                source,
+                False,
+                "timed out",
+                "192.168.86.87",
+                28903,
+            )
+
+            self.assertEqual(gui.preferences.load_successful_hosts(), [])
+
+    def test_every_server_start_reinspects_firewall(self):
+        class Onboarding:
+            busy = False
+            executable_path = r"C:\Program Files\DeskFlow\DeskFlow.exe"
+
+            def __init__(self):
+                self.calls = 0
+                self.inspection = FirewallInspection(
+                    FirewallState.READY,
+                    "rule_ready",
+                )
+
+            def refresh(self, port):
+                self.calls += 1
+                self.inspection = FirewallInspection(
+                    FirewallState.READY if self.calls == 1 else FirewallState.MISSING,
+                    "rule_ready" if self.calls == 1 else "rule_missing",
+                )
+
+        onboarding = Onboarding()
+        starts = []
+        gui = DeskFlowGUI.__new__(DeskFlowGUI)
+        gui.server_port_entry = ValueWidget("28903")
+        gui.server_password_entry = ValueWidget("secret")
+        gui.firewall_onboarding = onboarding
+        gui._render_firewall_inspection = lambda value: None
+        gui._start_server_after_firewall = lambda *args: starts.append(args)
+
+        with patch("app.gui.ask_firewall_start_choice", return_value="cancel"):
+            gui.start_server()
+            gui.start_server()
+
+        self.assertEqual(onboarding.calls, 2)
+        self.assertEqual(starts, [(28903, "secret")])
+
     def test_conflict_copy_discloses_exact_scope_and_shared_python_effect(self):
         from app.firewall import FirewallRuleSpec
 

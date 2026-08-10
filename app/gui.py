@@ -1,7 +1,5 @@
 import customtkinter as ctk
 import logging
-import json
-import os
 from pathlib import Path
 from tkinter import messagebox
 
@@ -22,9 +20,6 @@ from app.firewall_onboarding import (
 )
 
 logger = logging.getLogger(__name__)
-
-KNOWN_HOSTS_FILE = "known_hosts.json"
-
 
 def configure_main_window(window):
     window.geometry("400x650")
@@ -524,25 +519,19 @@ class DeskFlowGUI(ctk.CTk):
 
     def load_known_hosts(self):
         try:
-            if os.path.exists(KNOWN_HOSTS_FILE):
-                with open(KNOWN_HOSTS_FILE, 'r') as f:
-                    return json.load(f)
+            return self.preferences.load_successful_hosts()
         except Exception as error:
             logger.error("Failed to load known hosts (%s)", error_name(error))
         return []
 
     def save_known_host(self, ip, port):
-        # Remove if it already exists to move it to the top
-        self.known_hosts = [h for h in self.known_hosts if h['ip'] != ip or h['port'] != port]
-        self.known_hosts.insert(0, {'ip': ip, 'port': port})
-        # Keep only the last 10
-        self.known_hosts = self.known_hosts[:10]
-        
         try:
-            with open(KNOWN_HOSTS_FILE, 'w') as f:
-                json.dump(self.known_hosts, f)
-            # Update combo box values
+            self.preferences.save_successful_host(ip, port)
+            self.known_hosts = self.preferences.load_successful_hosts()
             self.client_ip_entry.configure(values=[h['ip'] for h in self.known_hosts])
+            self.client_ip_entry.set(self.known_hosts[0]['ip'])
+            self.client_port_entry.delete(0, 'end')
+            self.client_port_entry.insert(0, str(self.known_hosts[0]['port']))
         except Exception as error:
             logger.error("Failed to save known host (%s)", error_name(error))
 

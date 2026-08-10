@@ -1,6 +1,7 @@
 """Non-secret local DeskFlow UI preferences."""
 
 import json
+import ipaddress
 import logging
 import os
 from pathlib import Path
@@ -13,6 +14,18 @@ from app.ports import DEFAULT_BASE_PORT
 logger = logging.getLogger(__name__)
 VALID_ROLES = frozenset(("server", "client"))
 VALID_CLIENT_POSITIONS = frozenset(("top", "left", "right", "bottom"))
+MAX_SUCCESSFUL_HOSTS = 10
+
+
+def _validated_successful_host(ip, port):
+    try:
+        address = ipaddress.IPv4Address(str(ip).strip()).compressed
+        parsed_port = int(port)
+    except (ipaddress.AddressValueError, TypeError, ValueError) as error:
+        raise ValueError("host must contain a valid IPv4 address and port") from error
+    if isinstance(port, bool) or not (1 <= parsed_port <= 65533):
+        raise ValueError("host port must be between 1 and 65533")
+    return {"ip": address, "port": parsed_port}
 
 
 class UserPreferences:
@@ -58,6 +71,42 @@ class UserPreferences:
             raise ValueError(
                 "port must be an integer between 1 and 65533"
             ) from error
+
+    def load_successful_hosts(self):
+        stored = self._load_values().get("successful_hosts", [])
+        if not isinstance(stored, list):
+            return []
+        hosts = []
+        seen = set()
+        for value in stored:
+            if not isinstance(value, dict):
+                continue
+            try:
+                host = _validated_successful_host(
+                    value.get("ip"),
+                    value.get("port"),
+                )
+            except ValueError:
+                continue
+            key = host["ip"]
+            if key in seen:
+                continue
+            seen.add(key)
+            hosts.append(host)
+            if len(hosts) == MAX_SUCCESSFUL_HOSTS:
+                break
+        return hosts
+
+    def save_successful_host(self, ip, port):
+        host = _validated_successful_host(ip, port)
+        hosts = self.load_successful_hosts()
+        hosts = [
+            saved
+            for saved in hosts
+            if saved["ip"] != host["ip"]
+        ]
+        hosts.insert(0, host)
+        self._save_value("successful_hosts", hosts[:MAX_SUCCESSFUL_HOSTS])
 
     def _load_values(self):
         if not self.path.exists():

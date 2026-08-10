@@ -175,6 +175,33 @@ partial_cleanup_failed:
   Quit
 FunctionEnd
 
+Function CleanupUpgradeRemnants
+  ; The verified old uninstaller owns removal. Clean only the same known files
+  ; if an older uninstaller leaves installer-owned remnants behind.
+  ClearErrors
+  Delete "$INSTDIR\DeskFlow.exe"
+  IfErrors upgrade_cleanup_executable_locked
+  Delete "$INSTDIR\DeskFlow Source.url"
+  Delete "$INSTDIR\DeskFlow.installing"
+  Delete "$INSTDIR\THIRD_PARTY_NOTICES.txt"
+  Delete "$INSTDIR\LICENSE"
+  Delete "$INSTDIR\Uninstall.exe"
+  IfErrors upgrade_cleanup_failed
+  Return
+
+upgrade_cleanup_executable_locked:
+  MessageBox MB_ICONSTOP|MB_OK \
+    "DeskFlow.exe is still in use. Close DeskFlow completely, then retry setup. The new version was not installed."
+  SetErrorLevel 3
+  Quit
+
+upgrade_cleanup_failed:
+  MessageBox MB_ICONSTOP|MB_OK \
+    "DeskFlow could not remove an installer-owned file left by the previous version. Close DeskFlow completely, then retry setup."
+  SetErrorLevel 3
+  Quit
+FunctionEnd
+
 Function PrepareExistingInstall
   ${If} $ExistingInstallState == "upgrade"
     Call PreflightUpgrade
@@ -289,9 +316,7 @@ Section "DeskFlow" SEC_DESKFLOW
     ; _?= keeps the old uninstaller in place so ExecWait observes its real
     ; completion. The elevated parent can delete that exact verified file once
     ; it returns, then enumerate rather than confusing existence with content.
-    ClearErrors
-    Delete "$INSTDIR\Uninstall.exe"
-    IfErrors upgrade_directory_not_empty
+    Call CleanupUpgradeRemnants
     FindFirst $2 $3 "$INSTDIR\*"
     IfErrors upgrade_ready
 
