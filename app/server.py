@@ -25,7 +25,7 @@ from app.ports import DEFAULT_BASE_PORT
 
 logger = logging.getLogger(__name__)
 
-class DeskFlowServer:
+class ConduitServer:
     def __init__(self, password, port=DEFAULT_BASE_PORT, layout_position='right', on_capture_start=None, on_capture_stop=None, on_transfer_status=None, on_app_shutdown=None):
         self.layout_position = layout_position
         self.on_capture_start = on_capture_start
@@ -49,7 +49,7 @@ class DeskFlowServer:
         self.transfer_controller = TransferController()
         if on_transfer_status:
             self.transfer_controller.subscribe(on_transfer_status)
-        self.file_receiver = TransferReceiver(Path(os.environ.get('LOCALAPPDATA', Path.home())) / 'DeskFlow' / 'transfers' / 'server', controller=self.transfer_controller)
+        self.file_receiver = TransferReceiver(Path(os.environ.get('LOCALAPPDATA', Path.home())) / 'Conduit' / 'transfers' / 'server', controller=self.transfer_controller)
         self.file_receiver.attach(self.file_network)
         self.transfer_cancellation = TransferCancellation(
             self.file_network, self.transfer_controller, self.file_receiver

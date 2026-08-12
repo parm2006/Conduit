@@ -41,7 +41,7 @@ class FirewallHelperTests(unittest.TestCase):
         code = run_firewall_helper(
             arguments,
             backend_factory=lambda: backend,
-            executable_path=r"C:\Program Files\DeskFlow\DeskFlow.exe",
+            executable_path=r"C:\Program Files\Conduit\Conduit.exe",
             output=output,
         )
         return code, backend, output.getvalue()
@@ -59,7 +59,7 @@ class FirewallHelperTests(unittest.TestCase):
         self.assertEqual(spec.base_port, 5000)
         self.assertEqual(
             spec.executable_path,
-            r"C:\Program Files\DeskFlow\DeskFlow.exe",
+            r"C:\Program Files\Conduit\Conduit.exe",
         )
         self.assertEqual(
             output,

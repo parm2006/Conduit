@@ -10,7 +10,7 @@ from app.ports import (
 )
 from app.preferences import UserPreferences
 from app.network import NetworkServer
-from app.server import DeskFlowServer
+from app.server import ConduitServer
 from app.file_transfer.transport import FileLaneServer
 
 
@@ -33,7 +33,7 @@ class DefaultPortTests(unittest.TestCase):
             DEFAULT_BASE_PORT,
         )
         self.assertEqual(
-            inspect.signature(DeskFlowServer).parameters["port"].default,
+            inspect.signature(ConduitServer).parameters["port"].default,
             DEFAULT_BASE_PORT,
         )
         self.assertEqual(

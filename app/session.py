@@ -1,4 +1,4 @@
-"""One logical DeskFlow session shared by its independent network lanes."""
+"""One logical Conduit session shared by its independent network lanes."""
 
 import logging
 from dataclasses import dataclass

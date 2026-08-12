@@ -52,7 +52,7 @@ class StagedFileTests(unittest.TestCase):
             staged.abort()
 
     def test_writes_in_order_verifies_hash_and_finalizes_without_overwrite(self):
-        content = b"DeskFlow file bytes"
+        content = b"Conduit file bytes"
         digest = hashlib.sha256(content).hexdigest()
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

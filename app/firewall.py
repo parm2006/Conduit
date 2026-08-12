@@ -1,4 +1,4 @@
-"""Platform-independent Windows Firewall rule contract for DeskFlow."""
+"""Platform-independent Windows Firewall rule contract for Conduit."""
 
 from dataclasses import dataclass
 from enum import Enum
@@ -9,7 +9,7 @@ import re
 import sys
 
 
-DESKFLOW_FIREWALL_RULE_NAME = "DeskFlow Server - Private LAN"
+CONDUIT_FIREWALL_RULE_NAME = "Conduit Server - Private LAN"
 
 
 def current_process_executable():
@@ -164,10 +164,10 @@ def block_rule_conflicts(spec, observed):
     ):
         return False
 
-    deskflow_start = spec.base_port
-    deskflow_end = spec.base_port + 2
+    conduit_start = spec.base_port
+    conduit_end = spec.base_port + 2
     return any(
-        start <= deskflow_end and end >= deskflow_start
+        start <= conduit_end and end >= conduit_start
         for start, end in _port_intervals(observed.local_ports)
     )
 
@@ -219,7 +219,7 @@ def compare_firewall_rule(spec, observed):
         return FirewallInspection(FirewallState.MISSING, "rule_missing")
 
     comparisons = (
-        ("name", observed.name == DESKFLOW_FIREWALL_RULE_NAME),
+        ("name", observed.name == CONDUIT_FIREWALL_RULE_NAME),
         ("enabled", observed.enabled is True),
         ("direction", observed.direction.casefold() == "inbound"),
         ("action", observed.action.casefold() == "allow"),

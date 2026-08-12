@@ -1,4 +1,4 @@
-"""Non-secret local DeskFlow UI preferences."""
+"""Non-secret local Conduit UI preferences."""
 
 import json
 import ipaddress
@@ -30,7 +30,7 @@ def _validated_successful_host(ip, port):
 
 class UserPreferences:
     def __init__(self, root=None):
-        base = Path(os.environ.get("LOCALAPPDATA", Path.home())) / "DeskFlow"
+        base = Path(os.environ.get("LOCALAPPDATA", Path.home())) / "Conduit"
         self.root = Path(root or base).resolve()
         self.path = self.root / "preferences.json"
 
@@ -115,7 +115,7 @@ class UserPreferences:
             values = json.loads(self.path.read_text(encoding="utf-8"))
             return values if isinstance(values, dict) else {}
         except Exception as error:
-            logger.error("Could not load DeskFlow preferences (%s)", error_name(error))
+            logger.error("Could not load Conduit preferences (%s)", error_name(error))
             return {}
 
     def _save_value(self, key, value):

@@ -576,7 +576,7 @@ class TransferReceiverTests(unittest.TestCase):
         self.assertEqual(controller.status(manifest.job_id).phase, TransferPhase.CANCELLED)
 
     def test_manifest_chunks_and_completion_publish_verified_file(self):
-        content = b"DeskFlow received bytes"
+        content = b"Conduit received bytes"
         item = FileItem("folder/report.txt", ItemType.FILE, len(content), 123, hashlib.sha256(content).hexdigest())
         manifest = Manifest.create([item])
         with tempfile.TemporaryDirectory() as directory:

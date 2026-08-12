@@ -1,7 +1,7 @@
-"""Windows Firewall COM boundary for the DeskFlow-owned inbound rule."""
+"""Windows Firewall COM boundary for the Conduit-owned inbound rule."""
 
 from app.firewall import (
-    DESKFLOW_FIREWALL_RULE_NAME,
+    CONDUIT_FIREWALL_RULE_NAME,
     FirewallInspection,
     FirewallState,
     ObservedFirewallRule,
@@ -174,7 +174,7 @@ class WindowsFirewallBackend:
             policy = self.policy_factory()
             rules = policy.Rules
             try:
-                rule = rules.Item(DESKFLOW_FIREWALL_RULE_NAME)
+                rule = rules.Item(CONDUIT_FIREWALL_RULE_NAME)
             except Exception as error:
                 if _is_missing(error):
                     return FirewallInspection(
@@ -242,7 +242,7 @@ class WindowsFirewallBackend:
             private_active = "private" in active_profiles
 
             try:
-                allow_rule = rules.Item(DESKFLOW_FIREWALL_RULE_NAME)
+                allow_rule = rules.Item(CONDUIT_FIREWALL_RULE_NAME)
             except Exception as error:
                 if _is_missing(error):
                     allow_inspection = FirewallInspection(
@@ -341,7 +341,7 @@ class WindowsFirewallBackend:
     @staticmethod
     def _remove_from(rules):
         try:
-            rules.Remove(DESKFLOW_FIREWALL_RULE_NAME)
+            rules.Remove(CONDUIT_FIREWALL_RULE_NAME)
         except Exception as error:
             if _is_missing(error):
                 return None
@@ -372,12 +372,12 @@ class WindowsFirewallBackend:
 
     @staticmethod
     def _configure_allow_rule(rule, spec):
-        rule.Name = DESKFLOW_FIREWALL_RULE_NAME
+        rule.Name = CONDUIT_FIREWALL_RULE_NAME
         rule.Description = (
-            f"Allow DeskFlow Server on private local networks "
+            f"Allow Conduit Server on private local networks "
             f"(TCP {spec.local_ports})."
         )
-        rule.Grouping = "DeskFlow"
+        rule.Grouping = "Conduit"
         rule.Protocol = _NET_FW_IP_PROTOCOL_TCP
         rule.LocalPorts = spec.local_ports
         rule.ApplicationName = spec.executable_path

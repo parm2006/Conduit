@@ -9,7 +9,7 @@ from app.crypto import IdentityStore
 
 
 class FakeProtector:
-    prefix = b"deskflow-protected:"
+    prefix = b"conduit-protected:"
 
     def protect(self, value):
         return self.prefix + bytes(value)[::-1]

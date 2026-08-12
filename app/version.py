@@ -1,10 +1,10 @@
-"""Canonical DeskFlow release metadata."""
+"""Canonical Conduit release metadata."""
 
-PRODUCT_NAME = "DeskFlow"
+PRODUCT_NAME = "Conduit"
 PRODUCT_VERSION = "5.1"
 FILE_VERSION = (5, 1, 0, 0)
 FILE_VERSION_STRING = ".".join(str(part) for part in FILE_VERSION)
-SOURCE_URL = "https://github.com/parm2006/DeskFlow"
+SOURCE_URL = "https://github.com/parm2006/Conduit"
 
 PYINSTALLER_SOURCE_URL = "https://github.com/pyinstaller/pyinstaller"
 PYINSTALLER_LICENSE_URL = (

@@ -2,9 +2,9 @@ import threading
 import unittest
 
 from app.clipboard_formats import ClipboardEntry, ClipboardSnapshot
-from app.client import DeskFlowClient
+from app.client import ConduitClient
 from app.file_transfer.paste_coordinator import PasteCoordinator
-from app.server import DeskFlowServer
+from app.server import ConduitServer
 
 
 class RecordingNetwork:
@@ -131,7 +131,7 @@ class RefreshingClipboard:
 
 class FileAvailabilityRoutingTests(unittest.TestCase):
     def test_client_ordinary_payload_queue_preserves_explicit_local_offer(self):
-        client = DeskFlowClient.__new__(DeskFlowClient)
+        client = ConduitClient.__new__(ConduitClient)
         client.is_active = True
         client.control_network = SessionNetwork()
         client.paste_coordinator = PasteCoordinator(lambda: None)
@@ -146,7 +146,7 @@ class FileAvailabilityRoutingTests(unittest.TestCase):
         self.assertEqual(client.paste_coordinator.current_offer.kind, "ordinary")
 
     def test_server_ordinary_payload_queue_preserves_explicit_local_offer(self):
-        server = DeskFlowServer.__new__(DeskFlowServer)
+        server = ConduitServer.__new__(ConduitServer)
         server.switching_to_client = False
         server.control_network = SessionNetwork()
         server.paste_coordinator = PasteCoordinator(lambda: None)
@@ -161,7 +161,7 @@ class FileAvailabilityRoutingTests(unittest.TestCase):
         self.assertEqual(server.paste_coordinator.current_offer.kind, "ordinary")
 
     def test_client_publishes_explicit_local_offer(self):
-        client = DeskFlowClient.__new__(DeskFlowClient)
+        client = ConduitClient.__new__(ConduitClient)
         client.is_active = True
         client.control_network = SessionNetwork()
         client.paste_coordinator = PasteCoordinator(lambda: None)
@@ -186,7 +186,7 @@ class FileAvailabilityRoutingTests(unittest.TestCase):
         self.assertFalse(client.paste_coordinator.transfer_required)
 
     def test_server_routes_received_client_offer_against_client_destination(self):
-        server = DeskFlowServer.__new__(DeskFlowServer)
+        server = ConduitServer.__new__(ConduitServer)
         server.switching_to_client = True
         server.control_network = SessionNetwork()
         server.paste_coordinator = PasteCoordinator(lambda: None)
@@ -212,7 +212,7 @@ class FileAvailabilityRoutingTests(unittest.TestCase):
 
     def test_server_screen_transition_recomputes_route_from_same_offer(self):
         events = []
-        server = DeskFlowServer.__new__(DeskFlowServer)
+        server = ConduitServer.__new__(ConduitServer)
         server.switching_to_client = False
         server.control_network = SessionNetwork()
         server.input_handler = RecordingInputHandler(events)
@@ -231,7 +231,7 @@ class FileAvailabilityRoutingTests(unittest.TestCase):
 
     def test_client_activation_recomputes_route_from_same_offer(self):
         events = []
-        client = DeskFlowClient.__new__(DeskFlowClient)
+        client = ConduitClient.__new__(ConduitClient)
         client.is_active = False
         client.control_network = SessionNetwork()
         client.input_handler = RecordingInputHandler(events)
@@ -256,7 +256,7 @@ class FileAvailabilityRoutingTests(unittest.TestCase):
 
     def test_server_return_recomputes_route_from_same_client_offer(self):
         events = []
-        server = DeskFlowServer.__new__(DeskFlowServer)
+        server = ConduitServer.__new__(ConduitServer)
         server.switching_to_client = True
         server.control_network = SessionNetwork()
         server.input_handler = RecordingInputHandler(events)
@@ -284,7 +284,7 @@ class FileAvailabilityRoutingTests(unittest.TestCase):
         self.assertTrue(server.paste_coordinator.transfer_required)
 
     def test_client_file_copy_supersedes_server_file_on_physical_server_hotkey_path(self):
-        server = DeskFlowServer.__new__(DeskFlowServer)
+        server = ConduitServer.__new__(ConduitServer)
         server.switching_to_client = False
         server.control_network = SessionNetwork()
         server.pressed_keys = set()
@@ -298,7 +298,7 @@ class FileAvailabilityRoutingTests(unittest.TestCase):
         server._apply_clipboard_offer_route()
         self.assertTrue(server.paste_coordinator.transfer_required)
 
-        client = DeskFlowClient.__new__(DeskFlowClient)
+        client = ConduitClient.__new__(ConduitClient)
         client.is_active = True
         client.paste_coordinator = PasteCoordinator(lambda: None)
         client.control_network = DeliveringSessionNetwork(
@@ -321,7 +321,7 @@ class FileAvailabilityRoutingTests(unittest.TestCase):
 
     def test_client_paste_intent_uses_native_v_after_newer_client_file_copy(self):
         events = []
-        client = DeskFlowClient.__new__(DeskFlowClient)
+        client = ConduitClient.__new__(ConduitClient)
         client.input_handler = RecordingInputHandler(events)
 
         handler = getattr(client, "on_file_paste_intent", None)
@@ -347,7 +347,7 @@ class FileAvailabilityRoutingTests(unittest.TestCase):
             def inject_key_release(self, key_data):
                 events.append(("key-release", key_data))
 
-        client = DeskFlowClient.__new__(DeskFlowClient)
+        client = ConduitClient.__new__(ConduitClient)
         client.input_handler = FailingInput()
 
         with self.assertRaisesRegex(RuntimeError, "injection failed"):
@@ -357,7 +357,7 @@ class FileAvailabilityRoutingTests(unittest.TestCase):
 
     def test_client_paste_intent_refreshes_unpolled_local_copy_before_routing(self):
         events = []
-        client = DeskFlowClient.__new__(DeskFlowClient)
+        client = ConduitClient.__new__(ConduitClient)
         client.is_active = True
         client.control_network = SessionNetwork()
         client.input_handler = RecordingInputHandler(events)
@@ -396,7 +396,7 @@ class FileAvailabilityRoutingTests(unittest.TestCase):
 
     def test_client_paste_intent_aborts_when_clipboard_refresh_is_unknown(self):
         events = []
-        client = DeskFlowClient.__new__(DeskFlowClient)
+        client = ConduitClient.__new__(ConduitClient)
         client.is_active = True
         client.control_network = SessionNetwork()
         client.input_handler = RecordingInputHandler(events)
@@ -422,7 +422,7 @@ class FileAvailabilityRoutingTests(unittest.TestCase):
         self.assertEqual(events, [])
 
     def test_server_hotkey_refreshes_unpolled_local_copy_before_routing(self):
-        server = DeskFlowServer.__new__(DeskFlowServer)
+        server = ConduitServer.__new__(ConduitServer)
         server.switching_to_client = False
         server.control_network = SessionNetwork()
         server.paste_coordinator = PasteCoordinator(lambda: None)
@@ -453,7 +453,7 @@ class FileAvailabilityRoutingTests(unittest.TestCase):
 
     def test_server_hotkey_suppresses_paste_when_clipboard_refresh_is_unknown(self):
         requested = []
-        server = DeskFlowServer.__new__(DeskFlowServer)
+        server = ConduitServer.__new__(ConduitServer)
         server.switching_to_client = False
         server.control_network = SessionNetwork()
         server.paste_coordinator = PasteCoordinator(
@@ -483,7 +483,7 @@ class FileAvailabilityRoutingTests(unittest.TestCase):
 
     def test_client_keeps_remote_file_offer_inactive_until_server_switches_control(self):
         events = []
-        client = DeskFlowClient.__new__(DeskFlowClient)
+        client = ConduitClient.__new__(ConduitClient)
         client.is_active = False
         client.control_network = SessionNetwork()
         client.paste_coordinator = PasteCoordinator(lambda: None)
@@ -511,7 +511,7 @@ class FileAvailabilityRoutingTests(unittest.TestCase):
 
     def test_server_ignores_edge_crossing_while_local_paste_is_pending(self):
         events = []
-        server = DeskFlowServer.__new__(DeskFlowServer)
+        server = ConduitServer.__new__(ConduitServer)
         server.input_handler = RecordingInputHandler(events)
         server.file_paste_service = PasteServiceState(active=True)
         server.switching_to_client = False
@@ -528,7 +528,7 @@ class FileAvailabilityRoutingTests(unittest.TestCase):
 
     def test_client_ignores_return_edge_while_local_paste_is_pending(self):
         events = []
-        client = DeskFlowClient.__new__(DeskFlowClient)
+        client = ConduitClient.__new__(ConduitClient)
         client.input_handler = RecordingInputHandler(events)
         client.file_paste_service = PasteServiceState(active=True)
         client.control_network = RecordingNetwork()
@@ -543,7 +543,7 @@ class FileAvailabilityRoutingTests(unittest.TestCase):
     def test_server_edge_cannot_race_paste_destination_latching(self):
         events = []
         service = BlockingPasteService()
-        server = DeskFlowServer.__new__(DeskFlowServer)
+        server = ConduitServer.__new__(ConduitServer)
         server.file_paste_service = service
         server.input_handler = RecordingInputHandler(events)
         server.switching_to_client = False
@@ -573,7 +573,7 @@ class FileAvailabilityRoutingTests(unittest.TestCase):
     def test_client_edge_cannot_race_paste_destination_latching(self):
         events = []
         service = BlockingPasteService()
-        client = DeskFlowClient.__new__(DeskFlowClient)
+        client = ConduitClient.__new__(ConduitClient)
         client.file_paste_service = service
         client.input_handler = RecordingInputHandler(events)
         client.control_network = RecordingNetwork()

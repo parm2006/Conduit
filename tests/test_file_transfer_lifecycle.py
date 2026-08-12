@@ -2,8 +2,8 @@ import unittest
 import threading
 from types import SimpleNamespace
 
-from app.client import DeskFlowClient
-from app.server import DeskFlowServer
+from app.client import ConduitClient
+from app.server import ConduitServer
 from app.network import ConnectionPhase, NetworkClient, ServerUnavailable
 from app.file_transfer.paste_service import FilePasteService
 from app.file_transfer.publisher import VirtualPastePublisher
@@ -144,7 +144,7 @@ class FileLaneLifecycleTests(unittest.TestCase):
     def test_control_failure_preserves_actionable_message_without_socket_jargon(self):
         message = (
             "Could not reach the server. Check its address, port, and that "
-            "DeskFlow is running."
+            "Conduit is running."
         )
 
         class Control:
@@ -156,7 +156,7 @@ class FileLaneLifecycleTests(unittest.TestCase):
             def disconnect(self, **kwargs):
                 return True
 
-        client = DeskFlowClient.__new__(DeskFlowClient)
+        client = ConduitClient.__new__(ConduitClient)
         client.control_network = Control()
         client.data_network = None
         client.file_network = SimpleNamespace(close=lambda: None)
@@ -168,7 +168,7 @@ class FileLaneLifecycleTests(unittest.TestCase):
         self.assertEqual(results, [(False, message)])
 
     def test_failure_preserving_disconnect_retains_failed_attempt_phase(self):
-        client = DeskFlowClient.__new__(DeskFlowClient)
+        client = ConduitClient.__new__(ConduitClient)
         client._connect_lock = threading.RLock()
         client._disconnecting = False
         client.control_network = NetworkClient("secret")
@@ -189,7 +189,7 @@ class FileLaneLifecycleTests(unittest.TestCase):
             def close(self):
                 self.closes += 1
 
-        client = DeskFlowClient.__new__(DeskFlowClient)
+        client = ConduitClient.__new__(ConduitClient)
         client._connect_lock = threading.RLock()
         client._disconnecting = False
         client._connect_callback_done = False
@@ -262,7 +262,7 @@ class FileLaneLifecycleTests(unittest.TestCase):
                 self.disconnects += 1
                 self.sock = None
 
-        client = DeskFlowClient.__new__(DeskFlowClient)
+        client = ConduitClient.__new__(ConduitClient)
         client._connect_lock = threading.RLock()
         client._connect_callback_done = False
         client._connect_callback = lambda success, error: results.append((success, error))
@@ -333,7 +333,7 @@ class FileLaneLifecycleTests(unittest.TestCase):
                 self.closes += 1
                 self.sock = None
 
-        client = DeskFlowClient.__new__(DeskFlowClient)
+        client = ConduitClient.__new__(ConduitClient)
         client._connect_lock = threading.RLock()
         client._connect_callback_done = False
         results = []
@@ -364,7 +364,7 @@ class FileLaneLifecycleTests(unittest.TestCase):
         self.assertEqual(client.file_network.closes, 1)
 
     def test_server_offers_one_use_file_session_over_control_lane(self):
-        server = DeskFlowServer.__new__(DeskFlowServer)
+        server = ConduitServer.__new__(ConduitServer)
         server.control_network = RecordingControl()
         server.file_network = RecordingFileServer()
         server.data_network = SimpleNamespace(session_id="logical-session")
@@ -378,7 +378,7 @@ class FileLaneLifecycleTests(unittest.TestCase):
         self.assertEqual(server.file_network.offers, [("file-token", "logical-session")])
 
     def test_client_binds_offer_to_live_control_certificate(self):
-        client = DeskFlowClient.__new__(DeskFlowClient)
+        client = ConduitClient.__new__(ConduitClient)
         client.host = "192.0.2.1"
         client.control_network = RecordingControl()
         client.file_network = RecordingFileClient()

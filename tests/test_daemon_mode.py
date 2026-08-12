@@ -1,10 +1,10 @@
 import unittest
 from unittest.mock import MagicMock
 
-from app.gui import DeskFlowGUI
+from app.gui import ConduitGUI
 
 
-class MockDeskFlowGUI(DeskFlowGUI):
+class MockConduitGUI(ConduitGUI):
     def __init__(self):
         self._window_state = "normal"
         self._is_reloading = False
@@ -58,7 +58,7 @@ class MockDeskFlowGUI(DeskFlowGUI):
 
 class DaemonModeTests(unittest.TestCase):
     def setUp(self):
-        self.gui = MockDeskFlowGUI()
+        self.gui = MockConduitGUI()
 
     def test_toggle_daemon_mode_hides_and_restores_locally(self):
         # Initial state is visible ("normal")

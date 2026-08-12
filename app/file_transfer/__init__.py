@@ -1,2 +1,2 @@
-"""Secure, queued file-transfer primitives for DeskFlow."""
+"""Secure, queued file-transfer primitives for Conduit."""
 

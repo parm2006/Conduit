@@ -6,7 +6,7 @@ from unittest.mock import patch
 from app.firewall import FirewallInspection, FirewallState
 from app.firewall_onboarding import FirewallSetupOutcome, FirewallSetupResult
 from app.gui import (
-    DeskFlowGUI, _firewall_conflict_text, configure_main_window, parse_port,
+    ConduitGUI, _firewall_conflict_text, configure_main_window, parse_port,
     restore_saved_role,
     write_status_message,
 )
@@ -205,7 +205,7 @@ class SuccessfulRoleTimingTests(unittest.TestCase):
     def test_successful_connection_refreshes_saved_host_dropdown_and_default(self):
         with tempfile.TemporaryDirectory() as directory:
             source = object()
-            gui = DeskFlowGUI.__new__(DeskFlowGUI)
+            gui = ConduitGUI.__new__(ConduitGUI)
             gui.client = source
             gui.preferences = UserPreferences(Path(directory))
             gui.known_hosts = []
@@ -237,7 +237,7 @@ class SuccessfulRoleTimingTests(unittest.TestCase):
     def test_failed_connection_does_not_save_attempted_host(self):
         with tempfile.TemporaryDirectory() as directory:
             source = object()
-            gui = DeskFlowGUI.__new__(DeskFlowGUI)
+            gui = ConduitGUI.__new__(ConduitGUI)
             gui.client = source
             gui.preferences = UserPreferences(Path(directory))
             gui.known_hosts = []
@@ -260,7 +260,7 @@ class SuccessfulRoleTimingTests(unittest.TestCase):
     def test_every_server_start_reinspects_firewall(self):
         class Onboarding:
             busy = False
-            executable_path = r"C:\Program Files\DeskFlow\DeskFlow.exe"
+            executable_path = r"C:\Program Files\Conduit\Conduit.exe"
 
             def __init__(self):
                 self.calls = 0
@@ -278,7 +278,7 @@ class SuccessfulRoleTimingTests(unittest.TestCase):
 
         onboarding = Onboarding()
         starts = []
-        gui = DeskFlowGUI.__new__(DeskFlowGUI)
+        gui = ConduitGUI.__new__(ConduitGUI)
         gui.server_port_entry = ValueWidget("28903")
         gui.server_password_entry = ValueWidget("secret")
         gui.firewall_onboarding = onboarding
@@ -324,7 +324,7 @@ class SuccessfulRoleTimingTests(unittest.TestCase):
             def configure(self, **values):
                 self.values.update(values)
 
-        gui = DeskFlowGUI.__new__(DeskFlowGUI)
+        gui = ConduitGUI.__new__(ConduitGUI)
         gui.layout_btns = {
             position: LayoutButton()
             for position in ("top", "left", "right", "bottom")
@@ -348,7 +348,7 @@ class SuccessfulRoleTimingTests(unittest.TestCase):
             def configure(self, **values):
                 return None
 
-        gui = DeskFlowGUI.__new__(DeskFlowGUI)
+        gui = ConduitGUI.__new__(ConduitGUI)
         gui.layout_btns = {
             position: LayoutButton()
             for position in ("top", "left", "right", "bottom")
@@ -378,14 +378,14 @@ class SuccessfulRoleTimingTests(unittest.TestCase):
                 return self.value
 
         statuses = []
-        server_gui = DeskFlowGUI.__new__(DeskFlowGUI)
+        server_gui = ConduitGUI.__new__(ConduitGUI)
         server_gui.server_port_entry = Entry("not-a-port")
         server_gui.server_password_entry = Entry("secret")
         server_gui._set_status = lambda message, color, **kwargs: statuses.append((message, color))
 
         server_gui.start_server()
 
-        client_gui = DeskFlowGUI.__new__(DeskFlowGUI)
+        client_gui = ConduitGUI.__new__(ConduitGUI)
         client_gui.client_ip_entry = Entry("192.0.2.1")
         client_gui.client_port_entry = Entry("70000")
         client_gui.client_password_entry = Entry("secret")
@@ -437,7 +437,7 @@ class SuccessfulRoleTimingTests(unittest.TestCase):
         }
         for state, (label, action) in expected.items():
             with self.subTest(state=state):
-                gui = DeskFlowGUI.__new__(DeskFlowGUI)
+                gui = ConduitGUI.__new__(ConduitGUI)
                 gui.firewall_status_label = ConfigWidget()
                 gui.firewall_action_btn = ConfigWidget()
                 gui._render_firewall_inspection(
@@ -458,7 +458,7 @@ class SuccessfulRoleTimingTests(unittest.TestCase):
 
     def test_valid_port_edit_schedules_inspection_without_configuration(self):
         calls = []
-        gui = DeskFlowGUI.__new__(DeskFlowGUI)
+        gui = ConduitGUI.__new__(ConduitGUI)
         gui.server_port_entry = type(
             "Entry",
             (),
@@ -496,7 +496,7 @@ class SuccessfulRoleTimingTests(unittest.TestCase):
                 class Onboarding:
                     busy = False
                     executable_path = (
-                        r"C:\Program Files\DeskFlow\DeskFlow.exe"
+                        r"C:\Program Files\Conduit\Conduit.exe"
                     )
                     inspection = FirewallInspection(
                         FirewallState.MISSING,
@@ -529,7 +529,7 @@ class SuccessfulRoleTimingTests(unittest.TestCase):
                             on_complete(result)
                         return result
 
-                gui = DeskFlowGUI.__new__(DeskFlowGUI)
+                gui = ConduitGUI.__new__(ConduitGUI)
                 gui.server_port_entry = Entry("5000")
                 gui.server_password_entry = Entry("secret")
                 gui.firewall_onboarding = Onboarding()
@@ -596,7 +596,7 @@ class SuccessfulRoleTimingTests(unittest.TestCase):
                     on_complete(result)
                 return result
 
-        gui = DeskFlowGUI.__new__(DeskFlowGUI)
+        gui = ConduitGUI.__new__(ConduitGUI)
         gui.server_port_entry = Entry("28903")
         gui.server_password_entry = Entry("latched-secret")
         gui.firewall_onboarding = Onboarding()
@@ -627,7 +627,7 @@ class SuccessfulRoleTimingTests(unittest.TestCase):
 
         class Onboarding:
             busy = False
-            executable_path = r"C:\Program Files\DeskFlow\DeskFlow.exe"
+            executable_path = r"C:\Program Files\Conduit\Conduit.exe"
             inspection = FirewallInspection(
                 FirewallState.CONFLICT,
                 "block_conflict",
@@ -637,7 +637,7 @@ class SuccessfulRoleTimingTests(unittest.TestCase):
                 return None
 
         starts = []
-        gui = DeskFlowGUI.__new__(DeskFlowGUI)
+        gui = ConduitGUI.__new__(ConduitGUI)
         gui.server_port_entry = Entry("28903")
         gui.server_password_entry = Entry("secret")
         gui.firewall_onboarding = Onboarding()
@@ -656,7 +656,7 @@ class SuccessfulRoleTimingTests(unittest.TestCase):
     def test_client_role_is_saved_only_after_successful_full_connection(self):
         roles = []
         source = object()
-        gui = DeskFlowGUI.__new__(DeskFlowGUI)
+        gui = ConduitGUI.__new__(ConduitGUI)
         gui.client = source
         gui.preferences = type("Preferences", (), {"save_role": lambda self, role: roles.append(role)})()
         gui.client_connect_btn = Button()
@@ -673,7 +673,7 @@ class SuccessfulRoleTimingTests(unittest.TestCase):
     def test_unwritable_preferences_do_not_break_a_successful_connection(self):
         statuses = []
         source = object()
-        gui = DeskFlowGUI.__new__(DeskFlowGUI)
+        gui = ConduitGUI.__new__(ConduitGUI)
         gui.client = source
         gui.preferences = type(
             "Preferences", (),
@@ -724,7 +724,7 @@ class SuccessfulRoleTimingTests(unittest.TestCase):
             def stop(self):
                 return None
 
-        gui = DeskFlowGUI.__new__(DeskFlowGUI)
+        gui = ConduitGUI.__new__(ConduitGUI)
         gui.server_port_entry = Entry("5000")
         gui.server_password_entry = Entry("secret")
         gui.server = None
@@ -742,7 +742,7 @@ class SuccessfulRoleTimingTests(unittest.TestCase):
         gui.server_stop_btn = Button()
         gui.preferences = type("Preferences", (), {"save_role": lambda self, role: roles.append(role)})()
 
-        with patch("app.gui.DeskFlowServer", return_value=Server(False)):
+        with patch("app.gui.ConduitServer", return_value=Server(False)):
             gui.start_server()
         self.assertEqual(roles, [])
         self.assertEqual(
@@ -755,7 +755,7 @@ class SuccessfulRoleTimingTests(unittest.TestCase):
         )
 
         with (
-            patch("app.gui.DeskFlowServer", return_value=Server(True)),
+            patch("app.gui.ConduitServer", return_value=Server(True)),
             patch("app.gui.certificate_fingerprint", return_value="ab" * 32),
         ):
             gui.start_server()
@@ -812,7 +812,7 @@ class FixedWindowConfigurationTests(unittest.TestCase):
 
         configure_main_window(window)
 
-        self.assertEqual(window.title_value, "DeskFlow 5.1")
+        self.assertEqual(window.title_value, "Conduit 5.1")
         self.assertEqual(window.geometry_value, "400x650")
         self.assertEqual(window.resizable_value, (False, False))
 

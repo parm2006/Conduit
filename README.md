@@ -1,6 +1,6 @@
-# DeskFlow v5.1
+# Conduit v5.1
 
-DeskFlow is a Windows wireless KVM for sharing a mouse, keyboard, rich
+Conduit is a Windows wireless KVM for sharing a mouse, keyboard, rich
 clipboard, and Explorer file pastes between two PCs on the same local network.
 
 ## Features
@@ -13,20 +13,20 @@ clipboard, and Explorer file pastes between two PCs on the same local network.
 - Synchronized background mode and connection recovery hotkeys.
 - Windows Firewall status, repair, and informed Server-mode setup.
 
-## Use DeskFlow
+## Use Conduit
 
-1. Run `DeskFlow.exe` on both Windows 10 or 11 PCs.
+1. Run `Conduit.exe` on both Windows 10 or 11 PCs.
 2. On the host, choose the client screen edge and select **Start Server**.
 3. On the client, enter the host IP, port, and displayed password, then select
    **Connect**.
 4. Compare and approve the pairing code on both PCs.
 
 The default Server uses TCP ports 28903-28905. Its managed firewall rule applies
-only to the exact DeskFlow executable, on Private networks, from the local
+only to the exact Conduit executable, on Private networks, from the local
 subnet. It does not enable Public-network access or change the Windows network
 profile.
 
-When starting a Server without a matching rule, DeskFlow offers **Configure
+When starting a Server without a matching rule, Conduit offers **Configure
 and start**, **Start without setup**, and **Cancel**. Starting without setup
 keeps a warning visible because Windows may block other PCs.
 
@@ -37,16 +37,16 @@ firewall decision before it copies files. Choosing No cancels installation.
 Closing the consent page, declining elevation, using silent mode, or failing
 firewall verification also cancels and rolls back the installation.
 
-Running a new installer automatically replaces a complete packaged DeskFlow
-installation after consent. DeskFlow must be closed first. Installer-owned
+Running a new installer automatically replaces a complete packaged Conduit
+installation after consent. Conduit must be closed first. Installer-owned
 partial remnants can be cleaned and replaced, while unknown files or folders
-in `C:\Program Files\DeskFlow` stop setup without being overwritten. Local
-identity, peer trust, and preferences under `%LOCALAPPDATA%\DeskFlow` are
+in `C:\Program Files\Conduit` stop setup without being overwritten. Local
+identity, peer trust, and preferences under `%LOCALAPPDATA%\Conduit` are
 preserved.
 
 The installed rule is restricted to TCP ports 28903-28905, Private networks,
-the local subnet, and the installed `DeskFlow.exe`. Uninstall removes the
-DeskFlow firewall rule before removing the executable. It never removes other
+the local subnet, and the installed `Conduit.exe`. Uninstall removes the
+Conduit firewall rule before removing the executable. It never removes other
 applications' firewall rules.
 
 Local artifacts are unsigned unless the release owner supplies a trusted
@@ -62,9 +62,9 @@ python -m venv venv
 ```
 
 If firewall setup is requested from a source launch, Windows can scope the
-rule only to `python.exe`, not to this script alone. DeskFlow shows that
+rule only to `python.exe`, not to this script alone. Conduit shows that
 development-mode limitation before requesting elevation. Packaged releases
-use a DeskFlow-specific executable rule.
+use a Conduit-specific executable rule.
 
 ## Build a Windows release
 
@@ -77,7 +77,7 @@ powershell -ExecutionPolicy Bypass -File scripts\build_release.ps1
 The build removes old release outputs before compilation so a failed build
 cannot leave a stale executable or installer looking current. It then runs all
 tests and whitespace checks, generates dependency notices, builds the one-file
-`DeskFlow.exe`, smoke-tests the restricted firewall helper, and builds the NSIS
+`Conduit.exe`, smoke-tests the restricted firewall helper, and builds the NSIS
 installer. The NSIS source rejects direct compilation, so a new installer
 cannot silently embed a stale executable. The script does not download NSIS or
 other tools. You can pass `-MakensisPath` when NSIS is not on `PATH`.
@@ -87,17 +87,24 @@ Optional signing accepts an explicit `-SigningToolPath` and
 
 ## License and source
 
-DeskFlow is distributed under GPL-3.0. The installer includes `LICENSE`,
+Conduit is distributed under GPL-3.0. The installer includes `LICENSE`,
 generated third-party notices, and a source link. Corresponding source is
-available at https://github.com/parm2006/DeskFlow.
+available at https://github.com/parm2006/Conduit.
 
 The generated notices use the installed distributions' own metadata and
 license files and stop the build when required license information is missing.
 This release process supports compliance review but is not formal legal
 advice.
 
+## Contributing
+
+Bug reports, feature ideas, documentation improvements, tests, and code
+contributions are welcome. Read [CONTRIBUTING.md](CONTRIBUTING.md) before
+opening an issue or pull request. Report suspected vulnerabilities privately
+as described in [SECURITY.md](SECURITY.md).
+
 ## Hotkeys
 
 - `Ctrl + Alt + Shift + B`: toggle synchronized background mode.
 - `Ctrl + Alt + Shift + R`: reconnect and restore local control.
-- `Ctrl + Alt + Shift + Escape`: close DeskFlow on both connected machines.
+- `Ctrl + Alt + Shift + Escape`: close Conduit on both connected machines.

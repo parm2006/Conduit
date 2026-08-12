@@ -1,4 +1,4 @@
-"""Opt-in Explorer/Desktop smoke test for DeskFlow's virtual-file provider."""
+"""Opt-in Explorer/Desktop smoke test for Conduit's virtual-file provider."""
 
 import time
 
@@ -12,8 +12,8 @@ def main():
     try:
         files = VirtualFileSet(
             [
-                VirtualFile("DeskFlow virtual one.txt", 21, lambda: b"DeskFlow virtual one\n"),
-                VirtualFile("DeskFlow virtual two.txt", 21, lambda: b"DeskFlow virtual two\n"),
+                VirtualFile("Conduit virtual one.txt", 21, lambda: b"Conduit virtual one\n"),
+                VirtualFile("Conduit virtual two.txt", 21, lambda: b"Conduit virtual two\n"),
             ]
         )
         owner = publish_virtual_files(files)

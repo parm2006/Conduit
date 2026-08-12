@@ -457,13 +457,13 @@ class FileClipboardAvailabilityTests(unittest.TestCase):
     def test_injected_sequence_is_read_before_user_can_copy_after_close(self):
         current_sequence = [10]
 
-        def deskflow_publishes():
+        def conduit_publishes():
             current_sequence[0] = 11
 
         def user_copies_after_close():
             current_sequence[0] = 12
 
-        adapter = FakePublishingAdapter(on_publish=deskflow_publishes)
+        adapter = FakePublishingAdapter(on_publish=conduit_publishes)
         handler = ClipboardHandler(
             lambda snapshot: None,
             clipboard_adapter=adapter,

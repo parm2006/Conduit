@@ -74,11 +74,11 @@ def _actionable_connection_error(error, role):
         )
     if isinstance(error, ssl.SSLError):
         return SecureConnectionFailed(
-            "Could not establish a secure connection. Restart DeskFlow on both computers and try again."
+            "Could not establish a secure connection. Restart Conduit on both computers and try again."
         )
     if isinstance(error, (ConnectionRefusedError, socket.gaierror, OSError)):
         return ServerUnavailable(
-            "Could not reach the server. Check its address, port, and that DeskFlow is running."
+            "Could not reach the server. Check its address, port, and that Conduit is running."
         )
     if isinstance(error, SessionAuthenticationError) and role != "control":
         return SecureLaneAuthenticationFailed(
@@ -98,7 +98,7 @@ class ConnectionPhase(str, Enum):
 
 
 def _tls_client_context():
-    # DeskFlow authenticates its self-signed peer with an explicit certificate
+    # Conduit authenticates its self-signed peer with an explicit certificate
     # fingerprint, so loading the platform CA store is unnecessary.
     context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
     context.check_hostname = False
@@ -241,10 +241,10 @@ class NetworkNode:
                     if self.sock is conn and self._generation == generation:
                         self._last_received = time.monotonic()
                 event_type = message.get("type")
-                if event_type == "__deskflow_heartbeat__":
-                    self.send_message({"type": "__deskflow_heartbeat_ack__"})
+                if event_type == "__conduit_heartbeat__":
+                    self.send_message({"type": "__conduit_heartbeat_ack__"})
                     continue
-                if event_type == "__deskflow_heartbeat_ack__":
+                if event_type == "__conduit_heartbeat_ack__":
                     continue
                 if isinstance(event_type, str) and event_type:
                     self.trigger_callbacks(event_type, message)
@@ -268,7 +268,7 @@ class NetworkNode:
             if time.monotonic() - last_received > self._heartbeat_timeout:
                 self._disconnect_socket(conn, generation)
                 return
-            if not self.send_message({"type": "__deskflow_heartbeat__"}):
+            if not self.send_message({"type": "__conduit_heartbeat__"}):
                 return
 
     def _disconnect_socket(self, conn, generation):

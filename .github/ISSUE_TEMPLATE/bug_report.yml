@@ -1,0 +1,87 @@
+name: Bug report
+description: Report a reproducible problem with Conduit
+title: "[Bug]: "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for helping improve Conduit. Search existing issues before filing a new report.
+
+        **Do not report vulnerabilities or include passwords, keys, certificates, pairing data, private clipboard contents, or other sensitive information here.** Use [private vulnerability reporting](https://github.com/parm2006/Conduit/security/advisories/new) instead.
+  - type: input
+    id: version
+    attributes:
+      label: Conduit version
+      description: Find the version in the window title or release name.
+      placeholder: "5.1"
+    validations:
+      required: true
+  - type: dropdown
+    id: installation
+    attributes:
+      label: Installation method
+      options:
+        - GitHub release installer
+        - Standalone release executable
+        - Run from source
+        - Locally built executable or installer
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: List the Windows version, Conduit role, display layout, and relevant hardware for both PCs.
+      placeholder: |
+        Server: Windows 11 24H2, two 2560x1440 displays
+        Client: Windows 10 22H2, one 1920x1080 display
+    validations:
+      required: true
+  - type: textarea
+    id: description
+    attributes:
+      label: Problem
+      description: Describe the problem and when it occurs.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Start Conduit as server on ...
+        2. Connect the client ...
+        3. Move the pointer ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+    validations:
+      required: true
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Sanitized diagnostics
+      description: Add relevant logs, screenshots, or recordings after removing sensitive information.
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Submission checks
+      options:
+        - label: I searched existing issues for this problem.
+          required: true
+        - label: I removed sensitive information from this report and its attachments.
+          required: true
+        - label: This is a public bug report, not a security vulnerability.
+          required: true

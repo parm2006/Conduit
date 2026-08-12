@@ -85,7 +85,7 @@ class FirewallOnboardingTests(unittest.TestCase):
             backend=backend,
             elevation_runner=runner or (lambda port: EXIT_SUCCESS),
             repair_runner=repair_runner,
-            executable_path=r"C:\Program Files\DeskFlow\DeskFlow.exe",
+            executable_path=r"C:\Program Files\Conduit\Conduit.exe",
             scheduler=lambda callback: calls.append(callback) or callback(),
         )
         return onboarding, backend, calls
@@ -330,7 +330,7 @@ class FirewallOnboardingTests(unittest.TestCase):
             ),
             elevation_runner=lambda port: runner_calls.append(port)
             or EXIT_SUCCESS,
-            executable_path=r"C:\Program Files\DeskFlow\DeskFlow.exe",
+            executable_path=r"C:\Program Files\Conduit\Conduit.exe",
             scheduler=lambda callback: scheduled.append(callback),
             thread_factory=lambda **kwargs: threads.append(
                 DeferredThread(**kwargs)

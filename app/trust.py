@@ -23,7 +23,7 @@ class PeerId:
 
 class PeerTrustStore:
     def __init__(self, root=None, protector=None):
-        base = Path(os.environ.get("LOCALAPPDATA", Path.home())) / "DeskFlow" / "peers"
+        base = Path(os.environ.get("LOCALAPPDATA", Path.home())) / "Conduit" / "peers"
         self.root = Path(root or base).resolve()
         self.protector = protector or WindowsDataProtector()
 

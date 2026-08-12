@@ -5,7 +5,7 @@ from unittest.mock import patch
 import app.firewall as firewall
 
 from app.firewall import (
-    DESKFLOW_FIREWALL_RULE_NAME,
+    CONDUIT_FIREWALL_RULE_NAME,
     FirewallInspection,
     FirewallRuleSpec,
     FirewallState,
@@ -17,7 +17,7 @@ from app.firewall import (
 
 def matching_rule(spec, **changes):
     values = {
-        "name": DESKFLOW_FIREWALL_RULE_NAME,
+        "name": CONDUIT_FIREWALL_RULE_NAME,
         "enabled": True,
         "direction": "inbound",
         "action": "allow",
@@ -48,8 +48,8 @@ class FirewallRuleSpecTests(unittest.TestCase):
         self.assertEqual(result, actual_image)
 
     def test_accepts_boundary_base_ports_and_derives_three_port_range(self):
-        low = FirewallRuleSpec(r"C:\Program Files\DeskFlow\DeskFlow.exe", 1)
-        high = FirewallRuleSpec(r"C:\Program Files\DeskFlow\DeskFlow.exe", 65533)
+        low = FirewallRuleSpec(r"C:\Program Files\Conduit\Conduit.exe", 1)
+        high = FirewallRuleSpec(r"C:\Program Files\Conduit\Conduit.exe", 65533)
 
         self.assertEqual(low.local_ports, "1-3")
         self.assertEqual(high.local_ports, "65533-65535")
@@ -60,17 +60,17 @@ class FirewallRuleSpecTests(unittest.TestCase):
         for value in invalid:
             with self.subTest(value=value):
                 with self.assertRaises(ValueError):
-                    FirewallRuleSpec(r"C:\DeskFlow.exe", value)
+                    FirewallRuleSpec(r"C:\Conduit.exe", value)
 
     def test_rejects_empty_or_relative_executable_paths(self):
-        for value in ("", "DeskFlow.exe", r".\DeskFlow.exe"):
+        for value in ("", "Conduit.exe", r".\Conduit.exe"):
             with self.subTest(value=value):
                 with self.assertRaises(ValueError):
                     FirewallRuleSpec(value, 5000)
 
     def test_identifies_source_python_as_development_scope(self):
         packaged = FirewallRuleSpec(
-            r"C:\Program Files\DeskFlow\DeskFlow.exe",
+            r"C:\Program Files\Conduit\Conduit.exe",
             5000,
         )
         source = FirewallRuleSpec(r"C:\Python314\python.exe", 5000)
@@ -88,7 +88,7 @@ class FirewallRuleSpecTests(unittest.TestCase):
 class FirewallRuleComparisonTests(unittest.TestCase):
     def setUp(self):
         self.spec = FirewallRuleSpec(
-            r"C:\Program Files\DeskFlow\DeskFlow.exe",
+            r"C:\Program Files\Conduit\Conduit.exe",
             5000,
         )
 
@@ -117,7 +117,7 @@ class FirewallRuleComparisonTests(unittest.TestCase):
     def test_executable_comparison_is_normalized_and_case_insensitive(self):
         observed = matching_rule(
             self.spec,
-            application_name=r"c:\program files\deskflow\DESKFLOW.EXE",
+            application_name=r"c:\program files\conduit\CONDUIT.EXE",
         )
 
         self.assertEqual(
@@ -133,7 +133,7 @@ class FirewallRuleComparisonTests(unittest.TestCase):
             "action": "block",
             "protocol": "udp",
             "local_ports": "5000-5003",
-            "application_name": r"C:\Other\DeskFlow.exe",
+            "application_name": r"C:\Other\Conduit.exe",
             "profiles": frozenset({"private", "public"}),
             "remote_addresses": frozenset({"any"}),
             "edge_traversal": True,
@@ -150,7 +150,7 @@ class FirewallRuleComparisonTests(unittest.TestCase):
 class EffectiveFirewallContractTests(unittest.TestCase):
     def setUp(self):
         self.spec = FirewallRuleSpec(
-            r"C:\Program Files\DeskFlow\DeskFlow.exe",
+            r"C:\Program Files\Conduit\Conduit.exe",
             5000,
         )
 
@@ -201,7 +201,7 @@ class EffectiveFirewallContractTests(unittest.TestCase):
             {"action": "allow"},
             {"protocol": "udp"},
             {"local_ports": "4990-4999"},
-            {"application_name": r"C:\Other\DeskFlow.exe"},
+            {"application_name": r"C:\Other\Conduit.exe"},
             {"profiles": frozenset({"public"})},
             {"remote_addresses": frozenset({"127.0.0.1", "::1"})},
         )

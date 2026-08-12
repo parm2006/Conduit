@@ -15,7 +15,7 @@ class CompressionTests(unittest.TestCase):
         self.assertFalse(should_compress("random.bin", 2_000_000, os.urandom(262_144)))
 
     def test_chunk_round_trip_is_bounded_and_preserves_original_bytes(self):
-        original = b"DeskFlow" * 10_000
+        original = b"Conduit" * 10_000
         encoded = encode_chunk(original, compress=True)
 
         self.assertTrue(encoded.compressed)

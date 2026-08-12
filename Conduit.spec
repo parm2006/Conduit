@@ -14,7 +14,7 @@ from app.version import FILE_VERSION, FILE_VERSION_STRING, PRODUCT_VERSION
 
 ASSETS = ROOT / "app" / "assets"
 NOTICES = ROOT / "build" / "THIRD_PARTY_NOTICES.txt"
-VERSION_FILE = ROOT / "build" / "DeskFlow-version.txt"
+VERSION_FILE = ROOT / "build" / "Conduit-version.txt"
 VERSION_FILE.parent.mkdir(parents=True, exist_ok=True)
 VERSION_FILE.write_text(
     f"""VSVersionInfo(
@@ -33,13 +33,13 @@ VERSION_FILE.write_text(
       StringTable(
         '040904B0',
         [
-          StringStruct('CompanyName', 'DeskFlow contributors'),
-          StringStruct('FileDescription', 'DeskFlow'),
+          StringStruct('CompanyName', 'Conduit contributors'),
+          StringStruct('FileDescription', 'Conduit'),
           StringStruct('FileVersion', '{FILE_VERSION_STRING}'),
-          StringStruct('InternalName', 'DeskFlow'),
-          StringStruct('LegalCopyright', 'Copyright (C) 2026 DeskFlow contributors'),
-          StringStruct('OriginalFilename', f'DeskFlow-v{PRODUCT_VERSION}.exe'),
-          StringStruct('ProductName', 'DeskFlow'),
+          StringStruct('InternalName', 'Conduit'),
+          StringStruct('LegalCopyright', 'Copyright (C) 2026 Conduit contributors'),
+          StringStruct('OriginalFilename', f'Conduit-v{PRODUCT_VERSION}.exe'),
+          StringStruct('ProductName', 'Conduit'),
           StringStruct('ProductVersion', f'{PRODUCT_VERSION}')
         ]
       )
@@ -91,7 +91,7 @@ exe = EXE(
     a.binaries,
     a.datas,
     [],
-    name=f"DeskFlow-v{PRODUCT_VERSION}",
+    name=f"Conduit-v{PRODUCT_VERSION}",
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
