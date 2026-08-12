@@ -52,9 +52,9 @@ class FakeDistribution:
 
 class ReleaseMetadataTests(unittest.TestCase):
     def test_product_and_tool_metadata_is_canonical(self):
-        self.assertEqual(PRODUCT_VERSION, "4.3s")
-        self.assertEqual(FILE_VERSION, (4, 3, 0, 0))
-        self.assertEqual(FILE_VERSION_STRING, "4.3.0.0")
+        self.assertEqual(PRODUCT_VERSION, "5.1")
+        self.assertEqual(FILE_VERSION, (5, 1, 0, 0))
+        self.assertEqual(FILE_VERSION_STRING, "5.1.0.0")
         self.assertEqual(SOURCE_URL, "https://github.com/parm2006/DeskFlow")
         for value in (
             PYINSTALLER_LICENSE_URL,
@@ -136,7 +136,7 @@ class PyInstallerSpecTests(unittest.TestCase):
         spec = (self.root / "DeskFlow.spec").read_text(encoding="utf-8")
         required = (
             "run.py",
-            "name=\"DeskFlow\"",
+            'name=f"DeskFlow-v{PRODUCT_VERSION}"',
             "console=False",
             "app_icon.ico",
             "app/assets",
@@ -190,7 +190,7 @@ class NsisInstallerContractTests(unittest.TestCase):
         self.assertIn("disable only that exact executable", self.script)
         self.assertLess(
             self.script.index("Page custom FirewallConsentPage"),
-            self.script.index('File "..\\dist\\DeskFlow.exe"'),
+            self.script.index('File "/oname=DeskFlow.exe" "..\\dist\\DeskFlow-v'),
         )
         self.assertIn("Function FirewallConsentNo", self.script)
         self.assertIn("!define MUI_CUSTOMFUNCTION_ABORT OnUserAbort", self.script)
@@ -397,7 +397,7 @@ class NsisInstallerContractTests(unittest.TestCase):
             'FindFirst $2 $3 "$INSTDIR\\*"', old_uninstall
         )
         verify_empty = section.index("upgrade_directory_not_empty")
-        copy_new = section.index('File "..\\dist\\DeskFlow.exe"')
+        copy_new = section.index('File "/oname=DeskFlow.exe" "..\\dist\\DeskFlow-v')
 
         self.assertLess(prepare, old_uninstall)
         self.assertLess(old_uninstall, cleanup_old_install)

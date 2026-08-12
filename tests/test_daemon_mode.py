@@ -23,6 +23,7 @@ class MockDeskFlowGUI(DeskFlowGUI):
         self.deiconify_calls = 0
         self.lift_calls = 0
         self.focus_force_calls = 0
+        self.close_calls = 0
 
     def after(self, delay, func):
         if delay == 0:
@@ -47,6 +48,9 @@ class MockDeskFlowGUI(DeskFlowGUI):
 
     def hide_overlay(self):
         pass
+
+    def on_close(self):
+        self.close_calls += 1
 
     def _set_status(self, message, color="gray", white_text=None, show_ip=None):
         pass
@@ -91,15 +95,56 @@ class DaemonModeTests(unittest.TestCase):
         self.gui._on_remote_daemon_mode({'hidden': False})
         self.assertEqual(self.gui._window_state, "normal")
 
-    def test_emergency_exit_restores_visibility_when_hidden(self):
-        self.gui._window_state = "withdrawn"
+    def test_emergency_exit_notifies_server_peer_then_closes_local_gui(self):
+        self.gui.client = None
+        self.gui.server.control_connected = True
+        self.gui._on_emergency_exit_global()
+
+        self.gui.server.prepare_app_shutdown.assert_called_once_with()
+        self.gui.server.control_network.send_message.assert_called_once_with(
+            {'type': 'shutdown_app'}
+        )
+        self.assertEqual(self.gui.close_calls, 1)
+
+    def test_emergency_exit_notifies_client_peer_then_closes_local_gui(self):
+        self.gui.server = None
+        self.gui.client.control_connected = True
 
         self.gui._on_emergency_exit_global()
 
-        self.gui.server._on_emergency_exit.assert_called_once()
-        self.gui.client.disconnect.assert_called_once()
-        self.assertEqual(self.gui._window_state, "normal")
-        self.assertEqual(self.gui.deiconify_calls, 1)
+        self.gui.client.prepare_app_shutdown.assert_called_once_with()
+        self.gui.client.control_network.send_message.assert_called_once_with(
+            {'type': 'shutdown_app'}
+        )
+        self.assertEqual(self.gui.close_calls, 1)
+
+    def test_remote_shutdown_closes_without_echoing(self):
+        self.gui.server.control_connected = True
+
+        self.gui._on_remote_app_shutdown({})
+
+        self.gui.server.control_network.send_message.assert_not_called()
+        self.assertEqual(self.gui.close_calls, 1)
+
+    def test_duplicate_shutdown_requests_close_once(self):
+        self.gui.server.control_connected = True
+
+        self.gui._on_emergency_exit_global()
+        self.gui._on_emergency_exit_global()
+        self.gui._on_remote_app_shutdown({})
+
+        self.gui.server.control_network.send_message.assert_called_once_with(
+            {'type': 'shutdown_app'}
+        )
+        self.assertEqual(self.gui.close_calls, 1)
+
+    def test_emergency_exit_without_peer_closes_local_gui(self):
+        self.gui.server = None
+        self.gui.client = None
+
+        self.gui._on_emergency_exit_global()
+
+        self.assertEqual(self.gui.close_calls, 1)
 
     def test_reload_connection_maintains_invisible_state(self):
         self.gui._window_state = "withdrawn"

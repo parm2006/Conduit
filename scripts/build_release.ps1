@@ -8,9 +8,9 @@ $ErrorActionPreference = "Stop"
 $RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $PythonPath = Join-Path $RepoRoot "venv\Scripts\python.exe"
 $PyInstallerPath = Join-Path $RepoRoot "venv\Scripts\pyinstaller.exe"
-$DeskFlowExecutable = Join-Path $RepoRoot "dist\DeskFlow.exe"
+$DeskFlowExecutable = Join-Path $RepoRoot "dist\DeskFlow-v5.1.exe"
 $InstallerScript = Join-Path $RepoRoot "installer\DeskFlow.nsi"
-$InstallerExecutable = Join-Path $RepoRoot "dist\DeskFlow-4.3s-Setup.exe"
+$InstallerExecutable = Join-Path $RepoRoot "dist\DeskFlow-v5.1-Setup.exe"
 $GitSafeDirectory = $RepoRoot -replace "\\", "/"
 
 function Invoke-Checked {

@@ -14,14 +14,14 @@ SetCompressor /SOLID lzma
 !define MUI_CUSTOMFUNCTION_ABORT OnUserAbort
 
 !define PRODUCT_NAME "DeskFlow"
-!define PRODUCT_VERSION "4.3s"
-!define FILE_VERSION "4.3.0.0"
+!define PRODUCT_VERSION "5.1"
+!define FILE_VERSION "5.1.0.0"
 !define SOURCE_URL "https://github.com/parm2006/DeskFlow"
 !define UNINSTALL_KEY \
   "Software\Microsoft\Windows\CurrentVersion\Uninstall\DeskFlow"
 
 Name "${PRODUCT_NAME} ${PRODUCT_VERSION}"
-OutFile "..\dist\DeskFlow-${PRODUCT_VERSION}-Setup.exe"
+OutFile "..\dist\DeskFlow-v${PRODUCT_VERSION}-Setup.exe"
 InstallDir "$PROGRAMFILES64\DeskFlow"
 Icon "..\app\assets\app_icon.ico"
 VIProductVersion "${FILE_VERSION}"
@@ -346,7 +346,7 @@ upgrade_ready:
   ${EndIf}
 
   SetOutPath "$INSTDIR"
-  File "..\dist\DeskFlow.exe"
+  File "/oname=DeskFlow.exe" "..\dist\DeskFlow-v${PRODUCT_VERSION}.exe"
   File "..\LICENSE"
   File "..\build\THIRD_PARTY_NOTICES.txt"
   ClearErrors

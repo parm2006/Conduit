@@ -1,5 +1,6 @@
 import customtkinter as ctk
 import logging
+import threading
 from pathlib import Path
 from tkinter import messagebox
 
@@ -373,6 +374,9 @@ class DeskFlowGUI(ctk.CTk):
         self.overlay = None
         self.overlay_active = False
         self._is_reloading = False
+        self._shutdown_lock = threading.Lock()
+        self._shutdown_started = False
+        self._close_started = False
         self.transfer_toast = TransferToast(self, self._cancel_transfer)
         self.pairing_approval = PairingApprovalController(
             self,
@@ -762,12 +766,14 @@ class DeskFlowGUI(ctk.CTk):
             on_capture_start=self.show_overlay, 
             on_capture_stop=self.hide_overlay,
             on_transfer_status=self._on_transfer_status,
+            on_app_shutdown=self._on_emergency_exit_global,
         )
         self.server.control_network.register_callback('connected', self._on_server_client_connected)
         self.server.control_network.register_callback('disconnected', self._on_server_client_disconnected)
         self.server.control_network.register_callback('set_daemon_mode', self._on_remote_daemon_mode)
         self.server.control_network.register_callback('disconnect_notice', self._on_disconnect_notice)
         self.server.control_network.register_callback('reload_connection', self._on_remote_reload_connection)
+        self.server.control_network.register_callback('shutdown_app', self._on_remote_app_shutdown)
         screen_width = self.winfo_screenwidth()
         screen_height = self.winfo_screenheight()
         self.server.set_screen_size(screen_width, screen_height)
@@ -831,6 +837,7 @@ class DeskFlowGUI(ctk.CTk):
             password=password,
             on_transfer_status=self._on_transfer_status,
             fingerprint_approval=self._approve_fingerprint,
+            on_app_shutdown=self._on_emergency_exit_global,
         )
         self.client = client
         client.on_reload_callback = lambda: self.after(0, self.reconnect_client)
@@ -841,6 +848,7 @@ class DeskFlowGUI(ctk.CTk):
         client.control_network.register_callback('set_daemon_mode', self._on_remote_daemon_mode)
         client.control_network.register_callback('disconnect_notice', self._on_disconnect_notice)
         client.control_network.register_callback('reload_connection', self._on_remote_reload_connection)
+        client.control_network.register_callback('shutdown_app', self._on_remote_app_shutdown)
         screen_width = self.winfo_screenwidth()
         screen_height = self.winfo_screenheight()
         client.set_screen_size(screen_width, screen_height)
@@ -1034,14 +1042,53 @@ class DeskFlowGUI(ctk.CTk):
         self.after(0, _show)
 
     def _on_emergency_exit_global(self):
-        logger.warning("[GUI] Global emergency exit triggered (Ctrl+Shift+Alt+Escape). Restoring window visibility.")
+        logger.warning(
+            "[GUI] Global emergency exit triggered "
+            "(Ctrl+Shift+Alt+Escape). Closing DeskFlow on both peers."
+        )
+        self._coordinate_app_shutdown(notify_peer=True)
+
+    def _on_remote_app_shutdown(self, data):
+        logger.warning("Authenticated peer requested DeskFlow shutdown.")
+        self._coordinate_app_shutdown(notify_peer=False)
+
+    def _coordinate_app_shutdown(self, notify_peer):
+        lock = self.__dict__.get("_shutdown_lock")
+        if lock is None:
+            lock = threading.Lock()
+            self._shutdown_lock = lock
+        with lock:
+            if self.__dict__.get("_shutdown_started", False):
+                return False
+            self._shutdown_started = True
+
         self._is_reloading = False
-        if self.server:
-            self.server._on_emergency_exit()
-        if self.client:
-            self.client.disconnect()
-        self.hide_overlay()
-        self.ensure_visible()
+        endpoints = [endpoint for endpoint in (self.server, self.client) if endpoint]
+        for endpoint in endpoints:
+            try:
+                endpoint.prepare_app_shutdown()
+            except Exception as error:
+                logger.debug(
+                    "Could not prepare endpoint for application shutdown (%s)",
+                    error_name(error),
+                )
+        if notify_peer:
+            endpoint = None
+            if self.server and getattr(self.server, "control_connected", False):
+                endpoint = self.server
+            elif self.client and getattr(self.client, "control_connected", False):
+                endpoint = self.client
+            if endpoint is not None:
+                try:
+                    endpoint.control_network.send_message({"type": "shutdown_app"})
+                except Exception as error:
+                    logger.debug(
+                        "Could not notify peer of application shutdown (%s)",
+                        error_name(error),
+                    )
+
+        self.after(0, self.on_close)
+        return True
 
     def _on_reload_connection_global(self):
         logger.warning("[GUI] Global connection reload triggered (Ctrl+Shift+Alt+R). Maintaining current window visibility.")
@@ -1104,6 +1151,9 @@ class DeskFlowGUI(ctk.CTk):
         return False
 
     def on_close(self):
+        if self.__dict__.get("_close_started", False):
+            return
+        self._close_started = True
         self.pairing_approval.shutdown()
         monitor = self.__dict__.get('global_hotkey_monitor')
         if monitor is not None:

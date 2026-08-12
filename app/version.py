@@ -1,8 +1,8 @@
 """Canonical DeskFlow release metadata."""
 
 PRODUCT_NAME = "DeskFlow"
-PRODUCT_VERSION = "4.3s"
-FILE_VERSION = (4, 3, 0, 0)
+PRODUCT_VERSION = "5.1"
+FILE_VERSION = (5, 1, 0, 0)
 FILE_VERSION_STRING = ".".join(str(part) for part in FILE_VERSION)
 SOURCE_URL = "https://github.com/parm2006/DeskFlow"
 

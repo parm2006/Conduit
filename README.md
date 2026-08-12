@@ -1,4 +1,4 @@
-# DeskFlow v4.3s
+# DeskFlow v5.1
 
 DeskFlow is a Windows wireless KVM for sharing a mouse, keyboard, rich
 clipboard, and Explorer file pastes between two PCs on the same local network.
@@ -100,4 +100,4 @@ advice.
 
 - `Ctrl + Alt + Shift + B`: toggle synchronized background mode.
 - `Ctrl + Alt + Shift + R`: reconnect and restore local control.
-- `Ctrl + Alt + Shift + Escape`: emergency exit and restore local input.
+- `Ctrl + Alt + Shift + Escape`: close DeskFlow on both connected machines.

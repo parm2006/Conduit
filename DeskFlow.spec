@@ -38,9 +38,9 @@ VERSION_FILE.write_text(
           StringStruct('FileVersion', '{FILE_VERSION_STRING}'),
           StringStruct('InternalName', 'DeskFlow'),
           StringStruct('LegalCopyright', 'Copyright (C) 2026 DeskFlow contributors'),
-          StringStruct('OriginalFilename', 'DeskFlow.exe'),
+          StringStruct('OriginalFilename', f'DeskFlow-v{PRODUCT_VERSION}.exe'),
           StringStruct('ProductName', 'DeskFlow'),
-          StringStruct('ProductVersion', '{PRODUCT_VERSION}')
+          StringStruct('ProductVersion', f'{PRODUCT_VERSION}')
         ]
       )
     ]),
@@ -91,7 +91,7 @@ exe = EXE(
     a.binaries,
     a.datas,
     [],
-    name="DeskFlow",
+    name=f"DeskFlow-v{PRODUCT_VERSION}",
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,

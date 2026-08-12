@@ -23,6 +23,20 @@ class Coordinator:
 
 
 class EmergencyReleaseTests(unittest.TestCase):
+    def test_server_captured_emergency_hotkey_delegates_to_app_shutdown(self):
+        events = []
+        server = DeskFlowServer.__new__(DeskFlowServer)
+        server.pressed_keys = {"ctrl", "alt", "shift"}
+        server.forwarded_keys = {}
+        server.paste_coordinator = Coordinator()
+        server.control_network = RecordingNetwork()
+        server.on_app_shutdown = lambda: events.append("shutdown")
+
+        server.on_key_press({"type": "special", "value": "esc"})
+
+        self.assertEqual(events, ["shutdown"])
+        self.assertFalse(server.control_network.disconnected)
+
     def test_client_releases_injected_keys_before_requesting_switch_back(self):
         events = []
 

@@ -28,12 +28,13 @@ logger = logging.getLogger(__name__)
 class DeskFlowClient:
     def __init__(
         self, password, on_transfer_status=None, fingerprint_approval=None,
-        trust_store=None, lane_timeout=10.0,
+        trust_store=None, lane_timeout=10.0, on_app_shutdown=None,
     ):
         self.password = password
         self.trust_store = trust_store or PeerTrustStore()
         self.fingerprint_approval = fingerprint_approval
         self.lane_timeout = float(lane_timeout)
+        self.on_app_shutdown = on_app_shutdown
         self.control_network = NetworkClient(
             password, role='control', trust_store=self.trust_store,
             fingerprint_approval=fingerprint_approval,
@@ -62,7 +63,7 @@ class DeskFlowClient:
         self.input_handler = InputHandler()
         self._paste_route_lock = threading.RLock()
         self.global_hotkey_monitor = GlobalHotkeyMonitor(
-            on_emergency_exit=self.disconnect,
+            on_emergency_exit=self._request_app_shutdown,
             on_reload_connection=self.reload_connection,
         )
         self.is_active = False
@@ -115,6 +116,19 @@ class DeskFlowClient:
 
     def cancel_transfer(self, job_id):
         return self.transfer_cancellation.request(job_id)
+
+    def _request_app_shutdown(self):
+        self.prepare_app_shutdown()
+        callback = getattr(self, "on_app_shutdown", None)
+        if callback is not None:
+            callback()
+            return
+        self.disconnect()
+
+    def prepare_app_shutdown(self):
+        input_handler = getattr(self, "input_handler", None)
+        if input_handler is not None:
+            input_handler.release_all_injected_keys()
 
     def _get_paste_route_lock(self):
         lock = getattr(self, "_paste_route_lock", None)

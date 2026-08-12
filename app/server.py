@@ -26,10 +26,11 @@ from app.ports import DEFAULT_BASE_PORT
 logger = logging.getLogger(__name__)
 
 class DeskFlowServer:
-    def __init__(self, password, port=DEFAULT_BASE_PORT, layout_position='right', on_capture_start=None, on_capture_stop=None, on_transfer_status=None):
+    def __init__(self, password, port=DEFAULT_BASE_PORT, layout_position='right', on_capture_start=None, on_capture_stop=None, on_transfer_status=None, on_app_shutdown=None):
         self.layout_position = layout_position
         self.on_capture_start = on_capture_start
         self.on_capture_stop = on_capture_stop
+        self.on_app_shutdown = on_app_shutdown
         
         self.identity = load_identity()
         self.session_coordinator = SessionCoordinator(password)
@@ -64,7 +65,7 @@ class DeskFlowServer:
         self.input_handler = InputHandler()
         self._paste_route_lock = threading.RLock()
         self.global_hotkey_monitor = GlobalHotkeyMonitor(
-            on_emergency_exit=self._on_emergency_exit,
+            on_emergency_exit=self._request_app_shutdown,
             on_reload_connection=self._reload_connection,
         )
         
@@ -332,7 +333,7 @@ class DeskFlowServer:
         has_r = val in ('r', 'R')
         
         if has_ctrl and has_alt and has_shift and has_esc:
-            self._on_emergency_exit()
+            self._request_app_shutdown()
             return
 
         if has_ctrl and has_alt and has_shift and has_r:
@@ -397,6 +398,17 @@ class DeskFlowServer:
     def _on_emergency_exit(self):
         with self._get_paste_route_lock():
             return self._emergency_exit_locked()
+
+    def _request_app_shutdown(self):
+        self.prepare_app_shutdown()
+        callback = getattr(self, "on_app_shutdown", None)
+        if callback is not None:
+            callback()
+            return
+        self._on_emergency_exit()
+
+    def prepare_app_shutdown(self):
+        self._release_forwarded_keys()
 
     def _emergency_exit_locked(self):
         mouse_loc = "REMOTE CLIENT SCREEN" if getattr(self, "switching_to_client", False) else "LOCAL HOST SCREEN"
