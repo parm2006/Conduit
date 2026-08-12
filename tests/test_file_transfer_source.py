@@ -25,7 +25,7 @@ class SourceFileTests(unittest.TestCase):
             path = Path(directory) / "source.bin"
             path.write_bytes(b"original")
             changed = SourceFile.snapshot(path)
-            path.write_bytes(b"changed!")
+            path.write_bytes(b"changed-longer")
             with self.assertRaises(SourceChangedError):
                 list(changed.iter_chunks())
 

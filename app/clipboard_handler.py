@@ -14,19 +14,24 @@ class ClipboardHandler:
         self,
         on_clipboard_change,
         on_file_availability=None,
+        on_clipboard_offer=None,
         clipboard_adapter=None,
     ):
         self.on_clipboard_change = on_clipboard_change
         self.on_file_availability = on_file_availability
+        self.on_clipboard_offer = on_clipboard_offer
         self.clipboard_adapter = clipboard_adapter or WindowsClipboardAdapter()
         self.file_availability = None
         self._file_drop_format = win32clipboard.CF_HDROP
         self.last_sequence_num = 0
+        self.last_offer_sequence_num = 0
         self.is_running = False
         self.thread = None
         self.is_injecting = False
         self.last_sent_fingerprint = None
         self.last_injected_fingerprint = None
+        self._internal_change_depth = 0
+        self._internal_change_lock = threading.Lock()
 
     def start(self):
         self.is_running = True
@@ -34,7 +39,7 @@ class ClipboardHandler:
             self.last_sequence_num = win32clipboard.GetClipboardSequenceNumber()
         except:
             pass
-        self._update_file_availability()
+        self.refresh_offer()
         self.thread = threading.Thread(target=self._poll_clipboard, daemon=True)
         self.thread.start()
         logger.info("Rich Clipboard polling started (Native Zlib Compression)")
@@ -114,6 +119,7 @@ class ClipboardHandler:
                     time.sleep(0.1)
                     if injected_sequence is not None:
                         self.last_sequence_num = injected_sequence
+                        self.last_offer_sequence_num = injected_sequence
                 if publication_attempted:
                     self._update_file_availability()
             finally:
@@ -147,18 +153,79 @@ class ClipboardHandler:
                 time.sleep(0.1)
         return None
 
-    def _update_file_availability(self):
+    def _update_file_availability(
+        self, announce_current_file=False, notify=True
+    ):
         try:
             available = bool(
                 win32clipboard.IsClipboardFormatAvailable(win32clipboard.CF_HDROP)
             )
-        except Exception:
-            available = False
-        if available == self.file_availability:
-            return
+        except Exception as error:
+            logger.debug(
+                "Clipboard classification unavailable; sequence will retry (%s)",
+                error_name(error),
+            )
+            return None
+        availability_changed = available != self.file_availability
+        if not availability_changed and not (announce_current_file and available):
+            return available
         self.file_availability = available
-        if self.on_file_availability:
+        if notify and self.on_file_availability:
             self.on_file_availability(available)
+        return available
+
+    def begin_internal_change(self):
+        with self._internal_change_lock:
+            self._internal_change_depth += 1
+
+    def end_internal_change(self, suppress_current=True):
+        with self._internal_change_lock:
+            if self._internal_change_depth == 0:
+                return False
+            self._internal_change_depth -= 1
+            finished = self._internal_change_depth == 0
+        if not finished or not suppress_current:
+            return finished
+        try:
+            sequence = win32clipboard.GetClipboardSequenceNumber()
+        except Exception as error:
+            logger.debug(
+                "Internal clipboard sequence unavailable (%s)",
+                error_name(error),
+            )
+            return False
+        self.last_sequence_num = sequence
+        self.last_offer_sequence_num = sequence
+        self._update_file_availability(notify=False)
+        return True
+
+    def _internal_change_active(self):
+        with self._internal_change_lock:
+            return self._internal_change_depth > 0
+
+    def _announce_clipboard_offer(self, sequence, file_available):
+        if sequence == self.last_offer_sequence_num:
+            return False
+        self.last_offer_sequence_num = sequence
+        if self.on_clipboard_offer:
+            kind = "files" if file_available else "ordinary"
+            self.on_clipboard_offer(kind, sequence)
+        return True
+
+    def refresh_offer(self):
+        try:
+            sequence = win32clipboard.GetClipboardSequenceNumber()
+        except Exception as error:
+            logger.debug(
+                "Clipboard sequence unavailable during paste refresh (%s)",
+                error_name(error),
+            )
+            return None
+        file_available = self._update_file_availability()
+        if file_available is None:
+            return None
+        self._announce_clipboard_offer(sequence, file_available)
+        return "files" if file_available else "ordinary"
 
     def read_file_selection(self):
         win32clipboard.OpenClipboard()
@@ -184,12 +251,20 @@ class ClipboardHandler:
             time.sleep(0.5)
 
     def _process_clipboard_sequence(self, sequence):
+        if self._internal_change_active():
+            return False
         if sequence == self.last_sequence_num:
             return
+        file_available = self._update_file_availability(
+            announce_current_file=True
+        )
+        if file_available is None:
+            return False
+        self._announce_clipboard_offer(sequence, file_available)
         self.last_sequence_num = sequence
-        self._update_file_availability()
-        if self.file_availability:
-            return
+        if file_available:
+            logger.info("File clipboard sequence captured (sequence=%s)", sequence)
+            return True
         snapshot = self._read_clipboard()
         if snapshot:
             captured_fp = snapshot.fingerprint()
@@ -200,5 +275,9 @@ class ClipboardHandler:
                 )
                 self.last_injected_fingerprint = None  # Single-use suppression clearing
                 return
-            logger.info("Local rich clipboard change detected, forwarding...")
+            logger.info(
+                "Clipboard snapshot captured (formats=%s bytes=%d)",
+                ",".join(entry.kind for entry in snapshot.entries),
+                sum(len(entry.data) for entry in snapshot.entries),
+            )
             self.on_clipboard_change(snapshot)

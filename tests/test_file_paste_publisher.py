@@ -1,8 +1,11 @@
 import unittest
+from unittest.mock import patch
+
+import pythoncom
 
 from app.file_transfer.publisher import (
     VirtualPastePublisher, build_virtual_file_set, inject_paste_shortcut,
-    release_virtual_clipboard_owner,
+    release_virtual_clipboard_owner, restore_virtual_clipboard_owner,
 )
 
 
@@ -26,6 +29,46 @@ class RecordingReceiver:
 
 
 class VirtualPastePublisherTests(unittest.TestCase):
+    def test_restore_uses_wrapped_interface_from_production_owner_tuple(self):
+        data_object = object()
+        wrapped_interface = object()
+        previous_owner = object()
+        checked = []
+        restored = []
+
+        self.assertTrue(
+            restore_virtual_clipboard_owner(
+                (data_object, wrapped_interface),
+                previous_owner,
+                is_current=lambda candidate: (
+                    checked.append(candidate) or candidate is wrapped_interface
+                ),
+                restore=restored.append,
+            )
+        )
+
+        self.assertEqual(checked, [wrapped_interface])
+        self.assertEqual(restored, [previous_owner])
+
+    def test_release_uses_wrapped_interface_from_production_owner_tuple(self):
+        data_object = object()
+        wrapped_interface = object()
+        checked = []
+        cleared = []
+
+        self.assertTrue(
+            release_virtual_clipboard_owner(
+                (data_object, wrapped_interface),
+                is_current=lambda candidate: (
+                    checked.append(candidate) or candidate is wrapped_interface
+                ),
+                clear=lambda: cleared.append(True),
+            )
+        )
+
+        self.assertEqual(checked, [wrapped_interface])
+        self.assertEqual(cleared, [True])
+
     def test_release_clears_only_the_matching_current_clipboard_owner(self):
         owner = object()
         cleared = []
@@ -75,6 +118,209 @@ class VirtualPastePublisherTests(unittest.TestCase):
             publisher._process(self.manifest("A"), receiver, object())
         )
         self.assertEqual(restored, [(virtual_owner, previous_owner)])
+        self.assertEqual(publisher.retained_owner_count, 0)
+
+    def test_restore_failure_retains_virtual_owner_handle(self):
+        owner = (object(), object())
+
+        def fail_restore(current, previous):
+            raise ValueError("not a COM object")
+
+        publisher = VirtualPastePublisher(restore=fail_restore)
+        publisher._owner = owner
+
+        with self.assertLogs(
+            "app.file_transfer.publisher", level="ERROR"
+        ) as logs:
+            self.assertFalse(
+                publisher._restore_owner(owner, object(), retain=False)
+            )
+
+        self.assertEqual(publisher.retained_owner_count, 1)
+        self.assertIn("ValueError", "\n".join(logs.output))
+
+    def test_publisher_brackets_virtual_clipboard_changes_as_internal(self):
+        receiver = self.make_receiver()
+        events = []
+
+        def publish(file_set, on_performed_drop=None):
+            events.append("publish")
+            on_performed_drop()
+            return (object(), object())
+
+        def restore(owner, previous):
+            events.append("restore")
+            return True
+
+        publisher = VirtualPastePublisher(
+            publish=publish,
+            inject=lambda keyboard: None,
+            capture=lambda: object(),
+            restore=restore,
+            keyboard_factory=object,
+        )
+        publisher._on_clipboard_change_begin = lambda: events.append("begin")
+        publisher._on_clipboard_change_end = (
+            lambda suppress: events.append(("end", suppress))
+        )
+
+        self.assertTrue(
+            publisher._process(self.manifest("A"), receiver, object())
+        )
+
+        self.assertEqual(
+            events,
+            ["begin", "publish", "restore", ("end", True)],
+        )
+
+    def test_newer_user_clipboard_owner_is_not_suppressed_after_restore_skip(self):
+        receiver = self.make_receiver()
+        ended = []
+
+        def publish(file_set, on_performed_drop=None):
+            on_performed_drop()
+            return (object(), object())
+
+        publisher = VirtualPastePublisher(
+            publish=publish,
+            inject=lambda keyboard: None,
+            capture=lambda: object(),
+            restore=lambda owner, previous: False,
+            keyboard_factory=object,
+            on_clipboard_change_end=ended.append,
+        )
+
+        self.assertTrue(
+            publisher._process(self.manifest("A"), receiver, object())
+        )
+
+        self.assertEqual(ended, [False])
+        self.assertEqual(publisher.retained_owner_count, 0)
+
+    def test_accepted_paste_retires_owner_only_after_receiver_is_terminal(self):
+        receiver = self.make_receiver()
+        owner = (object(), object())
+        released = []
+        terminal_checks = []
+
+        def publish(file_set, on_performed_drop=None):
+            on_performed_drop()
+            return owner
+
+        def is_terminal(job_id):
+            terminal_checks.append(job_id)
+            return len(terminal_checks) >= 2
+
+        receiver.is_paste_terminal = is_terminal
+        publisher = VirtualPastePublisher(
+            publish=publish,
+            inject=lambda keyboard: None,
+            release=released.append,
+            keyboard_factory=object,
+        )
+
+        with patch(
+            "app.file_transfer.publisher.pythoncom.PumpWaitingMessages"
+        ) as pump:
+            self.assertTrue(
+                publisher._process(self.manifest("A"), receiver, object())
+            )
+
+        self.assertEqual(terminal_checks, ["A", "A"])
+        pump.assert_called_once_with()
+        self.assertEqual(released, [owner])
+        self.assertEqual(publisher.retained_owner_count, 0)
+
+    def test_default_terminal_cleanup_releases_virtual_owner_instead_of_restoring_old_owner(self):
+        receiver = self.make_receiver()
+        owner = (object(), object())
+
+        def publish(file_set, on_performed_drop=None):
+            on_performed_drop()
+            return owner
+
+        with (
+            patch(
+                "app.file_transfer.publisher.release_virtual_clipboard_owner",
+                return_value=True,
+            ) as release,
+            patch(
+                "app.file_transfer.publisher.restore_virtual_clipboard_owner",
+                return_value=True,
+            ) as restore,
+        ):
+            publisher = VirtualPastePublisher(
+                publish=publish,
+                inject=lambda keyboard: None,
+                capture=lambda: object(),
+                keyboard_factory=object,
+            )
+
+            self.assertTrue(
+                publisher._process(self.manifest("A"), receiver, object())
+            )
+
+        release.assert_called_once_with(owner)
+        restore.assert_not_called()
+        self.assertEqual(publisher.retained_owner_count, 0)
+
+    def test_default_cleanup_does_not_capture_an_old_ole_owner(self):
+        receiver = self.make_receiver()
+
+        def publish(file_set, on_performed_drop=None):
+            on_performed_drop()
+            return (object(), object())
+
+        with (
+            patch(
+                "app.file_transfer.publisher.capture_clipboard_owner"
+            ) as capture,
+            patch(
+                "app.file_transfer.publisher.release_virtual_clipboard_owner",
+                return_value=True,
+            ),
+        ):
+            publisher = VirtualPastePublisher(
+                publish=publish,
+                inject=lambda keyboard: None,
+                keyboard_factory=object,
+            )
+            self.assertTrue(
+                publisher._process(self.manifest("A"), receiver, object())
+            )
+
+        capture.assert_not_called()
+
+    def test_terminal_release_retries_a_transient_ole_clipboard_error(self):
+        receiver = self.make_receiver()
+        owner = (object(), object())
+        attempts = []
+
+        def publish(file_set, on_performed_drop=None):
+            on_performed_drop()
+            return owner
+
+        def release(candidate):
+            attempts.append(candidate)
+            if len(attempts) == 1:
+                raise pythoncom.com_error(-1, "clipboard busy", None, None)
+            return True
+
+        publisher = VirtualPastePublisher(
+            publish=publish,
+            inject=lambda keyboard: None,
+            release=release,
+            keyboard_factory=object,
+        )
+
+        with patch("app.file_transfer.publisher.time.sleep") as sleep:
+            self.assertTrue(
+                publisher._process(self.manifest("A"), receiver, object())
+            )
+
+        self.assertEqual(attempts, [owner, owner])
+        sleep.assert_called_once_with(0.05)
+        self.assertEqual(publisher.retained_owner_count, 0)
 
     @staticmethod
     def manifest(job_id):
@@ -103,6 +349,7 @@ class VirtualPastePublisherTests(unittest.TestCase):
 
             def record_performed_drop(self, job_id):
                 self.drops.append(job_id)
+                self.terminals.add(job_id)
                 return True
 
             def fail_paste(self, job_id, error_code):
@@ -174,8 +421,8 @@ class VirtualPastePublisherTests(unittest.TestCase):
         self.assertTrue(publisher.wait_until_idle(1))
         self.assertEqual(receiver.failures, [("A", "ExplorerStartTimeout")])
         self.assertEqual(receiver.drops, ["B"])
-        self.assertEqual(released, [owners[0]])
-        self.assertEqual(publisher.retained_owner_count, 1)
+        self.assertEqual(released, owners)
+        self.assertEqual(publisher.retained_owner_count, 0)
 
     def test_cancelled_wait_does_not_block_the_next_paste(self):
         receiver = self.make_receiver()
