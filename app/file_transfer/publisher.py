@@ -12,6 +12,8 @@ from app.windows_virtual_files import (
     open_callback_stream,
     publish_virtual_files,
 )
+from app.file_transfer.explorer_session import ExplorerPasteSession
+from app.file_transfer.status import TransferPhase
 from app.safe_errors import error_name
 
 
@@ -108,6 +110,7 @@ class VirtualPastePublisher:
         restore=None,
         keyboard_factory=None,
         explorer_start_timeout=15.0,
+        session_factory=None,
         on_clipboard_change_begin=None,
         on_clipboard_change_end=None,
     ):
@@ -126,6 +129,7 @@ class VirtualPastePublisher:
             self._restore_after_accept = False
         self._keyboard_factory = keyboard_factory or KeyboardController
         self.explorer_start_timeout = float(explorer_start_timeout)
+        self._session_factory = session_factory or ExplorerPasteSession.capture
         self._on_clipboard_change_begin = on_clipboard_change_begin
         self._on_clipboard_change_end = on_clipboard_change_end
         self._owner = None
@@ -195,14 +199,20 @@ class VirtualPastePublisher:
     def _process(self, manifest, receiver, keyboard):
         job_id = manifest["job_id"]
         consumed = threading.Event()
+        session = self._session_factory(manifest)
         previous_owner = self._capture()
 
         def performed_drop(effect):
+            session.record_performed_effect(effect)
             consumed.set()
             return receiver.record_performed_drop(job_id, effect)
 
+        def stream_opened():
+            session.record_stream_open()
+            consumed.set()
+
         file_set = build_virtual_file_set(
-            manifest, receiver, on_stream_open=consumed.set
+            manifest, receiver, on_stream_open=stream_opened
         )
         owner = None
         accepted = False
@@ -224,29 +234,51 @@ class VirtualPastePublisher:
             deadline = time.monotonic() + self.explorer_start_timeout
             while not consumed.is_set():
                 pythoncom.PumpWaitingMessages()
+                if session.observe():
+                    receiver.cancel_job(job_id, "ExplorerCancelled")
                 if receiver.is_paste_terminal(job_id):
                     return False
+                if session.decision_pending:
+                    deadline = time.monotonic() + self.explorer_start_timeout
                 if time.monotonic() >= deadline:
                     self._report_failure(receiver, job_id, "ExplorerStartTimeout")
                     return False
                 consumed.wait(0.005)
             accepted = True
-            self._wait_for_terminal(job_id, receiver)
+            outcome = self._wait_for_terminal(job_id, receiver, session)
             terminal = True
-            return True
+            return outcome is None or outcome.phase is TransferPhase.COMPLETED
         finally:
+            outcome = self._terminal_outcome(receiver, job_id)
+            if outcome is not None:
+                session.record_terminal(outcome.phase)
+                if outcome.phase is TransferPhase.CANCELLED:
+                    session.request_cancel()
             if owner is not None:
                 suppress_internal_sequence = self._restore_owner(
                     owner, previous_owner, retain=accepted and not terminal
                 )
+            if (
+                outcome is not None
+                and outcome.phase is TransferPhase.CANCELLED
+            ):
+                session.cleanup_cancelled_empty_directories()
             if self._on_clipboard_change_end is not None:
                 self._on_clipboard_change_end(suppress_internal_sequence)
 
-    @staticmethod
-    def _wait_for_terminal(job_id, receiver):
+    @classmethod
+    def _wait_for_terminal(cls, job_id, receiver, session):
         while not receiver.is_paste_terminal(job_id):
             pythoncom.PumpWaitingMessages()
+            if session.observe():
+                receiver.cancel_job(job_id, "ExplorerCancelled")
             time.sleep(0.005)
+        return cls._terminal_outcome(receiver, job_id)
+
+    @staticmethod
+    def _terminal_outcome(receiver, job_id):
+        query = getattr(receiver, "terminal_outcome", None)
+        return None if query is None else query(job_id)
 
     def _restore_owner(self, owner, previous_owner, retain=False):
         with self._owner_lock:

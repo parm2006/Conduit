@@ -1,4 +1,5 @@
 import unittest
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import pythoncom
@@ -7,6 +8,7 @@ from app.file_transfer.publisher import (
     VirtualPastePublisher, build_virtual_file_set, inject_paste_shortcut,
     release_virtual_clipboard_owner, restore_virtual_clipboard_owner,
 )
+from app.file_transfer.status import TransferPhase
 
 
 class RecordingReceiver:
@@ -29,6 +31,37 @@ class RecordingReceiver:
 
 
 class VirtualPastePublisherTests(unittest.TestCase):
+    class RecordingSession:
+        def __init__(self, inferred=False, decision_pending=False):
+            self.inferred = inferred
+            self.decision_pending = decision_pending
+            self.effects = []
+            self.stream_opens = 0
+            self.dismissals = 0
+            self.cleanups = 0
+            self.terminals = []
+
+        def observe(self):
+            return self.inferred
+
+        def record_stream_open(self):
+            self.stream_opens += 1
+
+        def record_performed_effect(self, effect):
+            self.effects.append(effect)
+
+        def request_cancel(self):
+            self.dismissals += 1
+            return True
+
+        def cleanup_cancelled_empty_directories(self):
+            self.cleanups += 1
+            return {}
+
+        def record_terminal(self, phase):
+            self.terminals.append(phase)
+            return True
+
     def test_restore_uses_wrapped_interface_from_production_owner_tuple(self):
         data_object = object()
         wrapped_interface = object()
@@ -136,6 +169,92 @@ class VirtualPastePublisherTests(unittest.TestCase):
 
         publisher._process(self.manifest("A"), receiver, object())
         self.assertEqual(receiver.drops, [("A", 0)])
+
+    def test_receiver_cancellation_dismisses_session_and_runs_safe_cleanup(self):
+        receiver = self.make_receiver()
+        session = self.RecordingSession()
+        released = []
+
+        publisher = VirtualPastePublisher(
+            publish=lambda file_set, on_performed_drop=None: object(),
+            inject=lambda keyboard: receiver.cancel_job("A", "UserCancelled"),
+            release=released.append,
+            keyboard_factory=object,
+            session_factory=lambda manifest: session,
+        )
+
+        self.assertFalse(publisher._process(self.manifest("A"), receiver, object()))
+        self.assertEqual(session.terminals, [TransferPhase.CANCELLED])
+        self.assertEqual(session.dismissals, 1)
+        self.assertEqual(session.cleanups, 1)
+        self.assertEqual(len(released), 1)
+
+    def test_inferred_popup_close_cancels_receiver_with_explorer_reason(self):
+        receiver = self.make_receiver()
+        session = self.RecordingSession(inferred=True)
+
+        publisher = VirtualPastePublisher(
+            publish=lambda file_set, on_performed_drop=None: object(),
+            inject=lambda keyboard: None,
+            release=lambda owner: None,
+            keyboard_factory=object,
+            session_factory=lambda manifest: session,
+        )
+
+        self.assertFalse(publisher._process(self.manifest("A"), receiver, object()))
+        self.assertEqual(receiver.cancellations, [("A", "ExplorerCancelled")])
+
+    def test_visible_correlated_popup_pauses_explorer_start_timeout(self):
+        receiver = self.make_receiver()
+
+        class PendingThenCancelledSession(self.RecordingSession):
+            def __init__(self):
+                super().__init__(decision_pending=True)
+                self.observations = 0
+
+            def observe(self):
+                self.observations += 1
+                return self.observations >= 2
+
+        session = PendingThenCancelledSession()
+        publisher = VirtualPastePublisher(
+            publish=lambda file_set, on_performed_drop=None: object(),
+            inject=lambda keyboard: None,
+            release=lambda owner: None,
+            keyboard_factory=object,
+            explorer_start_timeout=1.0,
+            session_factory=lambda manifest: session,
+        )
+
+        with patch(
+            "app.file_transfer.publisher.time.monotonic",
+            side_effect=[0.0, 2.0, 2.0],
+        ):
+            self.assertFalse(
+                publisher._process(self.manifest("A"), receiver, object())
+            )
+
+        self.assertEqual(receiver.failures, [])
+        self.assertEqual(receiver.cancellations, [("A", "ExplorerCancelled")])
+
+    def test_performed_effect_is_recorded_by_the_correlated_session(self):
+        receiver = self.make_receiver()
+        session = self.RecordingSession()
+
+        def publish(file_set, on_performed_drop=None):
+            on_performed_drop(1)
+            return object()
+
+        publisher = VirtualPastePublisher(
+            publish=publish,
+            inject=lambda keyboard: None,
+            release=lambda owner: None,
+            keyboard_factory=object,
+            session_factory=lambda manifest: session,
+        )
+
+        self.assertTrue(publisher._process(self.manifest("A"), receiver, object()))
+        self.assertEqual(session.effects, [1])
 
     def test_restore_failure_retains_virtual_owner_handle(self):
         owner = (object(), object())
@@ -362,19 +481,36 @@ class VirtualPastePublisherTests(unittest.TestCase):
                 super().__init__()
                 self.drops = []
                 self.failures = []
+                self.cancellations = []
                 self.terminals = set()
+                self.phases = {}
 
             def record_performed_drop(self, job_id, effect):
                 self.drops.append((job_id, effect))
                 self.terminals.add(job_id)
+                self.phases[job_id] = (
+                    TransferPhase.CANCELLED
+                    if effect == 0
+                    else TransferPhase.COMPLETED
+                )
                 return True
 
             def fail_paste(self, job_id, error_code):
                 self.failures.append((job_id, error_code))
                 return True
 
+            def cancel_job(self, job_id, reason_code="UserCancelled"):
+                self.cancellations.append((job_id, reason_code))
+                self.terminals.add(job_id)
+                self.phases[job_id] = TransferPhase.CANCELLED
+                return True
+
             def is_paste_terminal(self, job_id):
                 return job_id in self.terminals
+
+            def terminal_outcome(self, job_id):
+                phase = self.phases.get(job_id)
+                return None if phase is None else SimpleNamespace(phase=phase)
 
         return Receiver()
 
