@@ -169,14 +169,13 @@ Stop and wait for the owner report. Do not mark the plan DONE or begin Plan
 
 ## Done criteria
 
-- [ ] Integration and full suites pass.
-- [ ] Release build and `git diff --check` pass.
-- [ ] Versioned executable and SHA-256 are recorded.
-- [ ] `validate_explorer_cancellation.md` contains every required row.
-- [ ] Execution is paused for owner evidence.
-- [ ] After owner PASS, update this plan and README to DONE; before PASS, leave
-  it IN PROGRESS.
-- [ ] No file outside the in-scope list is modified.
+- [x] Integration and full suites pass.
+- [x] Release build and `git diff --check` pass.
+- [x] Versioned executable and SHA-256 are recorded.
+- [x] `validate_explorer_cancellation.md` contains every required row.
+- [x] Execution is paused for owner evidence.
+- [x] Physical validation completed; plan updated to DONE.
+- [x] No file outside the in-scope list is modified.
 
 ## STOP conditions
 

@@ -4,6 +4,7 @@ import queue
 import threading
 import time
 from collections import OrderedDict
+from dataclasses import dataclass
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from app.safe_errors import error_name
 
@@ -20,6 +21,16 @@ MAX_ACTIVE_JOBS = 8
 
 class TransferAbortedError(OSError):
     winerror = 1223
+
+
+@dataclass(frozen=True)
+class TerminalOutcome:
+    phase: TransferPhase
+    reason_code: str
+    message: str
+    bytes_done: int
+    bytes_total: int
+    terminal_time: float
 
 
 class TransferReceiver:
@@ -213,11 +224,9 @@ class TransferReceiver:
                 raise ValueError("job completed before every file was verified")
             job["network_verified"] = True
         covered = self._paste_covered(job)
-        if covered == job["manifest"].total_size:
-            self._publish_paste_progress(job_id, TransferPhase.COMPLETED, covered, force=True)
-        elif covered:
+        if not self._complete_if_ready(job_id, job, covered) and covered:
             self._publish_paste_progress(job_id, TransferPhase.PASTING, covered, force=True)
-        else:
+        elif not self.is_paste_terminal(job_id):
             self._update_paste(job_id, TransferPhase.WAITING_FOR_EXPLORER, 0, 0.0)
         if self.lane is not None:
             self.lane.send({"type": "job_verified", "job_id": job_id})
@@ -230,12 +239,10 @@ class TransferReceiver:
         covered = self._paste_covered(job)
         if job["paste_started"] is None:
             job["paste_started"] = self.clock()
-        phase = (
-            TransferPhase.COMPLETED
-            if job["network_verified"] and covered == job["manifest"].total_size
-            else TransferPhase.PASTING
-        )
-        self._publish_paste_progress(job_id, phase, covered, force=phase is TransferPhase.COMPLETED)
+        if not self._complete_if_ready(job_id, job, covered):
+            self._publish_paste_progress(
+                job_id, TransferPhase.PASTING, covered
+            )
 
     def record_stream_open(self, job_id, relative_path):
         normalized = validate_relative_path(relative_path)
@@ -273,7 +280,12 @@ class TransferReceiver:
             if activity["active"]:
                 return True
             if not incomplete:
-                if job["drop_performed"] and job["network_verified"]:
+                outcome = self.terminal_outcome(job_id)
+                if (
+                    outcome is not None
+                    and outcome.phase is TransferPhase.COMPLETED
+                    and job["network_verified"]
+                ):
                     cleanup_generation = self._next_cleanup_generation(job)
                 else:
                     return True
@@ -317,40 +329,43 @@ class TransferReceiver:
         if current is not None and current.is_terminal:
             return False
         logger.info("Explorer released an incomplete file stream for job %s", job_id)
-        return self.record_performed_drop(job_id)
+        return self.record_performed_drop(job_id, 0)
 
-    def record_performed_drop(self, job_id):
+    def record_performed_drop(self, job_id, effect):
+        if isinstance(effect, bool) or effect not in {0, 1}:
+            return False
         job = self._jobs.get(job_id)
         if job is None:
             return False
+        if effect == 0:
+            return self._terminalize(
+                job_id,
+                TransferPhase.CANCELLED,
+                "ExplorerCancelled",
+                "Windows Explorer cancelled the file paste",
+            )
         with job["condition"]:
             job["drop_performed"] = True
             covered = self._paste_covered(job)
-            phase = (
-                TransferPhase.COMPLETED
-                if job["network_verified"] and covered == job["manifest"].total_size
-                else TransferPhase.CANCELLED
+            complete = (
+                job["network_verified"]
+                and covered == job["manifest"].total_size
             )
-            if phase is TransferPhase.COMPLETED and not any(
+            if complete and not any(
                 activity["active"] for activity in job["stream_activity"].values()
             ):
                 cleanup_generation = self._next_cleanup_generation(job)
             else:
                 cleanup_generation = None
-        self._update_paste(job_id, phase, covered, 0.0)
-        if self.lane is not None:
-            self._progress_queue.put({
-                "type": "paste_progress",
-                "job_id": job_id,
-                "phase": phase.value,
-                "bytes_done": covered,
-                "bytes_total": job["manifest"].total_size,
-                "bytes_per_second": 0.0,
-            })
+        if complete:
+            self._terminalize(
+                job_id,
+                TransferPhase.COMPLETED,
+                "ExplorerCopyCompleted",
+                "Windows Explorer completed the file paste",
+            )
         if cleanup_generation is not None:
             self._schedule_terminal_cleanup(job_id, cleanup_generation)
-        elif phase is TransferPhase.CANCELLED:
-            self.cancel_job(job_id)
         return True
 
     @staticmethod
@@ -373,14 +388,16 @@ class TransferReceiver:
             return False
         with job["condition"]:
             if (
-                not job["drop_performed"]
-                or not job["network_verified"]
+                not job["network_verified"]
                 or job["cleanup_generation"] != generation
                 or any(
                     activity["active"]
                     for activity in job["stream_activity"].values()
                 )
             ):
+                return False
+            outcome = self.terminal_outcome(job_id)
+            if outcome is None or outcome.phase is not TransferPhase.COMPLETED:
                 return False
             for staged in job["staged"].values():
                 staged.abort()
@@ -421,88 +438,167 @@ class TransferReceiver:
         # incoming chunks and cancellation remain responsive during Explorer reads.
         return staged.read_available(offset, min(count, item.size - offset))
 
-    def cancel_job(self, job_id):
-        job = self._jobs.get(job_id)
-        if job is None:
-            self._remember_terminal(job_id, "transfer was cancelled")
-            return False
-        with job["condition"]:
-            self._remember_terminal(job_id, "transfer was cancelled")
-            for staged in job["staged"].values():
-                staged.abort()
-            for completed in job["completed"].values():
-                completed.abort()
-            job["staged"].clear()
-            job["completed"].clear()
-            job["error"] = "transfer was cancelled"
-            if self.controller is not None:
-                self.controller.cancel(job_id)
-            job["condition"].notify_all()
-            if self._jobs.get(job_id) is job:
-                self._jobs.pop(job_id, None)
-        return True
+    def cancel_job(self, job_id, reason_code="UserCancelled"):
+        return self._terminalize(
+            job_id,
+            TransferPhase.CANCELLED,
+            reason_code,
+            "transfer was cancelled",
+        )
 
     def fail_paste(self, job_id, error_code):
-        job = self._jobs.get(job_id)
-        if job is None:
-            return False
-        current = self.controller.status(job_id) if self.controller is not None else None
-        if current is not None and current.is_terminal:
-            return False
-        with job["condition"]:
-            if job["error"] is not None:
-                return False
-            for staged in job["staged"].values():
-                staged.abort()
-            for completed in job["completed"].values():
-                completed.abort()
-            job["staged"].clear()
-            job["completed"].clear()
-            job["error"] = "Windows Explorer did not accept the file paste"
-            job["condition"].notify_all()
-        manifest = job["manifest"]
-        if self.controller is not None:
-            self.controller.update(
-                job_id,
-                TransferPhase.FAILED,
-                _manifest_label(manifest),
-                self._paste_covered(job),
-                manifest.total_size,
-                error_code=error_code,
-            )
-        if self.lane is not None:
-            self._progress_queue.put({
-                "type": "paste_progress",
-                "job_id": job_id,
-                "phase": TransferPhase.FAILED.value,
-                "bytes_done": self._paste_covered(job),
-                "bytes_total": manifest.total_size,
-                "bytes_per_second": 0.0,
-                "error_code": error_code,
-            })
-        self._remember_terminal(
-            job_id, "Windows Explorer did not accept the file paste"
+        return self._terminalize(
+            job_id,
+            TransferPhase.FAILED,
+            error_code,
+            "Windows Explorer did not accept the file paste",
         )
-        if self._jobs.get(job_id) is job:
-            self._jobs.pop(job_id, None)
-        return True
 
     def is_paste_terminal(self, job_id):
-        if self._terminal_reason(job_id) is not None:
+        if self.terminal_outcome(job_id) is not None:
             return True
         status = self.controller.status(job_id) if self.controller is not None else None
         return status is not None and status.is_terminal
 
     def _terminal_reason(self, job_id):
+        outcome = self.terminal_outcome(job_id)
+        return None if outcome is None else outcome.message
+
+    def terminal_outcome(self, job_id):
         with self._terminal_lock:
             return self._terminal_jobs.get(job_id)
 
-    def _remember_terminal(self, job_id, reason):
+    def _remember_terminal(self, job_id, outcome):
         with self._terminal_lock:
-            self._terminal_jobs[job_id] = reason
+            existing = self._terminal_jobs.get(job_id)
+            if existing is not None:
+                return existing, False
+            self._terminal_jobs[job_id] = outcome
             self._terminal_jobs.move_to_end(job_id)
             while len(self._terminal_jobs) > self._terminal_limit:
                 self._terminal_jobs.popitem(last=False)
+            return outcome, True
+
+    def _terminalize(self, job_id, phase, reason_code, message):
+        if phase not in {
+            TransferPhase.COMPLETED,
+            TransferPhase.FAILED,
+            TransferPhase.CANCELLED,
+        }:
+            raise ValueError("receiver terminal phase is invalid")
+        job = self._jobs.get(job_id)
+        current = self.controller.status(job_id) if self.controller is not None else None
+        existing = self.terminal_outcome(job_id)
+        if existing is not None:
+            return False
+        if current is not None and current.is_terminal:
+            existing_code = current.error_code or {
+                TransferPhase.COMPLETED: "AlreadyCompleted",
+                TransferPhase.FAILED: "AlreadyFailed",
+                TransferPhase.CANCELLED: "AlreadyCancelled",
+            }[current.phase]
+            existing_message = {
+                TransferPhase.COMPLETED: "transfer already completed",
+                TransferPhase.FAILED: "transfer already failed",
+                TransferPhase.CANCELLED: "transfer was cancelled",
+            }[current.phase]
+            self._remember_terminal(
+                job_id,
+                TerminalOutcome(
+                    current.phase,
+                    existing_code,
+                    existing_message,
+                    current.bytes_done,
+                    current.bytes_total,
+                    self.clock(),
+                ),
+            )
+            return False
+        if job is not None:
+            bytes_done = self._paste_covered(job)
+            bytes_total = job["manifest"].total_size
+            label = _manifest_label(job["manifest"])
+        elif current is not None:
+            bytes_done = current.bytes_done
+            bytes_total = current.bytes_total
+            label = current.label
+        else:
+            bytes_done = 0
+            bytes_total = 0
+            label = "File transfer"
+        outcome = TerminalOutcome(
+            phase,
+            reason_code,
+            message,
+            bytes_done,
+            bytes_total,
+            self.clock(),
+        )
+        outcome, changed = self._remember_terminal(job_id, outcome)
+        if not changed:
+            return False
+
+        if job is not None and phase is not TransferPhase.COMPLETED:
+            with job["condition"]:
+                for staged in job["staged"].values():
+                    staged.abort()
+                for completed in job["completed"].values():
+                    completed.abort()
+                job["staged"].clear()
+                job["completed"].clear()
+                job["error"] = message
+                job["condition"].notify_all()
+                if self._jobs.get(job_id) is job:
+                    self._jobs.pop(job_id, None)
+
+        if self.controller is not None:
+            if phase is TransferPhase.CANCELLED:
+                self.controller.cancel(job_id)
+                updated = self.controller.confirm_cancelled(job_id)
+                if not updated:
+                    self.controller.update(
+                        job_id,
+                        phase,
+                        label,
+                        bytes_done,
+                        bytes_total,
+                    )
+            else:
+                self.controller.update(
+                    job_id,
+                    phase,
+                    label,
+                    bytes_done,
+                    bytes_total,
+                    error_code=(reason_code if phase is TransferPhase.FAILED else None),
+                )
+        if self.lane is not None:
+            metadata = {
+                "type": "paste_progress",
+                "job_id": job_id,
+                "phase": phase.value,
+                "bytes_done": bytes_done,
+                "bytes_total": bytes_total,
+                "bytes_per_second": 0.0,
+                "reason_code": reason_code,
+            }
+            if phase is TransferPhase.FAILED:
+                metadata["error_code"] = reason_code
+            self._progress_queue.put(metadata)
+        return True
+
+    def _complete_if_ready(self, job_id, job, covered):
+        if not (
+            job["network_verified"]
+            and covered == job["manifest"].total_size
+        ):
+            return False
+        return self._terminalize(
+            job_id,
+            TransferPhase.COMPLETED,
+            "ExplorerCopyCompleted",
+            "Windows Explorer completed the file paste",
+        ) or self.is_paste_terminal(job_id)
 
     def _update_paste(self, job_id, phase, bytes_done, speed):
         if self.controller is None:
@@ -556,24 +652,13 @@ class TransferReceiver:
         return sum(coverage.covered for coverage in job["coverage"].values())
 
     def cancel_all(self, reason):
-        for job_id, job in tuple(self._jobs.items()):
-            with job["condition"]:
-                for staged in job["staged"].values():
-                    staged.abort()
-                for completed in job["completed"].values():
-                    completed.abort()
-                job["staged"].clear()
-                job["completed"].clear()
-                job["error"] = reason
-                job["condition"].notify_all()
-                self._remember_terminal(job_id, reason)
-                if self.controller is not None:
-                    status = self.controller.status(job_id)
-                    if status is not None and not status.is_terminal:
-                        self.controller.cancel(job_id)
-                        self.controller.confirm_cancelled(job_id)
-                if self._jobs.get(job_id) is job:
-                    self._jobs.pop(job_id, None)
+        for job_id in tuple(self._jobs):
+            self._terminalize(
+                job_id,
+                TransferPhase.CANCELLED,
+                "FileLaneDisconnected",
+                reason,
+            )
 
 
 def _manifest_label(manifest):

@@ -1,4 +1,6 @@
 import hashlib
+import inspect
+import queue
 import tempfile
 import unittest
 import threading
@@ -14,6 +16,150 @@ from app.file_transfer.status import TransferPhase
 
 
 class TransferReceiverTests(unittest.TestCase):
+    @staticmethod
+    def _queued_progress(receiver):
+        messages = []
+        while True:
+            try:
+                messages.append(receiver._progress_queue.get_nowait())
+            except queue.Empty:
+                return messages
+
+    def test_cancel_job_records_one_terminal_outcome_and_peer_notification(self):
+        item = FileItem("cancel.bin", ItemType.FILE, 4, 1, "0" * 64)
+        manifest = Manifest.create([item])
+        controller = TransferController()
+        with tempfile.TemporaryDirectory() as directory:
+            receiver = TransferReceiver(Path(directory), controller=controller)
+            receiver.lane = object()
+            receiver.accept_manifest(manifest.to_wire())
+
+            self.assertTrue(receiver.cancel_job(manifest.job_id))
+            self.assertFalse(receiver.cancel_job(manifest.job_id))
+
+            outcome_query = getattr(receiver, "terminal_outcome", None)
+            self.assertIsNotNone(outcome_query)
+            outcome = outcome_query(manifest.job_id)
+            terminal_messages = [
+                message for message in self._queued_progress(receiver)
+                if message.get("phase") == TransferPhase.CANCELLED.value
+            ]
+
+        self.assertEqual(controller.status(manifest.job_id).phase, TransferPhase.CANCELLED)
+        self.assertEqual(outcome.phase, TransferPhase.CANCELLED)
+        self.assertEqual(outcome.reason_code, "UserCancelled")
+        self.assertEqual(len(terminal_messages), 1)
+
+    def test_first_terminal_failure_cannot_be_replaced_by_late_cancel(self):
+        item = FileItem("failed.bin", ItemType.FILE, 4, 1, "0" * 64)
+        manifest = Manifest.create([item])
+        controller = TransferController()
+        with tempfile.TemporaryDirectory() as directory:
+            receiver = TransferReceiver(Path(directory), controller=controller)
+            receiver.lane = object()
+            receiver.accept_manifest(manifest.to_wire())
+
+            self.assertTrue(
+                receiver.fail_paste(manifest.job_id, "ExplorerStartTimeout")
+            )
+            self.assertFalse(receiver.cancel_job(manifest.job_id))
+
+            outcome_query = getattr(receiver, "terminal_outcome", None)
+            self.assertIsNotNone(outcome_query)
+            outcome = outcome_query(manifest.job_id)
+            terminal_messages = [
+                message for message in self._queued_progress(receiver)
+                if message.get("phase") in {
+                    TransferPhase.CANCELLED.value,
+                    TransferPhase.FAILED.value,
+                }
+            ]
+
+        self.assertEqual(controller.status(manifest.job_id).phase, TransferPhase.FAILED)
+        self.assertEqual(outcome.phase, TransferPhase.FAILED)
+        self.assertEqual(outcome.reason_code, "ExplorerStartTimeout")
+        self.assertEqual(len(terminal_messages), 1)
+
+    def test_existing_controller_terminal_state_wins_over_late_receiver_cancel(self):
+        item = FileItem("completed.bin", ItemType.FILE, 4, 1, "0" * 64)
+        manifest = Manifest.create([item])
+        controller = TransferController()
+        with tempfile.TemporaryDirectory() as directory:
+            receiver = TransferReceiver(Path(directory), controller=controller)
+            receiver.lane = object()
+            receiver.accept_manifest(manifest.to_wire())
+            controller.update(
+                manifest.job_id,
+                TransferPhase.COMPLETED,
+                "completed.bin",
+                4,
+                4,
+            )
+
+            self.assertFalse(receiver.cancel_job(manifest.job_id))
+            outcome = receiver.terminal_outcome(manifest.job_id)
+
+        self.assertEqual(controller.status(manifest.job_id).phase, TransferPhase.COMPLETED)
+        self.assertEqual(outcome.phase, TransferPhase.COMPLETED)
+        self.assertEqual(self._queued_progress(receiver), [])
+
+    def test_shell_none_cancels_after_network_bytes_are_verified(self):
+        content = b"data"
+        item = FileItem(
+            "copy.bin", ItemType.FILE, len(content), 1,
+            hashlib.sha256(content).hexdigest(),
+        )
+        manifest = Manifest.create([item])
+        controller = TransferController()
+        with tempfile.TemporaryDirectory() as directory:
+            receiver = TransferReceiver(Path(directory), controller=controller)
+            receiver.accept_manifest(manifest.to_wire())
+            receiver.accept_chunk({
+                "job_id": manifest.job_id,
+                "relative_path": item.relative_path,
+                "offset": 0,
+                "compressed": False,
+                "original_size": len(content),
+            }, content)
+            receiver.complete_file(manifest.job_id, item.relative_path)
+            receiver.complete_job(manifest.job_id)
+
+            self.assertEqual(
+                len(inspect.signature(receiver.record_performed_drop).parameters),
+                2,
+            )
+            receiver.record_performed_drop(manifest.job_id, 0)
+
+        self.assertEqual(
+            controller.status(manifest.job_id).phase,
+            TransferPhase.CANCELLED,
+        )
+
+    def test_shell_copy_waits_for_actual_stream_coverage(self):
+        content = b"data"
+        item = FileItem(
+            "copy.bin", ItemType.FILE, len(content), 1,
+            hashlib.sha256(content).hexdigest(),
+        )
+        manifest = Manifest.create([item])
+        controller = TransferController()
+        with tempfile.TemporaryDirectory() as directory:
+            receiver = TransferReceiver(Path(directory), controller=controller)
+            receiver.accept_manifest(manifest.to_wire())
+
+            self.assertEqual(
+                len(inspect.signature(receiver.record_performed_drop).parameters),
+                2,
+            )
+            receiver.record_performed_drop(manifest.job_id, 1)
+
+            self.assertFalse(receiver.is_paste_terminal(manifest.job_id))
+            self.assertNotEqual(
+                controller.status(manifest.job_id).phase,
+                TransferPhase.CANCELLED,
+            )
+            receiver.cancel_job(manifest.job_id)
+
     def test_attached_receiver_acknowledges_a_persisted_chunk(self):
         class Lane:
             def __init__(self):
@@ -399,7 +545,7 @@ class TransferReceiverTests(unittest.TestCase):
             receiver.record_stream_read(
                 manifest.job_id, item.relative_path, 0, len(content)
             )
-            receiver.record_performed_drop(manifest.job_id)
+            receiver.record_performed_drop(manifest.job_id, 1)
 
             self.assertTrue(list((root / "completed").rglob("*.cache")))
             self.assertFalse(callbacks)
@@ -421,7 +567,7 @@ class TransferReceiverTests(unittest.TestCase):
             receiver = TransferReceiver(Path(directory), controller=controller)
             receiver.accept_manifest(manifest.to_wire())
 
-            receiver.record_performed_drop(manifest.job_id)
+            receiver.record_performed_drop(manifest.job_id, 0)
 
             self.assertNotIn(manifest.job_id, receiver._jobs)
             with self.assertRaises(TransferAbortedError):
