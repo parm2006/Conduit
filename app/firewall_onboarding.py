@@ -1,4 +1,4 @@
-"""Consent and status coordination for DeskFlow firewall onboarding."""
+"""Consent and status coordination for Conduit firewall onboarding."""
 
 from dataclasses import dataclass
 from enum import Enum
@@ -49,49 +49,49 @@ _DISPLAY = {
         "Ready",
         "green",
         None,
-        "DeskFlow is allowed on private local networks.",
+        "Conduit is allowed on private local networks.",
     ),
     FirewallState.MISSING: FirewallDisplay(
         "Setup required",
         "orange",
         "Configure",
-        "Windows Firewall has no matching DeskFlow rule.",
+        "Windows Firewall has no matching Conduit rule.",
     ),
     FirewallState.STALE: FirewallDisplay(
         "Repair required",
         "orange",
         "Repair",
-        "The DeskFlow rule does not match this executable and port.",
+        "The Conduit rule does not match this executable and port.",
     ),
     FirewallState.DEVELOPMENT: FirewallDisplay(
         "Development rule",
         "orange",
         "View help",
-        "The rule applies to Python because DeskFlow is running from source.",
+        "The rule applies to Python because Conduit is running from source.",
     ),
     FirewallState.CONFLICT: FirewallDisplay(
         "Connection blocked",
         "red",
         "Repair",
-        "Another Windows Firewall rule blocks incoming DeskFlow connections.",
+        "Another Windows Firewall rule blocks incoming Conduit connections.",
     ),
     FirewallState.PUBLIC_ONLY: FirewallDisplay(
         "Blocked on Public network",
         "orange",
         "View help",
-        "DeskFlow accepts incoming connections only on Private networks.",
+        "Conduit accepts incoming connections only on Private networks.",
     ),
     FirewallState.MANAGED: FirewallDisplay(
         "Managed by administrator",
         "orange",
         "View help",
-        "Windows policy did not allow DeskFlow to change this rule.",
+        "Windows policy did not allow Conduit to change this rule.",
     ),
     FirewallState.UNAVAILABLE: FirewallDisplay(
         "Unavailable",
         "red",
         "View help",
-        "DeskFlow could not safely read Windows Firewall status.",
+        "Conduit could not safely read Windows Firewall status.",
     ),
 }
 
@@ -251,14 +251,14 @@ class FirewallOnboarding:
 
 
 def _run_elevated_firewall_operation(base_port, operation):
-    """Elevate one fixed DeskFlow helper operation; None means UAC cancel."""
+    """Elevate one fixed Conduit helper operation; None means UAC cancel."""
     FirewallRuleSpec(current_process_executable(), base_port)
     if operation not in {"install", "repair"}:
         return EXIT_CONFIGURATION_FAILED
     project_root = Path(__file__).resolve().parents[1]
     frozen = getattr(sys, "frozen", False)
     arguments = [
-        "--deskflow-firewall-helper",
+        "--conduit-firewall-helper",
         operation,
         "--base-port",
         str(base_port),

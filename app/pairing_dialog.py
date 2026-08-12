@@ -95,7 +95,7 @@ class PairingDialog:
         self.prompt = prompt
         self.decision = decision
         self.window = ctk.CTkToplevel(root)
-        self.window.title("DeskFlow security check")
+        self.window.title("Conduit security check")
         self.window.geometry("520x360")
         self.window.minsize(360, 320)
         self.window.transient(root)
@@ -232,7 +232,7 @@ class PairingApprovalController:
                     self._active_decision = None
             decision.complete(PairingOutcome.CLOSED)
             raise PairingTimeout(
-                "pairing approval cancelled because DeskFlow closed"
+                "pairing approval cancelled because Conduit closed"
             )
 
         outcome = decision.wait(self.timeout)
@@ -250,7 +250,7 @@ class PairingApprovalController:
             raise PairingTimeout(
                 "Pairing approval timed out. Connect again and compare the codes."
             )
-        raise PairingTimeout("pairing approval cancelled because DeskFlow closed")
+        raise PairingTimeout("pairing approval cancelled because Conduit closed")
 
     def _schedule(self, callback):
         try:

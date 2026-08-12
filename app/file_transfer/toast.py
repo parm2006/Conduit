@@ -45,7 +45,7 @@ def toast_view(status):
         if status.error_code == "ExplorerStartTimeout":
             message = "Windows Explorer did not accept the paste."
         else:
-            message = "DeskFlow could not finish the network transfer."
+            message = "Conduit could not finish the network transfer."
         details = f"{_safe_file_label(status.label)} · {message}"
     elif status.phase is TransferPhase.COMPLETED:
         details = f"{_size(status.bytes_done)} / {_size(status.bytes_total)} · Windows finished reading files"

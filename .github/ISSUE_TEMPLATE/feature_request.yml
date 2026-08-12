@@ -1,0 +1,53 @@
+name: Feature request
+description: Suggest an improvement or new capability for Conduit
+title: "[Feature]: "
+labels:
+  - enhancement
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for sharing an idea. Search existing issues first, then explain the problem before proposing a solution.
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem or limitation
+      description: What workflow is difficult or impossible today, and who does it affect?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behavior
+      description: Describe the user-visible result rather than only an implementation.
+    validations:
+      required: true
+  - type: textarea
+    id: example
+    attributes:
+      label: Example workflow
+      placeholder: |
+        1. The user ...
+        2. Conduit ...
+        3. The user sees ...
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Describe workarounds or other approaches you considered.
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context
+      description: Add mockups, screenshots, or links that clarify the request.
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Submission checks
+      options:
+        - label: I searched existing issues for this idea.
+          required: true
+        - label: This request describes one focused feature or improvement.
+          required: true

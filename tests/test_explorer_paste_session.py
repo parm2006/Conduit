@@ -185,7 +185,7 @@ class ExplorerPasteSessionTests(unittest.TestCase):
                 self.assertFalse(session.observe())
                 self.assertFalse(session.inferred_cancelled)
 
-    def test_deskflow_cancel_closes_only_the_correlated_popup(self):
+    def test_conduit_cancel_closes_only_the_correlated_popup(self):
         destination = DestinationContext(
             self.destination_hwnd, self.destination_pid, None
         )

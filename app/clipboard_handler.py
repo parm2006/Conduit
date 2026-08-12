@@ -114,7 +114,7 @@ class ClipboardHandler:
         finally:
             try:
                 if clipboard_updated:
-                    # Record only DeskFlow's write. A user copy made while
+                    # Record only Conduit's write. A user copy made while
                     # Windows settles must remain visible as a newer sequence.
                     time.sleep(0.1)
                     if injected_sequence is not None:

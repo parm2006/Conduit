@@ -262,7 +262,7 @@ class SecureControlConnectionTests(unittest.TestCase):
         self.assertIsInstance(client.last_error, ServerUnavailable)
         self.assertEqual(
             result[0][1],
-            "Could not reach the server. Check its address, port, and that DeskFlow is running.",
+            "Could not reach the server. Check its address, port, and that Conduit is running.",
         )
 
     def test_declined_pairing_retains_typed_failure_without_a_pin(self):

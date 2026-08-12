@@ -1,7 +1,7 @@
 import unittest
 
-from app.client import DeskFlowClient
-from app.server import DeskFlowServer
+from app.client import ConduitClient
+from app.server import ConduitServer
 
 
 class RecordingNetwork:
@@ -25,7 +25,7 @@ class Coordinator:
 class EmergencyReleaseTests(unittest.TestCase):
     def test_server_captured_emergency_hotkey_delegates_to_app_shutdown(self):
         events = []
-        server = DeskFlowServer.__new__(DeskFlowServer)
+        server = ConduitServer.__new__(ConduitServer)
         server.pressed_keys = {"ctrl", "alt", "shift"}
         server.forwarded_keys = {}
         server.paste_coordinator = Coordinator()
@@ -51,7 +51,7 @@ class EmergencyReleaseTests(unittest.TestCase):
                 events.append(message["type"])
                 return True
 
-        client = DeskFlowClient.__new__(DeskFlowClient)
+        client = ConduitClient.__new__(ConduitClient)
         client.is_active = True
         client.input_handler = Input()
         client.control_network = Network()
@@ -61,7 +61,7 @@ class EmergencyReleaseTests(unittest.TestCase):
         self.assertEqual(events, ["release", "switch_back"])
 
     def test_emergency_exit_releases_forwarded_modifiers_before_disconnect(self):
-        server = DeskFlowServer.__new__(DeskFlowServer)
+        server = ConduitServer.__new__(ConduitServer)
         server.pressed_keys = {"ctrl", "alt", "shift"}
         server.paste_coordinator = Coordinator()
         server.control_network = RecordingNetwork()
@@ -78,7 +78,7 @@ class EmergencyReleaseTests(unittest.TestCase):
         self.assertTrue(server.control_network.disconnected)
 
     def test_reload_connection_releases_keys_and_resets_lanes(self):
-        server = DeskFlowServer.__new__(DeskFlowServer)
+        server = ConduitServer.__new__(ConduitServer)
         server.pressed_keys = {"ctrl", "alt", "shift"}
         server.forwarded_keys = {("special", "ctrl"): {"type": "special", "value": "ctrl"}}
         server.switching_to_client = True
@@ -114,7 +114,7 @@ class EmergencyReleaseTests(unittest.TestCase):
             def start_edge_detection(self, edge):
                 events.append(("edge", edge))
 
-        server = DeskFlowServer.__new__(DeskFlowServer)
+        server = ConduitServer.__new__(ConduitServer)
         server.switching_to_client = True
         server.pressed_keys = {"ctrl"}
         server.forwarded_keys = {

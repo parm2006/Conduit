@@ -153,7 +153,7 @@ class TransferToastViewTests(unittest.TestCase):
 
         self.assertEqual(
             view.details,
-            "archive.zip · DeskFlow could not finish the network transfer.",
+            "archive.zip · Conduit could not finish the network transfer.",
         )
         self.assertNotIn("/home/person/private", view.details)
 

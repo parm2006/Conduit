@@ -1,4 +1,4 @@
-"""DeskFlow local identity generation, migration, and loading."""
+"""Conduit local identity generation, migration, and loading."""
 
 from dataclasses import dataclass
 import datetime
@@ -25,7 +25,7 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_IDENTITY_ROOT = Path(
     os.environ.get("LOCALAPPDATA", Path.home())
-) / "DeskFlow" / "identity"
+) / "Conduit" / "identity"
 
 # Kept as location hints for older callers. New code should use load_identity().
 CERT_FILE = str(DEFAULT_IDENTITY_ROOT / "cert.pem")
@@ -103,7 +103,7 @@ class IdentityStore:
                 return self._load_active(False)
             except Exception as error:
                 logger.warning(
-                    "DeskFlow identity is unreadable; quarantining it (%s)",
+                    "Conduit identity is unreadable; quarantining it (%s)",
                     error_name(error),
                 )
                 self._quarantine_active()
@@ -176,7 +176,7 @@ class IdentityStore:
 
     def _self_signed(self, private_key):
         now = datetime.datetime.now(datetime.timezone.utc)
-        name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "DeskFlow")])
+        name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "Conduit")])
         return (
             x509.CertificateBuilder()
             .subject_name(name)
@@ -185,7 +185,7 @@ class IdentityStore:
             .serial_number(x509.random_serial_number())
             .not_valid_before(now - datetime.timedelta(minutes=1))
             .not_valid_after(now + datetime.timedelta(days=3650))
-            .add_extension(x509.SubjectAlternativeName([x509.DNSName("DeskFlow")]), False)
+            .add_extension(x509.SubjectAlternativeName([x509.DNSName("Conduit")]), False)
             .sign(private_key, hashes.SHA256())
         )
 
@@ -209,7 +209,7 @@ class IdentityStore:
                 raise IdentityError("legacy certificate and key do not match")
         except Exception as error:
             logger.warning(
-                "Ignoring unreadable legacy DeskFlow identity (%s)",
+                "Ignoring unreadable legacy Conduit identity (%s)",
                 error_name(error),
             )
             return None
@@ -230,7 +230,7 @@ class IdentityStore:
                 source.rmdir()
         except Exception as error:
             logger.error(
-                "Could not fully quarantine the current DeskFlow identity (%s)",
+                "Could not fully quarantine the current Conduit identity (%s)",
                 error_name(error),
             )
         self.pointer.unlink(missing_ok=True)

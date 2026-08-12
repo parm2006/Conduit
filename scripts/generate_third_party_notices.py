@@ -144,10 +144,10 @@ def generate_notices(
     distribution_factory=metadata.distribution,
 ):
     sections = [
-        "DeskFlow Third-Party Notices",
+        "Conduit Third-Party Notices",
         "============================",
         "",
-        "DeskFlow is licensed under GPL-3.0.",
+        "Conduit is licensed under GPL-3.0.",
         f"Corresponding source: {SOURCE_URL}",
         "",
         "Release tooling",

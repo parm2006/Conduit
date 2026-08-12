@@ -9,9 +9,9 @@ from app.clipboard_formats import (
     decode_clipboard_message,
     encode_clipboard_message,
 )
-from app.client import DeskFlowClient
+from app.client import ConduitClient
 from app.file_transfer.paste_coordinator import PasteCoordinator
-from app.server import DeskFlowServer
+from app.server import ConduitServer
 from app.windows_clipboard import ClipboardAccessError
 
 
@@ -202,7 +202,7 @@ class ClipboardSequenceTests(unittest.TestCase):
 
 class PeerClipboardSchedulingTests(unittest.TestCase):
     def test_stale_remote_snapshot_cannot_overwrite_newer_local_file_offer(self):
-        server = DeskFlowServer.__new__(DeskFlowServer)
+        server = ConduitServer.__new__(ConduitServer)
         server.switching_to_client = False
         server.control_network = SessionNetwork()
         server.paste_coordinator = PasteCoordinator(lambda: None)
@@ -228,7 +228,7 @@ class PeerClipboardSchedulingTests(unittest.TestCase):
         self.assertEqual(server.clipboard_offer_state.current_offer.source, "server")
 
     def test_snapshot_can_establish_matching_offer_when_data_arrives_first(self):
-        server = DeskFlowServer.__new__(DeskFlowServer)
+        server = ConduitServer.__new__(ConduitServer)
         server.switching_to_client = False
         server.control_network = SessionNetwork()
         server.paste_coordinator = PasteCoordinator(lambda: None)
@@ -254,7 +254,7 @@ class PeerClipboardSchedulingTests(unittest.TestCase):
         self.assertEqual(server.clipboard_offer_state.current_offer.source, "client")
 
     def test_local_snapshot_is_queued_with_its_authoritative_offer(self):
-        client = DeskFlowClient.__new__(DeskFlowClient)
+        client = ConduitClient.__new__(ConduitClient)
         client.is_active = True
         client.control_network = SessionNetwork()
         client.paste_coordinator = PasteCoordinator(lambda: None)
@@ -270,7 +270,7 @@ class PeerClipboardSchedulingTests(unittest.TestCase):
         self.assertEqual(work["offer"].revision, 1)
 
     def test_client_submission_trace_omits_clipboard_content(self):
-        client = DeskFlowClient.__new__(DeskFlowClient)
+        client = ConduitClient.__new__(ConduitClient)
         client.clipboard_sender = RecordingSender()
         snapshot = ClipboardSnapshot([
             ClipboardEntry("rtf", b"PRIVATE-RTF-CONTENT"),
@@ -284,9 +284,9 @@ class PeerClipboardSchedulingTests(unittest.TestCase):
         self.assertNotIn("PRIVATE-RTF-CONTENT", output)
 
     def test_client_to_server_trace_identifies_boundaries_without_payload_content(self):
-        client = DeskFlowClient.__new__(DeskFlowClient)
+        client = ConduitClient.__new__(ConduitClient)
         client.data_network = RecordingNetwork()
-        server = DeskFlowServer.__new__(DeskFlowServer)
+        server = ConduitServer.__new__(ConduitServer)
         server.clipboard = RecordingClipboard()
         snapshot = ClipboardSnapshot([
             ClipboardEntry("html", b"PRIVATE-CLIPBOARD-CONTENT"),
@@ -306,7 +306,7 @@ class PeerClipboardSchedulingTests(unittest.TestCase):
         )
 
     def test_client_submits_snapshot_without_mutating_it(self):
-        client = DeskFlowClient.__new__(DeskFlowClient)
+        client = ConduitClient.__new__(ConduitClient)
         client.clipboard_sender = RecordingSender()
         snapshot = ClipboardSnapshot([ClipboardEntry("html", b"hello")])
 
@@ -319,7 +319,7 @@ class PeerClipboardSchedulingTests(unittest.TestCase):
         )
 
     def test_server_submits_snapshot_without_mutating_it(self):
-        server = DeskFlowServer.__new__(DeskFlowServer)
+        server = ConduitServer.__new__(ConduitServer)
         server.clipboard_sender = RecordingSender()
         snapshot = ClipboardSnapshot([ClipboardEntry("png", b"png")])
 
@@ -332,7 +332,7 @@ class PeerClipboardSchedulingTests(unittest.TestCase):
         )
 
     def test_client_encodes_snapshot_and_preserves_message_type(self):
-        client = DeskFlowClient.__new__(DeskFlowClient)
+        client = ConduitClient.__new__(ConduitClient)
         client.data_network = RecordingNetwork()
         snapshot = ClipboardSnapshot([ClipboardEntry("dib", b"dib")])
 
@@ -342,7 +342,7 @@ class PeerClipboardSchedulingTests(unittest.TestCase):
         self.assertEqual(decode_clipboard_message(message), snapshot)
 
     def test_server_encodes_snapshot_and_preserves_message_type(self):
-        server = DeskFlowServer.__new__(DeskFlowServer)
+        server = ConduitServer.__new__(ConduitServer)
         server.data_network = RecordingNetwork()
         snapshot = ClipboardSnapshot(
             [

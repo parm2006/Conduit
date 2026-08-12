@@ -4,7 +4,7 @@ import unittest
 import customtkinter as ctk
 
 from app.crypto import pairing_code_from_fingerprint
-from app.gui import DeskFlowGUI
+from app.gui import ConduitGUI
 from app.network import PairingTimeout
 from app.pairing_dialog import (
     PairingApprovalController, PairingDecision, PairingDialog, PairingOutcome,
@@ -280,7 +280,7 @@ class PairingApprovalControllerTests(unittest.TestCase):
         )
 
 
-class DeskFlowPairingIntegrationTests(unittest.TestCase):
+class ConduitPairingIntegrationTests(unittest.TestCase):
     def test_gui_delegates_fingerprint_approval_to_the_controller(self):
         calls = []
 
@@ -289,7 +289,7 @@ class DeskFlowPairingIntegrationTests(unittest.TestCase):
                 calls.append((fingerprint, peer))
                 return True
 
-        gui = DeskFlowGUI.__new__(DeskFlowGUI)
+        gui = ConduitGUI.__new__(ConduitGUI)
         gui.pairing_approval = Controller()
         peer = Peer()
 
@@ -303,7 +303,7 @@ class DeskFlowPairingIntegrationTests(unittest.TestCase):
             def shutdown(self):
                 events.append("pairing shutdown")
 
-        gui = DeskFlowGUI.__new__(DeskFlowGUI)
+        gui = ConduitGUI.__new__(ConduitGUI)
         gui.overlay = None
         gui.server = None
         gui.client = None

@@ -7,10 +7,9 @@ param(
 $ErrorActionPreference = "Stop"
 $RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $PythonPath = Join-Path $RepoRoot "venv\Scripts\python.exe"
-$PyInstallerPath = Join-Path $RepoRoot "venv\Scripts\pyinstaller.exe"
-$DeskFlowExecutable = Join-Path $RepoRoot "dist\DeskFlow-v5.1.exe"
-$InstallerScript = Join-Path $RepoRoot "installer\DeskFlow.nsi"
-$InstallerExecutable = Join-Path $RepoRoot "dist\DeskFlow-v5.1-Setup.exe"
+$ConduitExecutable = Join-Path $RepoRoot "dist\Conduit-v5.1.exe"
+$InstallerScript = Join-Path $RepoRoot "installer\Conduit.nsi"
+$InstallerExecutable = Join-Path $RepoRoot "dist\Conduit-v5.1-Setup.exe"
 $GitSafeDirectory = $RepoRoot -replace "\\", "/"
 
 function Invoke-Checked {
@@ -56,17 +55,13 @@ function Resolve-Makensis {
 }
 
 if (-not (Test-Path -LiteralPath $PythonPath -PathType Leaf)) {
-    throw "DeskFlow virtual-environment Python was not found."
+    throw "Conduit virtual-environment Python was not found."
 }
-if (-not (Test-Path -LiteralPath $PyInstallerPath -PathType Leaf)) {
-    throw "PyInstaller was not found in the DeskFlow virtual environment."
-}
-
 Push-Location $RepoRoot
 try {
     # remove stale release outputs
-    if (Test-Path -LiteralPath $DeskFlowExecutable) {
-        Remove-Item -LiteralPath $DeskFlowExecutable -Force
+    if (Test-Path -LiteralPath $ConduitExecutable) {
+        Remove-Item -LiteralPath $ConduitExecutable -Force
     }
     if (Test-Path -LiteralPath $InstallerExecutable) {
         Remove-Item -LiteralPath $InstallerExecutable -Force
@@ -101,19 +96,19 @@ try {
         throw "Third-party notices were not generated."
     }
 
-    # pyinstaller.exe
-    Invoke-Checked -Description "DeskFlow executable build" -FilePath $PyInstallerPath -ArgumentList @(
-        "--clean", "--noconfirm", "DeskFlow.spec"
+    # PyInstaller
+    Invoke-Checked -Description "Conduit executable build" -FilePath $PythonPath -ArgumentList @(
+        "-m", "PyInstaller", "--clean", "--noconfirm", "Conduit.spec"
     )
-    if (-not (Test-Path -LiteralPath $DeskFlowExecutable -PathType Leaf)) {
-        throw "DeskFlow.exe was not produced."
+    if (-not (Test-Path -LiteralPath $ConduitExecutable -PathType Leaf)) {
+        throw "Conduit.exe was not produced."
     }
 
-    # --deskflow-firewall-helper
+    # --conduit-firewall-helper
     $smoke = Start-Process `
-        -FilePath $DeskFlowExecutable `
+        -FilePath $ConduitExecutable `
         -ArgumentList @(
-            "--deskflow-firewall-helper",
+            "--conduit-firewall-helper",
             "inspect",
             "--base-port",
             "28903"
@@ -128,10 +123,10 @@ try {
     # makensis
     $ResolvedMakensis = Resolve-Makensis
     Invoke-Checked -Description "NSIS installer build" -FilePath $ResolvedMakensis -ArgumentList @(
-        "/V3", "/DDESKFLOW_RELEASE_BUILD=1", $InstallerScript
+        "/V3", "/DCONDUIT_RELEASE_BUILD=1", $InstallerScript
     )
     if (-not (Test-Path -LiteralPath $InstallerExecutable -PathType Leaf)) {
-        throw "The DeskFlow installer was not produced."
+        throw "The Conduit installer was not produced."
     }
 
     if ($SigningToolPath) {
@@ -140,19 +135,19 @@ try {
         ) {
             throw "The supplied SigningToolPath does not exist."
         }
-        Invoke-Checked -Description "DeskFlow executable signing" -FilePath $SigningToolPath -ArgumentList (
-            @($SigningArguments) + @($DeskFlowExecutable)
+        Invoke-Checked -Description "Conduit executable signing" -FilePath $SigningToolPath -ArgumentList (
+            @($SigningArguments) + @($ConduitExecutable)
         )
-        Invoke-Checked -Description "DeskFlow installer signing" -FilePath $SigningToolPath -ArgumentList (
+        Invoke-Checked -Description "Conduit installer signing" -FilePath $SigningToolPath -ArgumentList (
             @($SigningArguments) + @($InstallerExecutable)
         )
     }
 
-    $pyInstallerVersion = & $PyInstallerPath "--version"
+    $pyInstallerVersion = & $PythonPath -m PyInstaller "--version"
     $nsisVersion = & $ResolvedMakensis "/VERSION"
     Write-Host "PyInstaller: $pyInstallerVersion"
     Write-Host "NSIS: $nsisVersion"
-    Write-Host "Executable: $DeskFlowExecutable"
+    Write-Host "Executable: $ConduitExecutable"
     Write-Host "Installer: $InstallerExecutable"
 }
 finally {

@@ -1,4 +1,4 @@
-"""Small Windows DPAPI boundary used for DeskFlow local secrets."""
+"""Small Windows DPAPI boundary used for Conduit local secrets."""
 
 import ctypes
 import os
@@ -70,7 +70,7 @@ class WindowsDataProtector:
         destination = _DataBlob()
         if not _crypt32.CryptProtectData(
             ctypes.byref(source),
-            "DeskFlow local secret",
+            "Conduit local secret",
             None,
             None,
             None,

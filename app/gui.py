@@ -4,8 +4,8 @@ import threading
 from pathlib import Path
 from tkinter import messagebox
 
-from app.server import DeskFlowServer
-from app.client import DeskFlowClient
+from app.server import ConduitServer
+from app.client import ConduitClient
 from app.file_transfer.toast import TransferToast
 from app.crypto import certificate_fingerprint, pairing_code_from_fingerprint
 from app.pairing_dialog import PairingApprovalController
@@ -49,7 +49,7 @@ def save_role_safely(preferences, role):
         preferences.save_role(role)
         return True
     except Exception as error:
-        logger.error("Could not save successful DeskFlow role (%s)", error_name(error))
+        logger.error("Could not save successful Conduit role (%s)", error_name(error))
         return False
 
 
@@ -89,8 +89,8 @@ def write_status_message(widget, message, color="gray", white_text=None, show_ip
 
 def _firewall_scope_text(spec):
     message = (
-        "Allow DeskFlow Server on private local networks?\n\n"
-        "Windows will allow this DeskFlow executable to receive TCP "
+        "Allow Conduit Server on private local networks?\n\n"
+        "Windows will allow this Conduit executable to receive TCP "
         f"connections on ports {spec.local_ports} from devices on your local "
         "network. Public networks remain blocked."
     )
@@ -98,7 +98,7 @@ def _firewall_scope_text(spec):
         message += (
             "\n\nThis development build runs through Python. Windows can "
             "restrict the rule to this Python executable, but not to the "
-            "DeskFlow script alone. Packaged releases use a DeskFlow-specific "
+            "Conduit script alone. Packaged releases use a Conduit-specific "
             "rule."
         )
     return message
@@ -106,9 +106,9 @@ def _firewall_scope_text(spec):
 
 def _firewall_conflict_text(spec):
     message = (
-        "Windows is blocking incoming DeskFlow connections.\n\n"
+        "Windows is blocking incoming Conduit connections.\n\n"
         "Repair will disable only the conflicting firewall rule for this "
-        "exact executable, then verify DeskFlow's restricted rule.\n\n"
+        "exact executable, then verify Conduit's restricted rule.\n\n"
         f"Executable: {spec.executable_path}\n"
         f"TCP ports: {spec.local_ports}\n"
         "Scope: Private networks and LocalSubnet only. Public networks remain "
@@ -119,7 +119,7 @@ def _firewall_conflict_text(spec):
             "\n\nThis development build runs through Python. Disabling the "
             "conflicting rule affects this Python executable, which other "
             "Python applications may share. Packaged releases use a "
-            "DeskFlow-specific executable."
+            "Conduit-specific executable."
         )
     return message
 
@@ -133,7 +133,7 @@ def ask_firewall_start_choice(
 ):
     """Show the explicit three-way Server start decision."""
     dialog = ctk.CTkToplevel(parent)
-    dialog.title("DeskFlow Firewall")
+    dialog.title("Conduit Firewall")
     tall_dialog = spec.development_scope or repair_required
     dialog.geometry("480x390" if tall_dialog else "430x270")
     dialog.resizable(False, False)
@@ -347,7 +347,7 @@ def enable_textbox_qol(widget):
     return undo_mgr
 
 
-class DeskFlowGUI(ctk.CTk):
+class ConduitGUI(ctk.CTk):
     def __init__(self):
         super().__init__()
         
@@ -590,7 +590,7 @@ class DeskFlowGUI(ctk.CTk):
     def _show_firewall_help(self):
         inspection = self.firewall_onboarding.inspection
         display = firewall_display(inspection)
-        messagebox.showinfo("DeskFlow Firewall", display.explanation)
+        messagebox.showinfo("Conduit Firewall", display.explanation)
 
     def _on_firewall_action(self):
         port = parse_port(self.server_port_entry.get())
@@ -614,9 +614,9 @@ class DeskFlowGUI(ctk.CTk):
             is FirewallState.CONFLICT
         )
         consent = messagebox.askyesno(
-            "Repair DeskFlow Firewall"
+            "Repair Conduit Firewall"
             if conflict
-            else "Configure DeskFlow Firewall",
+            else "Configure Conduit Firewall",
             _firewall_conflict_text(spec)
             if conflict
             else _firewall_scope_text(spec),
@@ -760,7 +760,7 @@ class DeskFlowGUI(ctk.CTk):
         if not self.overlay:
             self._init_overlay()
             
-        self.server = DeskFlowServer(
+        self.server = ConduitServer(
             password=password, 
             port=port, 
             layout_position=self.layout_position,
@@ -834,7 +834,7 @@ class DeskFlowGUI(ctk.CTk):
         if self.client:
             self.client.disconnect()
             
-        client = DeskFlowClient(
+        client = ConduitClient(
             password=password,
             on_transfer_status=self._on_transfer_status,
             fingerprint_approval=self._approve_fingerprint,
@@ -989,12 +989,12 @@ class DeskFlowGUI(ctk.CTk):
             try:
                 if hidden and self.state() != "withdrawn":
                     self.withdraw()
-                    logger.info("[DAEMON] DeskFlow GUI hidden in background daemon mode.")
+                    logger.info("[DAEMON] Conduit GUI hidden in background daemon mode.")
                 elif not hidden and self.state() == "withdrawn":
                     self.deiconify()
                     self.lift()
                     self.focus_force()
-                    logger.info("[DAEMON] DeskFlow GUI unhidden from background daemon mode.")
+                    logger.info("[DAEMON] Conduit GUI unhidden from background daemon mode.")
             except Exception as error:
                 logger.debug("Could not set daemon mode: %s", error_name(error))
         self.after(0, _apply)
@@ -1037,7 +1037,7 @@ class DeskFlowGUI(ctk.CTk):
                     self.deiconify()
                     self.lift()
                     self.focus_force()
-                    logger.info("[DAEMON] DeskFlow GUI restored to visibility.")
+                    logger.info("[DAEMON] Conduit GUI restored to visibility.")
             except Exception as error:
                 logger.debug("Could not ensure window visibility: %s", error_name(error))
         self.after(0, _show)
@@ -1045,12 +1045,12 @@ class DeskFlowGUI(ctk.CTk):
     def _on_emergency_exit_global(self):
         logger.warning(
             "[GUI] Global emergency exit triggered "
-            "(Ctrl+Shift+Alt+Escape). Closing DeskFlow on both peers."
+            "(Ctrl+Shift+Alt+Escape). Closing Conduit on both peers."
         )
         self._coordinate_app_shutdown(notify_peer=True)
 
     def _on_remote_app_shutdown(self, data):
-        logger.warning("Authenticated peer requested DeskFlow shutdown.")
+        logger.warning("Authenticated peer requested Conduit shutdown.")
         self._coordinate_app_shutdown(notify_peer=False)
 
     def _coordinate_app_shutdown(self, notify_peer):
@@ -1309,5 +1309,5 @@ def run_gui():
         pass
         
     ctk.set_appearance_mode("dark")
-    app = DeskFlowGUI()
+    app = ConduitGUI()
     run_mainloop(app)

@@ -1,4 +1,4 @@
-"""Restricted command surface for DeskFlow firewall operations."""
+"""Restricted command surface for Conduit firewall operations."""
 
 import sys
 

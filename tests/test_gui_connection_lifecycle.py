@@ -1,6 +1,6 @@
 import unittest
 
-from app.gui import DeskFlowGUI
+from app.gui import ConduitGUI
 
 
 class Client:
@@ -15,7 +15,7 @@ class GuiConnectionLifecycleTests(unittest.TestCase):
     def test_late_server_disconnect_status_cannot_overwrite_stopped_status(self):
         scheduled = []
         statuses = []
-        gui = DeskFlowGUI.__new__(DeskFlowGUI)
+        gui = ConduitGUI.__new__(ConduitGUI)
         gui.server = object()
         gui.server_port_entry = type(
             "Entry",
@@ -36,7 +36,7 @@ class GuiConnectionLifecycleTests(unittest.TestCase):
 
     def test_late_disconnect_from_old_client_cannot_disconnect_replacement(self):
         scheduled = []
-        gui = DeskFlowGUI.__new__(DeskFlowGUI)
+        gui = ConduitGUI.__new__(ConduitGUI)
         old_client = Client()
         replacement = Client()
         gui.client = replacement

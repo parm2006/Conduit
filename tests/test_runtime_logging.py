@@ -37,7 +37,7 @@ class RuntimeLoggingTests(unittest.TestCase):
 
         result = run.main(
             [
-                "--deskflow-firewall-helper",
+                "--conduit-firewall-helper",
                 "inspect",
                 "--base-port",
                 "5000",

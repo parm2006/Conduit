@@ -9,7 +9,7 @@ key.pem
 build/
 dist/
 *.spec
-!DeskFlow.spec
+!Conduit.spec
 handoffs/
 
 # Local development, logs, and agent planning artifacts

@@ -15,7 +15,7 @@ def configure_runtime_logging():
 
 def main(argv=None, *, helper_runner=None, gui_runner=None):
     arguments = list(sys.argv[1:] if argv is None else argv)
-    if arguments[:1] == ["--deskflow-firewall-helper"]:
+    if arguments[:1] == ["--conduit-firewall-helper"]:
         if helper_runner is None:
             from app.firewall_helper import run_firewall_helper
 

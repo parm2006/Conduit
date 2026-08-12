@@ -1,7 +1,7 @@
 import unittest
 from types import SimpleNamespace
 
-from app.gui import DeskFlowGUI
+from app.gui import ConduitGUI
 
 
 class OverlayMotionTests(unittest.TestCase):
@@ -13,7 +13,7 @@ class OverlayMotionTests(unittest.TestCase):
             def on_mouse_move(self, dx, dy):
                 self.moves.append((dx, dy))
 
-        gui = object.__new__(DeskFlowGUI)
+        gui = object.__new__(ConduitGUI)
         gui.server = Server()
         gui.overlay_center_x = 500
         gui.overlay_center_y = 400

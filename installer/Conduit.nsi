@@ -2,8 +2,8 @@ Unicode True
 RequestExecutionLevel admin
 SetCompressor /SOLID lzma
 
-!ifndef DESKFLOW_RELEASE_BUILD
-!error "Build with scripts\\build_release.ps1; DESKFLOW_RELEASE_BUILD is missing."
+!ifndef CONDUIT_RELEASE_BUILD
+!error "Build with scripts\\build_release.ps1; CONDUIT_RELEASE_BUILD is missing."
 !endif
 
 !include "MUI2.nsh"
@@ -13,23 +13,23 @@ SetCompressor /SOLID lzma
 
 !define MUI_CUSTOMFUNCTION_ABORT OnUserAbort
 
-!define PRODUCT_NAME "DeskFlow"
+!define PRODUCT_NAME "Conduit"
 !define PRODUCT_VERSION "5.1"
 !define FILE_VERSION "5.1.0.0"
-!define SOURCE_URL "https://github.com/parm2006/DeskFlow"
+!define SOURCE_URL "https://github.com/parm2006/Conduit"
 !define UNINSTALL_KEY \
-  "Software\Microsoft\Windows\CurrentVersion\Uninstall\DeskFlow"
+  "Software\Microsoft\Windows\CurrentVersion\Uninstall\Conduit"
 
 Name "${PRODUCT_NAME} ${PRODUCT_VERSION}"
-OutFile "..\dist\DeskFlow-v${PRODUCT_VERSION}-Setup.exe"
-InstallDir "$PROGRAMFILES64\DeskFlow"
+OutFile "..\dist\Conduit-v${PRODUCT_VERSION}-Setup.exe"
+InstallDir "$PROGRAMFILES64\Conduit"
 Icon "..\app\assets\app_icon.ico"
 VIProductVersion "${FILE_VERSION}"
 VIAddVersionKey "ProductName" "${PRODUCT_NAME}"
 VIAddVersionKey "ProductVersion" "${PRODUCT_VERSION}"
 VIAddVersionKey "FileVersion" "${FILE_VERSION}"
-VIAddVersionKey "FileDescription" "DeskFlow installer"
-VIAddVersionKey "LegalCopyright" "DeskFlow contributors; GPL-3.0-or-later"
+VIAddVersionKey "FileDescription" "Conduit installer"
+VIAddVersionKey "LegalCopyright" "Conduit contributors; GPL-3.0-or-later"
 
 Var FirewallConsentGranted
 Var FirewallConsentYesButton
@@ -50,7 +50,7 @@ Page custom FirewallConsentPage FirewallConsentLeave
 !insertmacro MUI_LANGUAGE "English"
 
 Function .onInit
-  StrCpy $INSTDIR "$PROGRAMFILES64\DeskFlow"
+  StrCpy $INSTDIR "$PROGRAMFILES64\Conduit"
   StrCpy $FirewallConsentGranted "0"
   StrCpy $InstallComplete "0"
   StrCpy $TransactionFilesWritten "0"
@@ -69,7 +69,7 @@ FunctionEnd
 
 Function ClassifyExistingInstall
   ; Classify without mutating disk. Every directory and every unknown filename
-  ; fails closed, even when valid DeskFlow registry metadata is present.
+  ; fails closed, even when valid Conduit registry metadata is present.
   FindFirst $2 $3 "$INSTDIR\*"
   IfErrors classify_done
 
@@ -79,10 +79,10 @@ classify_next_entry:
   StrCmp $3 ".." classify_advance
   IfFileExists "$INSTDIR\$3\*.*" unknown_install_contents
 
-  StrCmp $3 "DeskFlow.exe" classify_allowed_entry
+  StrCmp $3 "Conduit.exe" classify_allowed_entry
   StrCmp $3 "Uninstall.exe" classify_allowed_entry
-  StrCmp $3 "DeskFlow Source.url" classify_allowed_entry
-  StrCmp $3 "DeskFlow.installing" classify_allowed_entry
+  StrCmp $3 "Conduit Source.url" classify_allowed_entry
+  StrCmp $3 "Conduit.installing" classify_allowed_entry
   StrCmp $3 "THIRD_PARTY_NOTICES.txt" classify_allowed_entry
   StrCmp $3 "LICENSE" classify_allowed_entry
   Goto unknown_install_contents
@@ -97,9 +97,9 @@ classify_advance:
 classify_scan_done:
   FindClose $2
   ${If} $ExistingInstallState == "partial"
-    IfFileExists "$INSTDIR\DeskFlow.exe" 0 classify_done
+    IfFileExists "$INSTDIR\Conduit.exe" 0 classify_done
     IfFileExists "$INSTDIR\Uninstall.exe" 0 classify_done
-    ReadRegStr $0 HKLM "Software\DeskFlow" "InstallDir"
+    ReadRegStr $0 HKLM "Software\Conduit" "InstallDir"
     ReadRegStr $1 HKLM "${UNINSTALL_KEY}" "UninstallString"
     StrCmp $0 "$INSTDIR" 0 classify_done
     StrCmp $1 '"$INSTDIR\Uninstall.exe"' 0 classify_done
@@ -113,38 +113,38 @@ classify_done:
 unknown_install_contents:
   FindClose $2
   MessageBox MB_ICONSTOP|MB_OK \
-    "DeskFlow setup found an unknown file or folder in $INSTDIR. Setup will not overwrite it. Remove or move the unknown content, then retry."
+    "Conduit setup found an unknown file or folder in $INSTDIR. Setup will not overwrite it. Remove or move the unknown content, then retry."
   SetErrorLevel 3
   Quit
 FunctionEnd
 
 Function PreflightUpgrade
-  IfFileExists "$INSTDIR\DeskFlow.upgrade-lock-test" upgrade_reserved_exists 0
+  IfFileExists "$INSTDIR\Conduit.upgrade-lock-test" upgrade_reserved_exists 0
 
   ClearErrors
-  Rename "$INSTDIR\DeskFlow.exe" "$INSTDIR\DeskFlow.upgrade-lock-test"
+  Rename "$INSTDIR\Conduit.exe" "$INSTDIR\Conduit.upgrade-lock-test"
   IfErrors upgrade_executable_locked
 
   ClearErrors
-  Rename "$INSTDIR\DeskFlow.upgrade-lock-test" "$INSTDIR\DeskFlow.exe"
+  Rename "$INSTDIR\Conduit.upgrade-lock-test" "$INSTDIR\Conduit.exe"
   IfErrors upgrade_restore_failed
   Return
 
 upgrade_reserved_exists:
   MessageBox MB_ICONSTOP|MB_OK \
-    "DeskFlow cannot verify the existing installation because $INSTDIR\DeskFlow.upgrade-lock-test already exists. Remove that recovery file only after confirming DeskFlow.exe is present, then retry."
+    "Conduit cannot verify the existing installation because $INSTDIR\Conduit.upgrade-lock-test already exists. Remove that recovery file only after confirming Conduit.exe is present, then retry."
   SetErrorLevel 3
   Quit
 
 upgrade_executable_locked:
   MessageBox MB_ICONSTOP|MB_OK \
-    "DeskFlow appears to be running or locked. Close DeskFlow completely, then run setup again. The existing installation was not removed."
+    "Conduit appears to be running or locked. Close Conduit completely, then run setup again. The existing installation was not removed."
   SetErrorLevel 3
   Quit
 
 upgrade_restore_failed:
   MessageBox MB_ICONSTOP|MB_OK \
-    "DeskFlow could not restore its lock test. Rename $INSTDIR\DeskFlow.upgrade-lock-test to $INSTDIR\DeskFlow.exe, then retry setup. The existing uninstaller was not started."
+    "Conduit could not restore its lock test. Rename $INSTDIR\Conduit.upgrade-lock-test to $INSTDIR\Conduit.exe, then retry setup. The existing uninstaller was not started."
   SetErrorLevel 3
   Quit
 FunctionEnd
@@ -152,25 +152,25 @@ FunctionEnd
 Function CleanupPartialInstall
   ; These are the complete installer-owned file allowlist. Never execute them.
   ClearErrors
-  Delete "$INSTDIR\DeskFlow.exe"
+  Delete "$INSTDIR\Conduit.exe"
   Delete "$INSTDIR\Uninstall.exe"
-  Delete "$INSTDIR\DeskFlow Source.url"
-  Delete "$INSTDIR\DeskFlow.installing"
+  Delete "$INSTDIR\Conduit Source.url"
+  Delete "$INSTDIR\Conduit.installing"
   Delete "$INSTDIR\THIRD_PARTY_NOTICES.txt"
   Delete "$INSTDIR\LICENSE"
   IfErrors partial_cleanup_failed
   RMDir "$INSTDIR"
   IfErrors partial_cleanup_failed
 
-  Delete "$DESKTOP\DeskFlow.lnk"
-  Delete "$SMPROGRAMS\DeskFlow.lnk"
+  Delete "$DESKTOP\Conduit.lnk"
+  Delete "$SMPROGRAMS\Conduit.lnk"
   DeleteRegKey HKLM "${UNINSTALL_KEY}"
-  DeleteRegKey HKLM "Software\DeskFlow"
+  DeleteRegKey HKLM "Software\Conduit"
   Return
 
 partial_cleanup_failed:
   MessageBox MB_ICONSTOP|MB_OK \
-    "DeskFlow could not remove its incomplete installer-owned files. Close DeskFlow and retry. Unknown files were not removed."
+    "Conduit could not remove its incomplete installer-owned files. Close Conduit and retry. Unknown files were not removed."
   SetErrorLevel 3
   Quit
 FunctionEnd
@@ -179,10 +179,10 @@ Function CleanupUpgradeRemnants
   ; The verified old uninstaller owns removal. Clean only the same known files
   ; if an older uninstaller leaves installer-owned remnants behind.
   ClearErrors
-  Delete "$INSTDIR\DeskFlow.exe"
+  Delete "$INSTDIR\Conduit.exe"
   IfErrors upgrade_cleanup_executable_locked
-  Delete "$INSTDIR\DeskFlow Source.url"
-  Delete "$INSTDIR\DeskFlow.installing"
+  Delete "$INSTDIR\Conduit Source.url"
+  Delete "$INSTDIR\Conduit.installing"
   Delete "$INSTDIR\THIRD_PARTY_NOTICES.txt"
   Delete "$INSTDIR\LICENSE"
   Delete "$INSTDIR\Uninstall.exe"
@@ -191,13 +191,13 @@ Function CleanupUpgradeRemnants
 
 upgrade_cleanup_executable_locked:
   MessageBox MB_ICONSTOP|MB_OK \
-    "DeskFlow.exe is still in use. Close DeskFlow completely, then retry setup. The new version was not installed."
+    "Conduit.exe is still in use. Close Conduit completely, then retry setup. The new version was not installed."
   SetErrorLevel 3
   Quit
 
 upgrade_cleanup_failed:
   MessageBox MB_ICONSTOP|MB_OK \
-    "DeskFlow could not remove an installer-owned file left by the previous version. Close DeskFlow completely, then retry setup."
+    "Conduit could not remove an installer-owned file left by the previous version. Close Conduit completely, then retry setup."
   SetErrorLevel 3
   Quit
 FunctionEnd
@@ -218,7 +218,7 @@ Function FirewallConsentPage
   ${EndIf}
 
   ${NSD_CreateLabel} 0 0 100% 70u \
-    "Allow DeskFlow Server on private local networks (TCP ports 28903-28905).$\r$\n$\r$\nOnly this DeskFlow executable may receive connections from the local subnet. If Windows has a matching block, setup may disable only that exact executable rule. Public networks remain blocked."
+    "Allow Conduit Server on private local networks (TCP ports 28903-28905).$\r$\n$\r$\nOnly this Conduit executable may receive connections from the local subnet. If Windows has a matching block, setup may disable only that exact executable rule. Public networks remain blocked."
   Pop $0
 
   ${NSD_CreateButton} 8% 85u 84% 22u "Yes - Continue"
@@ -269,16 +269,16 @@ Function RollbackInstall
 FunctionEnd
 
 Function CleanupTransactionFiles
-  Delete "$DESKTOP\DeskFlow.lnk"
-  Delete "$SMPROGRAMS\DeskFlow.lnk"
+  Delete "$DESKTOP\Conduit.lnk"
+  Delete "$SMPROGRAMS\Conduit.lnk"
   Delete "$INSTDIR\Uninstall.exe"
-  Delete "$INSTDIR\DeskFlow Source.url"
-  Delete "$INSTDIR\DeskFlow.installing"
+  Delete "$INSTDIR\Conduit Source.url"
+  Delete "$INSTDIR\Conduit.installing"
   Delete "$INSTDIR\THIRD_PARTY_NOTICES.txt"
   Delete "$INSTDIR\LICENSE"
-  Delete "$INSTDIR\DeskFlow.exe"
+  Delete "$INSTDIR\Conduit.exe"
   DeleteRegKey HKLM "${UNINSTALL_KEY}"
-  DeleteRegKey HKLM "Software\DeskFlow"
+  DeleteRegKey HKLM "Software\Conduit"
   RMDir "$INSTDIR"
 FunctionEnd
 
@@ -293,12 +293,12 @@ FunctionEnd
 Function AbortAfterRollback
   Call RollbackInstall
   MessageBox MB_ICONSTOP|MB_OK \
-    "Windows Firewall setup failed. DeskFlow was not installed."
+    "Windows Firewall setup failed. Conduit was not installed."
   SetErrorLevel 3
   Quit
 FunctionEnd
 
-Section "DeskFlow" SEC_DESKFLOW
+Section "Conduit" SEC_CONDUIT
   ; Consent is complete. Do not allow interruption once an existing packaged
   ; install or partial remnant can be mutated.
   GetDlgItem $2 $HWNDPARENT 2
@@ -309,7 +309,7 @@ Section "DeskFlow" SEC_DESKFLOW
     ExecWait '"$INSTDIR\Uninstall.exe" /S _?=$INSTDIR' $0
     ${If} $0 != 0
       MessageBox MB_ICONSTOP|MB_OK \
-        "The existing DeskFlow uninstaller failed. The new version was not installed."
+        "The existing Conduit uninstaller failed. The new version was not installed."
       SetErrorLevel 3
       Quit
     ${EndIf}
@@ -337,7 +337,7 @@ upgrade_scan_empty:
 
 upgrade_directory_not_empty:
     MessageBox MB_ICONSTOP|MB_OK \
-      "The previous DeskFlow installation left files behind in $INSTDIR. The new version was not installed."
+      "The previous Conduit installation left files behind in $INSTDIR. The new version was not installed."
     SetErrorLevel 3
     Quit
 
@@ -346,28 +346,28 @@ upgrade_ready:
   ${EndIf}
 
   SetOutPath "$INSTDIR"
-  File "/oname=DeskFlow.exe" "..\dist\DeskFlow-v${PRODUCT_VERSION}.exe"
+  File "/oname=Conduit.exe" "..\dist\Conduit-v${PRODUCT_VERSION}.exe"
   File "..\LICENSE"
   File "..\build\THIRD_PARTY_NOTICES.txt"
   ClearErrors
-  FileOpen $1 "$INSTDIR\DeskFlow.installing" w
+  FileOpen $1 "$INSTDIR\Conduit.installing" w
   IfErrors marker_write_failed
   FileClose $1
   StrCpy $TransactionFilesWritten "1"
   WriteUninstaller "$INSTDIR\Uninstall.exe"
 
-  FileOpen $1 "$INSTDIR\DeskFlow Source.url" w
+  FileOpen $1 "$INSTDIR\Conduit Source.url" w
   FileWrite $1 "[InternetShortcut]$\r$\nURL=${SOURCE_URL}$\r$\n"
   FileClose $1
 
-  CreateShortCut "$DESKTOP\DeskFlow.lnk" "$INSTDIR\DeskFlow.exe" "" "$INSTDIR\DeskFlow.exe" 0
-  CreateShortCut "$SMPROGRAMS\DeskFlow.lnk" "$INSTDIR\DeskFlow.exe" "" "$INSTDIR\DeskFlow.exe" 0
-  WriteRegStr HKLM "Software\DeskFlow" "InstallDir" "$INSTDIR"
+  CreateShortCut "$DESKTOP\Conduit.lnk" "$INSTDIR\Conduit.exe" "" "$INSTDIR\Conduit.exe" 0
+  CreateShortCut "$SMPROGRAMS\Conduit.lnk" "$INSTDIR\Conduit.exe" "" "$INSTDIR\Conduit.exe" 0
+  WriteRegStr HKLM "Software\Conduit" "InstallDir" "$INSTDIR"
   WriteRegStr HKLM "${UNINSTALL_KEY}" "DisplayName" "${PRODUCT_NAME}"
   WriteRegStr HKLM "${UNINSTALL_KEY}" \
     "DisplayVersion" "${PRODUCT_VERSION}"
   WriteRegStr HKLM "${UNINSTALL_KEY}" \
-    "DisplayIcon" "$INSTDIR\DeskFlow.exe"
+    "DisplayIcon" "$INSTDIR\Conduit.exe"
   WriteRegStr HKLM "${UNINSTALL_KEY}" \
     "UninstallString" '"$INSTDIR\Uninstall.exe"'
   WriteRegStr HKLM "${UNINSTALL_KEY}" "URLInfoAbout" "${SOURCE_URL}"
@@ -378,19 +378,19 @@ upgrade_ready:
   ; the final fallible step so no later installer failure can strand disabled
   ; conflict rules outside that exact-object transaction.
   ExecWait \
-    '"$INSTDIR\DeskFlow.exe" --deskflow-firewall-helper repair --base-port 28903' $0
+    '"$INSTDIR\Conduit.exe" --conduit-firewall-helper repair --base-port 28903' $0
   ${If} $0 != 0
     Call AbortAfterRollback
   ${EndIf}
 
   StrCpy $InstallComplete "1"
-  Delete "$INSTDIR\DeskFlow.installing"
+  Delete "$INSTDIR\Conduit.installing"
   Goto install_complete
 
 marker_write_failed:
   Call CleanupTransactionFiles
   MessageBox MB_ICONSTOP|MB_OK \
-    "DeskFlow could not create its installation recovery marker. No firewall rule was changed."
+    "Conduit could not create its installation recovery marker. No firewall rule was changed."
   SetErrorLevel 3
   Quit
 
@@ -399,22 +399,22 @@ SectionEnd
 
 Section "Uninstall"
   ExecWait \
-    '"$INSTDIR\DeskFlow.exe" --deskflow-firewall-helper remove' $0
+    '"$INSTDIR\Conduit.exe" --conduit-firewall-helper remove' $0
   ${If} $0 != 0
     IfSilent uninstall_firewall_warning_done 0
     MessageBox MB_ICONEXCLAMATION|MB_OK \
-      "DeskFlow could not remove its firewall rule. Windows policy may already have removed or may manage the rule. Uninstall will continue."
+      "Conduit could not remove its firewall rule. Windows policy may already have removed or may manage the rule. Uninstall will continue."
 uninstall_firewall_warning_done:
   ${EndIf}
 
-  Delete "$DESKTOP\DeskFlow.lnk"
-  Delete "$SMPROGRAMS\DeskFlow.lnk"
-  Delete "$INSTDIR\DeskFlow Source.url"
+  Delete "$DESKTOP\Conduit.lnk"
+  Delete "$SMPROGRAMS\Conduit.lnk"
+  Delete "$INSTDIR\Conduit Source.url"
   Delete "$INSTDIR\THIRD_PARTY_NOTICES.txt"
   Delete "$INSTDIR\LICENSE"
-  Delete "$INSTDIR\DeskFlow.exe"
+  Delete "$INSTDIR\Conduit.exe"
   Delete "$INSTDIR\Uninstall.exe"
   DeleteRegKey HKLM "${UNINSTALL_KEY}"
-  DeleteRegKey HKLM "Software\DeskFlow"
+  DeleteRegKey HKLM "Software\Conduit"
   RMDir "$INSTDIR"
 SectionEnd

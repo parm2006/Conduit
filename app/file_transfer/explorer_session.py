@@ -62,7 +62,7 @@ class ExplorerPasteSession:
         self._correlation_failed = False
         self._positive_evidence = False
         self._inferred_cancelled = False
-        self._deskflow_cancel_requested = False
+        self._conduit_cancel_requested = False
         self._terminal_disposition = None
 
     @classmethod
@@ -234,7 +234,7 @@ class ExplorerPasteSession:
         return True
 
     def request_cancel(self):
-        self._deskflow_cancel_requested = True
+        self._conduit_cancel_requested = True
         if self.popup_hwnd is None:
             return False
         current = self.adapter.window_snapshot(self.popup_hwnd)

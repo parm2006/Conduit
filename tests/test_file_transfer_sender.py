@@ -284,7 +284,7 @@ class TransferSenderTests(unittest.TestCase):
     def test_sends_manifest_and_bounded_chunks_that_receiver_verifies(self):
         with tempfile.TemporaryDirectory() as source_directory, tempfile.TemporaryDirectory() as receive_directory:
             source_path = Path(source_directory) / "report.txt"
-            source_path.write_bytes(b"DeskFlow" * 200_000)
+            source_path.write_bytes(b"Conduit" * 200_000)
             source = SourceFile.snapshot(source_path)
             item = FileItem("report.txt", ItemType.FILE, source.size, source.modified_ns, source.sha256)
             manifest = Manifest.create([item])
