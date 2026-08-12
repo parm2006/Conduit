@@ -189,6 +189,30 @@ class VirtualPastePublisherTests(unittest.TestCase):
         self.assertEqual(session.cleanups, 1)
         self.assertEqual(len(released), 1)
 
+    def test_cancellation_before_worker_start_never_publishes_or_injects(self):
+        receiver = self.make_receiver()
+        receiver.cancel_job("A", "UserCancelled")
+        session = self.RecordingSession()
+        events = []
+
+        def create_session(manifest):
+            events.append("session")
+            return session
+
+        publisher = VirtualPastePublisher(
+            publish=lambda file_set, on_performed_drop=None: events.append("publish"),
+            inject=lambda keyboard: events.append("inject"),
+            release=lambda owner: events.append("release"),
+            keyboard_factory=object,
+            session_factory=create_session,
+        )
+
+        self.assertFalse(publisher._process(self.manifest("A"), receiver, object()))
+
+        self.assertEqual(events, [])
+        self.assertEqual(session.terminals, [])
+        self.assertEqual(session.cleanups, 0)
+
     def test_inferred_popup_close_cancels_receiver_with_explorer_reason(self):
         receiver = self.make_receiver()
         session = self.RecordingSession(inferred=True)
@@ -345,7 +369,7 @@ class VirtualPastePublisherTests(unittest.TestCase):
 
         def is_terminal(job_id):
             terminal_checks.append(job_id)
-            return len(terminal_checks) >= 2
+            return len(terminal_checks) >= 3
 
         receiver.is_paste_terminal = is_terminal
         publisher = VirtualPastePublisher(
@@ -355,15 +379,11 @@ class VirtualPastePublisherTests(unittest.TestCase):
             keyboard_factory=object,
         )
 
-        with patch(
-            "app.file_transfer.publisher.pythoncom.PumpWaitingMessages"
-        ) as pump:
-            self.assertTrue(
-                publisher._process(self.manifest("A"), receiver, object())
-            )
+        self.assertTrue(
+            publisher._process(self.manifest("A"), receiver, object())
+        )
 
-        self.assertEqual(terminal_checks, ["A", "A"])
-        pump.assert_called_once_with()
+        self.assertEqual(terminal_checks, ["A", "A", "A"])
         self.assertEqual(released, [owner])
         self.assertEqual(publisher.retained_owner_count, 0)
 

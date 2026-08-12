@@ -199,6 +199,8 @@ class VirtualPastePublisher:
     def _process(self, manifest, receiver, keyboard):
         job_id = manifest["job_id"]
         consumed = threading.Event()
+        if receiver.is_paste_terminal(job_id):
+            return False
         session = self._session_factory(manifest)
         previous_owner = self._capture()
 
