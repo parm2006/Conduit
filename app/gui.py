@@ -12,6 +12,7 @@ from app.pairing_dialog import PairingApprovalController
 from app.safe_errors import error_name, public_error_message
 from app.preferences import UserPreferences
 from app.ports import DEFAULT_BASE_PORT
+from app.version import PRODUCT_NAME, PRODUCT_VERSION
 from app.global_hotkey import GlobalHotkeyMonitor
 from app.firewall import FirewallInspection, FirewallRuleSpec, FirewallState
 from app.firewall_onboarding import (
@@ -23,6 +24,7 @@ from app.firewall_onboarding import (
 logger = logging.getLogger(__name__)
 
 def configure_main_window(window):
+    window.title(f"{PRODUCT_NAME} {PRODUCT_VERSION}")
     window.geometry("400x650")
     window.resizable(False, False)
 
@@ -349,7 +351,6 @@ class DeskFlowGUI(ctk.CTk):
     def __init__(self):
         super().__init__()
         
-        self.title("DeskFlow")
         icon_path = Path(__file__).parent / "assets" / "app_icon.ico"
         if icon_path.exists():
             try:

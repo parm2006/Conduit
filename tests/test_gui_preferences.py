@@ -795,8 +795,12 @@ class FixedWindowConfigurationTests(unittest.TestCase):
     def test_root_configuration_fits_action_buttons_and_remains_fixed(self):
         class Window:
             def __init__(self):
+                self.title_value = None
                 self.geometry_value = None
                 self.resizable_value = None
+
+            def title(self, value):
+                self.title_value = value
 
             def geometry(self, value):
                 self.geometry_value = value
@@ -808,6 +812,7 @@ class FixedWindowConfigurationTests(unittest.TestCase):
 
         configure_main_window(window)
 
+        self.assertEqual(window.title_value, "DeskFlow 5.1")
         self.assertEqual(window.geometry_value, "400x650")
         self.assertEqual(window.resizable_value, (False, False))
 
