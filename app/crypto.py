@@ -250,17 +250,6 @@ def load_identity():
     return default_identity_store().load_or_create()
 
 
-def ensure_certificates():
-    try:
-        load_identity()
-        return True
-    except Exception as error:
-        logger.error(
-            "Failed to load or create DeskFlow identity (%s)", error_name(error)
-        )
-        return False
-
-
 def certificate_fingerprint(cert_file=None):
     path = Path(cert_file) if cert_file else load_identity().cert_path
     return _fingerprint(x509.load_pem_x509_certificate(path.read_bytes()))

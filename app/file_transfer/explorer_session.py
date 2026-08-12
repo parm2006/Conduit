@@ -142,10 +142,6 @@ class ExplorerPasteSession:
     def terminal_disposition(self):
         return self._terminal_disposition
 
-    @property
-    def has_positive_evidence(self):
-        return self._positive_evidence
-
     def observe(self):
         if self.destination is None:
             return False

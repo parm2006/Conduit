@@ -94,11 +94,6 @@ class SessionCoordinator:
             self._tokens.clear()
             return True
 
-    @property
-    def active_session_id(self):
-        with self._lock:
-            return self._active_session
-
     @staticmethod
     def _normalize_peer_address(peer_address):
         if peer_address is None:
