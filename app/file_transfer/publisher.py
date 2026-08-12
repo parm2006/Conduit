@@ -197,9 +197,9 @@ class VirtualPastePublisher:
         consumed = threading.Event()
         previous_owner = self._capture()
 
-        def performed_drop():
+        def performed_drop(effect):
             consumed.set()
-            return receiver.record_performed_drop(job_id)
+            return receiver.record_performed_drop(job_id, effect)
 
         file_set = build_virtual_file_set(
             manifest, receiver, on_stream_open=consumed.set

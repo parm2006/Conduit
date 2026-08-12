@@ -19,7 +19,7 @@ conditions, and update its row. At a physical gate, create the named
 | [002](002-repair-client-to-server-ordinary-clipboard.md) | Repair client-to-server ordinary clipboard | M | 001 | SUPERSEDED — physical matrix passed; no repair required |
 | [003](003-authoritative-file-offers-and-native-paste.md) | Route file paste from the latest clipboard owner to the active screen | L | 001 | DONE — v5 accepted at `8d17fdf` |
 | [007](007-repair-virtual-clipboard-owner-restoration.md) | Restore and retire the virtual clipboard owner safely | M | 003 | DONE — v5 accepted at `8d17fdf` |
-| [005](005-unify-explorer-toast-terminal-lifecycle.md) | Give each Explorer paste one terminal result | L | 003, 007 | TODO |
+| [005](005-unify-explorer-toast-terminal-lifecycle.md) | Give each Explorer paste one terminal result | L | 003, 007 | DONE |
 | [008](008-correlate-explorer-paste-session.md) | Correlate and retire only the active Explorer paste session | L | 005 | TODO |
 | [009](009-integrate-and-validate-cancellation.md) | Make toast and Explorer cancellation agree on both peers | M | 005, 008 | TODO |
 | [004](004-bind-paste-to-offer-and-destination.md) | Bind a paste to one offer and destination | M | 003, 007; scheduled after 009 | TODO |
@@ -46,6 +46,9 @@ Status values: TODO | IN PROGRESS | DONE | BLOCKED | SUPERSEDED.
 
 ## Reconciliation log
 
+- **2026-08-12**: Plan 005 landed one first-wins receiver terminal outcome,
+  explicit Shell COPY/NONE effects, preferred COPY advertisement, and typed
+  publisher forwarding. The focused 86-test slice and all 523 tests passed.
 - **2026-08-11**: Owner approved the focused Explorer/toast cancellation
   design. The former monolithic Plan 005 was split into terminal truth (005),
   correlated Windows session (008), and two-peer physical acceptance (009).
