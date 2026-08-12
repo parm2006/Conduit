@@ -12,10 +12,18 @@ from app.windows_virtual_files import (
     open_callback_stream,
     publish_virtual_files,
 )
+from app.file_transfer.explorer_session import ExplorerPasteSession
+from app.file_transfer.status import TransferPhase
 from app.safe_errors import error_name
 
 
 logger = logging.getLogger(__name__)
+
+
+def clipboard_owner_interface(owner):
+    if isinstance(owner, tuple) and len(owner) == 2:
+        return owner[1]
+    return owner
 
 
 def capture_clipboard_owner(get_clipboard=pythoncom.OleGetClipboard):
@@ -31,7 +39,7 @@ def restore_virtual_clipboard_owner(
     is_current=pythoncom.OleIsCurrentClipboard,
     restore=pythoncom.OleSetClipboard,
 ):
-    if not is_current(owner):
+    if not is_current(clipboard_owner_interface(owner)):
         return False
     restore(previous_owner)
     return True
@@ -42,7 +50,7 @@ def release_virtual_clipboard_owner(
     is_current=pythoncom.OleIsCurrentClipboard,
     clear=lambda: pythoncom.OleSetClipboard(None),
 ):
-    if not is_current(owner):
+    if not is_current(clipboard_owner_interface(owner)):
         return False
     clear()
     return True
@@ -102,23 +110,28 @@ class VirtualPastePublisher:
         restore=None,
         keyboard_factory=None,
         explorer_start_timeout=15.0,
+        session_factory=None,
+        on_clipboard_change_begin=None,
+        on_clipboard_change_end=None,
     ):
         self._queue = queue.Queue()
         self._thread = None
         self._publish = publish or publish_virtual_files
         self._inject = inject or inject_paste_shortcut
-        self._capture = capture or capture_clipboard_owner
         if restore is not None:
+            self._capture = capture or capture_clipboard_owner
             self._restore = restore
             self._restore_after_accept = True
-        elif release is not None:
-            self._restore = lambda owner, previous: release(owner)
-            self._restore_after_accept = False
         else:
-            self._restore = restore_virtual_clipboard_owner
-            self._restore_after_accept = True
+            self._capture = capture or (lambda: None)
+            release_owner = release or release_virtual_clipboard_owner
+            self._restore = lambda owner, previous: release_owner(owner)
+            self._restore_after_accept = False
         self._keyboard_factory = keyboard_factory or KeyboardController
         self.explorer_start_timeout = float(explorer_start_timeout)
+        self._session_factory = session_factory or ExplorerPasteSession.capture
+        self._on_clipboard_change_begin = on_clipboard_change_begin
+        self._on_clipboard_change_end = on_clipboard_change_end
         self._owner = None
         self._owner_lock = threading.Lock()
         self._idle = threading.Condition()
@@ -186,20 +199,33 @@ class VirtualPastePublisher:
     def _process(self, manifest, receiver, keyboard):
         job_id = manifest["job_id"]
         consumed = threading.Event()
+        if receiver.is_paste_terminal(job_id):
+            return False
+        session = self._session_factory(manifest)
         previous_owner = self._capture()
 
-        def performed_drop():
+        def performed_drop(effect):
+            session.record_performed_effect(effect)
             consumed.set()
-            return receiver.record_performed_drop(job_id)
+            return receiver.record_performed_drop(job_id, effect)
+
+        def stream_opened():
+            session.record_stream_open()
+            consumed.set()
 
         file_set = build_virtual_file_set(
-            manifest, receiver, on_stream_open=consumed.set
+            manifest, receiver, on_stream_open=stream_opened
         )
-        owner = self._publish(file_set, on_performed_drop=performed_drop)
-        with self._owner_lock:
-            self._owner = owner
+        owner = None
         accepted = False
+        terminal = False
+        suppress_internal_sequence = False
         try:
+            if self._on_clipboard_change_begin is not None:
+                self._on_clipboard_change_begin()
+            owner = self._publish(file_set, on_performed_drop=performed_drop)
+            with self._owner_lock:
+                self._owner = owner
             try:
                 self._inject(keyboard)
             except Exception as error:
@@ -210,16 +236,51 @@ class VirtualPastePublisher:
             deadline = time.monotonic() + self.explorer_start_timeout
             while not consumed.is_set():
                 pythoncom.PumpWaitingMessages()
+                if session.observe():
+                    receiver.cancel_job(job_id, "ExplorerCancelled")
                 if receiver.is_paste_terminal(job_id):
                     return False
+                if session.decision_pending:
+                    deadline = time.monotonic() + self.explorer_start_timeout
                 if time.monotonic() >= deadline:
                     self._report_failure(receiver, job_id, "ExplorerStartTimeout")
                     return False
                 consumed.wait(0.005)
             accepted = True
-            return True
+            outcome = self._wait_for_terminal(job_id, receiver, session)
+            terminal = True
+            return outcome is None or outcome.phase is TransferPhase.COMPLETED
         finally:
-            self._restore_owner(owner, previous_owner, retain=accepted)
+            outcome = self._terminal_outcome(receiver, job_id)
+            if outcome is not None:
+                session.record_terminal(outcome.phase)
+                if outcome.phase is TransferPhase.CANCELLED:
+                    session.request_cancel()
+            if owner is not None:
+                suppress_internal_sequence = self._restore_owner(
+                    owner, previous_owner, retain=accepted and not terminal
+                )
+            if (
+                outcome is not None
+                and outcome.phase is TransferPhase.CANCELLED
+            ):
+                session.cleanup_cancelled_empty_directories()
+            if self._on_clipboard_change_end is not None:
+                self._on_clipboard_change_end(suppress_internal_sequence)
+
+    @classmethod
+    def _wait_for_terminal(cls, job_id, receiver, session):
+        while not receiver.is_paste_terminal(job_id):
+            pythoncom.PumpWaitingMessages()
+            if session.observe():
+                receiver.cancel_job(job_id, "ExplorerCancelled")
+            time.sleep(0.005)
+        return cls._terminal_outcome(receiver, job_id)
+
+    @staticmethod
+    def _terminal_outcome(receiver, job_id):
+        query = getattr(receiver, "terminal_outcome", None)
+        return None if query is None else query(job_id)
 
     def _restore_owner(self, owner, previous_owner, retain=False):
         with self._owner_lock:
@@ -227,17 +288,28 @@ class VirtualPastePublisher:
                 return False
             if retain and not self._restore_after_accept:
                 return True
-            try:
-                self._restore(owner, previous_owner)
-            except Exception as error:
-                logger.error(
-                    "Could not restore clipboard after virtual paste (%s)",
-                    error_name(error),
-                )
-            finally:
+            attempts = 3 if not self._restore_after_accept else 1
+            for attempt in range(attempts):
+                try:
+                    restored = self._restore(owner, previous_owner)
+                except pythoncom.com_error as error:
+                    if attempt + 1 < attempts:
+                        time.sleep(0.05)
+                        continue
+                    logger.error(
+                        "Could not retire clipboard after virtual paste (%s)",
+                        error_name(error),
+                    )
+                    return False
+                except Exception as error:
+                    logger.error(
+                        "Could not restore clipboard after virtual paste (%s)",
+                        error_name(error),
+                    )
+                    return False
                 if not retain:
                     self._owner = None
-        return True
+                return restored is not False
 
     @staticmethod
     def _report_failure(receiver, job_id, error_code):

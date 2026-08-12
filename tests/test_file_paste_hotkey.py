@@ -1,7 +1,7 @@
 import unittest
 
 from app.file_transfer.hotkey import WindowsPasteHotkeyMonitor
-from app.file_transfer.paste_coordinator import PasteCoordinator
+from app.file_transfer.paste_coordinator import ClipboardOffer, PasteCoordinator
 
 
 class FakeListener:
@@ -22,7 +22,10 @@ class WindowsPasteHotkeyTests(unittest.TestCase):
     def test_suppresses_only_physical_ctrl_v_when_files_are_available(self):
         requests = []
         coordinator = PasteCoordinator(lambda: requests.append("paste"))
-        coordinator.set_remote_files_available(True)
+        coordinator.set_route(
+            ClipboardOffer("session-one", 1, "client", "files", 20),
+            "server",
+        )
         monitor = WindowsPasteHotkeyMonitor(coordinator)
         monitor.listener = FakeListener()
 
@@ -42,7 +45,10 @@ class WindowsPasteHotkeyTests(unittest.TestCase):
 
         monitor.filter_event(monitor.WM_KEYDOWN, KeyData(monitor.VK_CONTROL))
         self.assertTrue(monitor.filter_event(monitor.WM_KEYDOWN, KeyData(monitor.VK_V)))
-        coordinator.set_remote_files_available(True)
+        coordinator.set_route(
+            ClipboardOffer("session-one", 1, "client", "files", 20),
+            "server",
+        )
         self.assertTrue(
             monitor.filter_event(
                 monitor.WM_KEYDOWN,

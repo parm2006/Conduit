@@ -24,6 +24,11 @@ FILE_ATTRIBUTE_NORMAL = 0x00000080
 
 FILE_GROUP_DESCRIPTOR_FORMAT = "FileGroupDescriptorW"
 FILE_CONTENTS_FORMAT = "FileContents"
+PREFERRED_DROP_EFFECT_FORMAT = "Preferred DropEffect"
+PERFORMED_DROP_EFFECT_FORMAT = "Performed DropEffect"
+
+DROPEFFECT_NONE = 0
+DROPEFFECT_COPY = 1
 
 
 @dataclass(frozen=True)
@@ -117,8 +122,11 @@ class VirtualFileDataObject:
             FILE_GROUP_DESCRIPTOR_FORMAT
         )
         self.contents_format = win32clipboard.RegisterClipboardFormat(FILE_CONTENTS_FORMAT)
+        self.preferred_drop_format = win32clipboard.RegisterClipboardFormat(
+            PREFERRED_DROP_EFFECT_FORMAT
+        )
         self.performed_drop_format = win32clipboard.RegisterClipboardFormat(
-            "Performed DropEffect"
+            PERFORMED_DROP_EFFECT_FORMAT
         )
 
     def descriptor_format_etc(self):
@@ -139,6 +147,24 @@ class VirtualFileDataObject:
             pythoncom.TYMED_ISTREAM,
         )
 
+    def preferred_drop_format_etc(self):
+        return (
+            self.preferred_drop_format,
+            None,
+            pythoncom.DVASPECT_CONTENT,
+            -1,
+            pythoncom.TYMED_HGLOBAL,
+        )
+
+    def performed_drop_format_etc(self):
+        return (
+            self.performed_drop_format,
+            None,
+            pythoncom.DVASPECT_CONTENT,
+            -1,
+            pythoncom.TYMED_HGLOBAL,
+        )
+
     def QueryGetData(self, format_etc):
         self._validate_format(format_etc)
 
@@ -147,6 +173,12 @@ class VirtualFileDataObject:
         medium = pythoncom.STGMEDIUM()
         if kind == "descriptor":
             medium.set(pythoncom.TYMED_HGLOBAL, self.file_set.descriptor_bytes())
+            return medium
+        if kind == "preferred_drop":
+            medium.set(
+                pythoncom.TYMED_HGLOBAL,
+                struct.pack("<I", DROPEFFECT_COPY),
+            )
             return medium
 
         try:
@@ -179,8 +211,20 @@ class VirtualFileDataObject:
             and index == -1
             and medium_type & pythoncom.TYMED_HGLOBAL
         ):
+            try:
+                value = bytes(medium.data)
+                if len(value) < 4 or any(value[4:]):
+                    raise ValueError
+                effect = struct.unpack("<I", value[:4])[0]
+                if effect not in {DROPEFFECT_NONE, DROPEFFECT_COPY}:
+                    raise ValueError
+            except (AttributeError, TypeError, ValueError):
+                raise COMException(
+                    description="Performed DropEffect is invalid",
+                    scode=winerror.DV_E_FORMATETC,
+                ) from None
             if self.on_performed_drop is not None:
-                self.on_performed_drop()
+                self.on_performed_drop(effect)
             return None
         raise COMException(description="SetData is not supported", scode=winerror.E_NOTIMPL)
 
@@ -196,6 +240,7 @@ class VirtualFileDataObject:
             for index, item in enumerate(self.file_set.files)
             if not item.is_directory
         )
+        formats.append(self.preferred_drop_format_etc())
         return util.NewEnum(formats, iid=pythoncom.IID_IEnumFORMATETC)
 
     def DAdvise(self, format_etc, flags, sink):
@@ -223,6 +268,13 @@ class VirtualFileDataObject:
             if not medium & pythoncom.TYMED_ISTREAM:
                 raise COMException(description="FileContents requires IStream", scode=winerror.DV_E_TYMED)
             return "contents", index
+        if clipboard_format == self.preferred_drop_format:
+            if index != -1 or not medium & pythoncom.TYMED_HGLOBAL:
+                raise COMException(
+                    description="invalid Preferred DropEffect format",
+                    scode=winerror.DV_E_FORMATETC,
+                )
+            return "preferred_drop", -1
         raise COMException(description="unsupported clipboard format", scode=winerror.DV_E_FORMATETC)
 
 

@@ -5,6 +5,10 @@ from types import SimpleNamespace
 from app.client import DeskFlowClient
 from app.server import DeskFlowServer
 from app.network import ConnectionPhase, NetworkClient, ServerUnavailable
+from app.file_transfer.paste_service import FilePasteService
+from app.file_transfer.publisher import VirtualPastePublisher
+from app.file_transfer.status import TransferPhase
+from app.ports import DEFAULT_FILE_PORT
 
 
 class RecordingControl:
@@ -44,6 +48,99 @@ class RecordingFileClient:
 
 
 class FileLaneLifecycleTests(unittest.TestCase):
+    def test_destination_latch_stays_active_through_cancelled_session_cleanup(self):
+        cleanup_started = threading.Event()
+        release_cleanup = threading.Event()
+
+        class Session:
+            decision_pending = False
+
+            def observe(self):
+                return False
+
+            def record_stream_open(self):
+                return None
+
+            def record_performed_effect(self, effect):
+                return None
+
+            def record_terminal(self, phase):
+                return True
+
+            def request_cancel(self):
+                return False
+
+            def cleanup_cancelled_empty_directories(self):
+                cleanup_started.set()
+                release_cleanup.wait(1)
+                return {}
+
+        class Receiver:
+            def __init__(self):
+                self.phase = None
+
+            def accept_manifest(self, manifest):
+                return manifest
+
+            def cancel_job(self, job_id, reason_code="UserCancelled"):
+                self.phase = TransferPhase.CANCELLED
+                return True
+
+            def is_paste_terminal(self, job_id):
+                return self.phase is not None
+
+            def terminal_outcome(self, job_id):
+                return (
+                    None
+                    if self.phase is None
+                    else SimpleNamespace(phase=self.phase)
+                )
+
+            def fail_paste(self, job_id, error_code):
+                self.phase = TransferPhase.FAILED
+                return True
+
+        receiver = Receiver()
+        publisher = VirtualPastePublisher(
+            publish=lambda file_set, on_performed_drop=None: object(),
+            inject=lambda keyboard: receiver.cancel_job("a" * 32),
+            release=lambda owner: True,
+            keyboard_factory=object,
+            session_factory=lambda manifest: Session(),
+        )
+        control = RecordingControl()
+        service = FilePasteService(
+            control=control,
+            receiver=receiver,
+            publisher=publisher,
+            sender=object(),
+            snapshot_selection=lambda: None,
+            executor=SimpleNamespace(submit=lambda manifest, sources: None),
+        )
+        pending = service.request_paste()
+
+        service.on_manifest_response({
+            "request_id": pending.request_id,
+            "manifest": {
+                "job_id": "a" * 32,
+                "items": [{
+                    "relative_path": "folder",
+                    "item_type": "directory",
+                    "size": 0,
+                    "modified_ns": 0,
+                    "sha256": None,
+                }],
+                "total_size": 0,
+                "file_count": 0,
+            },
+        })
+
+        self.assertTrue(cleanup_started.wait(1))
+        self.assertTrue(service.destination_paste_active)
+        release_cleanup.set()
+        self.assertTrue(publisher.wait_until_idle(1))
+        self.assertFalse(service.destination_paste_active)
+
     def test_control_failure_preserves_actionable_message_without_socket_jargon(self):
         message = (
             "Could not reach the server. Check its address, port, and that "
@@ -103,7 +200,8 @@ class FileLaneLifecycleTests(unittest.TestCase):
         client.data_network = NetworkClient("unused", role="data")
         client.file_network = FileLane()
 
-        client._on_lane_binding_timeout()
+        with self.assertLogs("app.client", level="ERROR") as logs:
+            client._on_lane_binding_timeout()
 
         self.assertEqual(
             results,
@@ -117,6 +215,10 @@ class FileLaneLifecycleTests(unittest.TestCase):
         self.assertEqual(client.data_network.phase, ConnectionPhase.FAILED)
         self.assertIsInstance(client.data_network.last_error, TimeoutError)
         self.assertEqual(client.file_network.closes, 1)
+        self.assertIn(
+            f"server:{DEFAULT_FILE_PORT}",
+            "\n".join(logs.output),
+        )
 
     def test_disconnect_during_ready_transition_cannot_report_success(self):
         class Lifecycle:

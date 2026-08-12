@@ -5,7 +5,7 @@ from pathlib import Path
 from app.network import NetworkClient
 from app.trust import PeerTrustStore
 from app.file_transfer.transport import FileLaneClient
-from app.file_transfer.paste_coordinator import PasteCoordinator
+from app.file_transfer.paste_coordinator import ClipboardOfferState, PasteCoordinator
 from app.file_transfer.hotkey import WindowsPasteHotkeyMonitor
 from app.file_transfer.paste_service import FilePasteService
 from app.file_transfer.publisher import VirtualPastePublisher
@@ -21,6 +21,7 @@ from app.latest_wins_sender import LatestWinsSender
 from app.input_geometry import client_entry_position
 from app.safe_errors import error_name, public_error_message
 from app.global_hotkey import GlobalHotkeyMonitor
+from app.ports import DEFAULT_FILE_PORT
 
 logger = logging.getLogger(__name__)
 
@@ -50,7 +51,14 @@ class DeskFlowClient:
         self.file_network.register_callback(
             'disconnected', lambda metadata, payload: self.on_disconnected(metadata)
         )
-        self.file_publisher = VirtualPastePublisher()
+        self.file_publisher = VirtualPastePublisher(
+            on_clipboard_change_begin=(
+                lambda: self.clipboard.begin_internal_change()
+            ),
+            on_clipboard_change_end=(
+                lambda suppress: self.clipboard.end_internal_change(suppress)
+            ),
+        )
         self.input_handler = InputHandler()
         self._paste_route_lock = threading.RLock()
         self.global_hotkey_monitor = GlobalHotkeyMonitor(
@@ -58,6 +66,7 @@ class DeskFlowClient:
             on_reload_connection=self.reload_connection,
         )
         self.is_active = False
+        self.clipboard_offer_state = ClipboardOfferState("client")
         self.control_connected = False
         self.data_connected = False
         self._disconnecting = False
@@ -72,14 +81,15 @@ class DeskFlowClient:
         self.control_network.register_callback('key_release', self.on_key_release)
         self.control_network.register_callback('disconnected', self.on_disconnected)
         self.control_network.register_callback('file_lane_offer', self.on_file_lane_offer)
-        self.control_network.register_callback('file_clipboard_available', self.on_remote_file_availability)
+        self.control_network.register_callback(
+            'clipboard_offer', self.on_remote_clipboard_offer
+        )
         self.control_network.register_callback('file_manifest_request', self.on_file_manifest_request)
         self.control_network.register_callback('file_manifest_response', self.on_file_manifest_response)
         self.control_network.register_callback('file_manifest_failed', self.on_file_manifest_failed)
         self.control_network.register_callback('file_manifest_ack', self.on_file_manifest_ack)
         self.control_network.register_callback(
-            'file_paste_trigger',
-            lambda data: self._request_remote_file_paste(),
+            'file_paste_intent', self.on_file_paste_intent
         )
         self.control_network.register_callback('reload_connection', lambda data: self.reload_connection())
         
@@ -90,7 +100,7 @@ class DeskFlowClient:
         # Setup clipboard
         self.clipboard = ClipboardHandler(
             on_clipboard_change=self.on_local_copy,
-            on_file_availability=self.on_local_file_availability,
+            on_clipboard_offer=self.on_local_clipboard_offer,
         )
         self.paste_coordinator = PasteCoordinator(self._request_remote_file_paste)
         self.hotkey_monitor = WindowsPasteHotkeyMonitor(self.paste_coordinator)
@@ -180,6 +190,7 @@ class DeskFlowClient:
 
     def connect(self, host, port, callback):
         self.host = host
+        self.port = port
         self.control_connected = False
         self.data_connected = False
         self.connect_error = None
@@ -317,12 +328,13 @@ class DeskFlowClient:
         data_net = getattr(self, 'data_network', None)
         file_net = getattr(self, 'file_network', None)
         logger.error(
-            "Connection deadline expired after %.1fs. Lane status: control=%s (connected=%s), data=%s (connected=%s), file=%s (sock=%s). Check port %s:5002 firewall.",
+            "Connection deadline expired after %.1fs. Lane status: control=%s (connected=%s), data=%s (connected=%s), file=%s (sock=%s). Check port %s:%s firewall.",
             timeout_val,
             getattr(self, 'control_connected', False), getattr(control_net, 'connected', False) if control_net else False,
             getattr(self, 'data_connected', False), getattr(data_net, 'connected', False) if data_net else False,
             getattr(self, 'file_connected', False), getattr(file_net, 'sock', None) is not None if file_net else False,
             getattr(self, 'host', 'server'),
+            getattr(self, 'port', DEFAULT_FILE_PORT - 2) + 2,
         )
         error = TimeoutError(
             f"Secondary lanes failed to bind within {timeout_val}s "
@@ -431,6 +443,7 @@ class DeskFlowClient:
     def on_switch(self, data):
         logger.info("Server switched control to this client.")
         self.is_active = True
+        self._apply_clipboard_offer_route()
         direction = data.get('direction')
         ratio = data.get('ratio', 0.5)
         
@@ -483,6 +496,9 @@ class DeskFlowClient:
                     return
                 logger.info(f"Hit {direction} edge. Sending switch_back to server.")
                 self.is_active = False
+                coordinator = getattr(self, "paste_coordinator", None)
+                if coordinator is not None:
+                    coordinator.set_route(None, "client")
                 self.input_handler.release_all_injected_keys()
                 self.control_network.send_message({
                     'type': 'switch_back',
@@ -490,23 +506,119 @@ class DeskFlowClient:
                 })
 
     def on_local_copy(self, snapshot):
-        return self.clipboard_sender.submit({"snapshot": snapshot})
+        work = {"snapshot": snapshot}
+        state = getattr(self, "clipboard_offer_state", None)
+        if (
+            state is not None
+            and state.current_offer is not None
+            and state.current_offer.source == "client"
+            and state.current_offer.kind == "ordinary"
+        ):
+            work["offer"] = state.current_offer
+        queued = self.clipboard_sender.submit(work)
+        logger.info(
+            "Clipboard snapshot queued (role=client formats=%s bytes=%d queued=%s)",
+            ",".join(entry.kind for entry in snapshot.entries),
+            sum(len(entry.data) for entry in snapshot.entries),
+            queued,
+        )
+        return queued
 
     def _send_clipboard_snapshot(self, work):
-        payload = encode_clipboard_message(work["snapshot"])
-        return self.data_network is not None and self.data_network.send_message(payload)
+        snapshot = work["snapshot"]
+        payload = encode_clipboard_message(snapshot)
+        offer = work.get("offer")
+        if offer is not None:
+            payload["offer"] = offer.to_message()
+        sent = self.data_network is not None and self.data_network.send_message(payload)
+        logger.info(
+            "Clipboard snapshot sent (role=client formats=%s bytes=%d delivered=%s)",
+            ",".join(entry.kind for entry in snapshot.entries),
+            sum(len(entry.data) for entry in snapshot.entries),
+            sent,
+        )
+        return sent
 
     def on_remote_copy(self, data):
-        self.clipboard.inject(data)
+        payload = self._accepted_clipboard_payload(data)
+        if payload is None:
+            logger.info("Stale clipboard snapshot discarded (role=client)")
+            return False
+        logger.info("Clipboard snapshot received (role=client)")
+        return self.clipboard.inject(payload)
 
-    def on_local_file_availability(self, available):
-        return self.control_network.send_message({
-            'type': 'file_clipboard_available',
-            'available': available is True,
-        })
+    def _accepted_clipboard_payload(self, data):
+        offer_data = data.get("offer") if isinstance(data, dict) else None
+        if offer_data is None:
+            return data
+        state = self._get_clipboard_offer_state()
+        if not state.accept_snapshot(offer_data):
+            return None
+        self._apply_clipboard_offer_route()
+        payload = dict(data)
+        payload.pop("offer", None)
+        return payload
 
-    def on_remote_file_availability(self, data):
-        self.paste_coordinator.set_remote_files_available(data.get('available') is True)
+    def _clipboard_session_id(self):
+        network = getattr(self, "control_network", None)
+        session = getattr(network, "session_info", None) or {}
+        return session.get("session_id") or getattr(network, "session_id", None)
+
+    def _get_clipboard_offer_state(self):
+        state = getattr(self, "clipboard_offer_state", None)
+        if state is None:
+            state = ClipboardOfferState("client")
+            self.clipboard_offer_state = state
+        session_id = self._clipboard_session_id()
+        if session_id and state.session_id != session_id:
+            state.start_session(session_id)
+        return state
+
+    def _apply_clipboard_offer_route(self):
+        state = self._get_clipboard_offer_state()
+        offer = state.current_offer if getattr(self, "is_active", False) else None
+        return self.paste_coordinator.set_route(offer, "client")
+
+    def on_local_clipboard_offer(self, kind, sequence):
+        state = self._get_clipboard_offer_state()
+        if state.session_id is None:
+            return False
+        offer = state.observe_local(kind, sequence)
+        self._apply_clipboard_offer_route()
+        return self.control_network.send_message(offer.to_message())
+
+    def on_remote_clipboard_offer(self, data):
+        state = self._get_clipboard_offer_state()
+        accepted = state.accept_remote(data)
+        if accepted:
+            self._apply_clipboard_offer_route()
+        return accepted
+
+    def on_file_paste_intent(self, data):
+        clipboard = getattr(self, "clipboard", None)
+        refresh = getattr(clipboard, "refresh_offer", None)
+        refreshed_kind = refresh() if refresh is not None else "legacy"
+        if refreshed_kind is None:
+            logger.info(
+                "Paste deferred because the client clipboard could not be read"
+            )
+            return False
+        state = getattr(self, "clipboard_offer_state", None)
+        if (
+            state is not None
+            and state.current_offer is not None
+            and state.should_transfer_to("client")
+        ):
+            return self._request_remote_file_paste()
+        return self._inject_native_paste()
+
+    def _inject_native_paste(self):
+        key_data = {"type": "char", "value": "v"}
+        try:
+            self.input_handler.inject_key_press(key_data)
+        finally:
+            self.input_handler.inject_key_release(key_data)
+        return True
 
     def _request_remote_file_paste(self):
         with self._get_paste_route_lock():

@@ -3,6 +3,7 @@ import unittest
 
 import pythoncom
 import win32clipboard
+import winerror
 from win32com.server.exception import COMException
 import tempfile
 import gc
@@ -23,6 +24,10 @@ from app.windows_virtual_files import (
     open_callback_stream,
     CallbackStream,
 )
+
+
+DROPEFFECT_NONE = 0
+DROPEFFECT_COPY = 1
 
 
 class FileGroupDescriptorTests(unittest.TestCase):
@@ -87,11 +92,11 @@ class VirtualFileDataObjectTests(unittest.TestCase):
         observed = []
         data_object = VirtualFileDataObject(
             VirtualFileSet([VirtualFile("a.txt", 1, lambda: b"a")]),
-            on_performed_drop=lambda: observed.append("done"),
+            on_performed_drop=lambda *effects: observed.extend(effects),
         )
         performed_drop = win32clipboard.RegisterClipboardFormat("Performed DropEffect")
         medium = pythoncom.STGMEDIUM()
-        medium.set(pythoncom.TYMED_HGLOBAL, struct.pack("<I", 0))
+        medium.set(pythoncom.TYMED_HGLOBAL, struct.pack("<I", DROPEFFECT_NONE))
 
         data_object.SetData(
             (performed_drop, None, pythoncom.DVASPECT_CONTENT, -1, pythoncom.TYMED_HGLOBAL),
@@ -99,7 +104,63 @@ class VirtualFileDataObjectTests(unittest.TestCase):
             False,
         )
 
-        self.assertEqual(observed, ["done"])
+        self.assertEqual(observed, [DROPEFFECT_NONE])
+
+    def test_preferred_copy_effect_is_advertised_and_returned(self):
+        data_object = VirtualFileDataObject(
+            VirtualFileSet([VirtualFile("a.txt", 1, lambda: b"a")])
+        )
+
+        preferred_format = getattr(data_object, "preferred_drop_format_etc", None)
+        self.assertIsNotNone(preferred_format)
+        format_etc = preferred_format()
+        data_object.QueryGetData(format_etc)
+        medium = data_object.GetData(format_etc)
+        formats = list(data_object.EnumFormatEtc(pythoncom.DATADIR_GET))
+
+        self.assertEqual(medium.tymed, pythoncom.TYMED_HGLOBAL)
+        value = bytes(medium.data)
+        self.assertEqual(struct.unpack("<I", value[:4])[0], DROPEFFECT_COPY)
+        self.assertFalse(any(value[4:]))
+        self.assertIn(format_etc, formats)
+
+    def test_malformed_performed_drop_is_rejected_without_callback(self):
+        observed = []
+        data_object = VirtualFileDataObject(
+            VirtualFileSet([VirtualFile("a.txt", 1, lambda: b"a")]),
+            on_performed_drop=observed.append,
+        )
+        medium = pythoncom.STGMEDIUM()
+        medium.set(pythoncom.TYMED_HGLOBAL, b"\x01\x00")
+        performed_format = getattr(data_object, "performed_drop_format_etc", None)
+        self.assertIsNotNone(performed_format)
+
+        with self.assertRaises(COMException) as raised:
+            data_object.SetData(
+                performed_format(), medium, False
+            )
+
+        self.assertEqual(raised.exception.hresult, winerror.DV_E_FORMATETC)
+        self.assertEqual(observed, [])
+
+    def test_non_copy_performed_effect_is_rejected(self):
+        observed = []
+        data_object = VirtualFileDataObject(
+            VirtualFileSet([VirtualFile("a.txt", 1, lambda: b"a")]),
+            on_performed_drop=observed.append,
+        )
+        medium = pythoncom.STGMEDIUM()
+        medium.set(pythoncom.TYMED_HGLOBAL, struct.pack("<I", 2))
+        performed_format = getattr(data_object, "performed_drop_format_etc", None)
+        self.assertIsNotNone(performed_format)
+
+        with self.assertRaises(COMException) as raised:
+            data_object.SetData(
+                performed_format(), medium, False
+            )
+
+        self.assertEqual(raised.exception.hresult, winerror.DV_E_FORMATETC)
+        self.assertEqual(observed, [])
 
     def setUp(self):
         pythoncom.OleInitialize()

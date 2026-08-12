@@ -1,17 +1,31 @@
 """Non-secret local DeskFlow UI preferences."""
 
 import json
+import ipaddress
 import logging
 import os
 from pathlib import Path
 import uuid
 
 from app.safe_errors import error_name
+from app.ports import DEFAULT_BASE_PORT
 
 
 logger = logging.getLogger(__name__)
 VALID_ROLES = frozenset(("server", "client"))
 VALID_CLIENT_POSITIONS = frozenset(("top", "left", "right", "bottom"))
+MAX_SUCCESSFUL_HOSTS = 10
+
+
+def _validated_successful_host(ip, port):
+    try:
+        address = ipaddress.IPv4Address(str(ip).strip()).compressed
+        parsed_port = int(port)
+    except (ipaddress.AddressValueError, TypeError, ValueError) as error:
+        raise ValueError("host must contain a valid IPv4 address and port") from error
+    if isinstance(port, bool) or not (1 <= parsed_port <= 65533):
+        raise ValueError("host port must be between 1 and 65533")
+    return {"ip": address, "port": parsed_port}
 
 
 class UserPreferences:
@@ -30,10 +44,12 @@ class UserPreferences:
 
     def load_server_port(self):
         try:
-            port = int(self._load_values().get("server_port", 5000))
-            return port if 1 <= port <= 65535 else 5000
+            port = int(
+                self._load_values().get("server_port", DEFAULT_BASE_PORT)
+            )
+            return port if 1 <= port <= 65533 else DEFAULT_BASE_PORT
         except (TypeError, ValueError):
-            return 5000
+            return DEFAULT_BASE_PORT
 
     def save_role(self, role):
         if role not in VALID_ROLES:
@@ -48,11 +64,49 @@ class UserPreferences:
     def save_server_port(self, port):
         try:
             val = int(port)
-            if not (1 <= val <= 65535):
-                raise ValueError("port must be between 1 and 65535")
+            if not (1 <= val <= 65533):
+                raise ValueError("port must be between 1 and 65533")
             self._save_value("server_port", val)
         except (TypeError, ValueError) as error:
-            raise ValueError("port must be an integer between 1 and 65535") from error
+            raise ValueError(
+                "port must be an integer between 1 and 65533"
+            ) from error
+
+    def load_successful_hosts(self):
+        stored = self._load_values().get("successful_hosts", [])
+        if not isinstance(stored, list):
+            return []
+        hosts = []
+        seen = set()
+        for value in stored:
+            if not isinstance(value, dict):
+                continue
+            try:
+                host = _validated_successful_host(
+                    value.get("ip"),
+                    value.get("port"),
+                )
+            except ValueError:
+                continue
+            key = host["ip"]
+            if key in seen:
+                continue
+            seen.add(key)
+            hosts.append(host)
+            if len(hosts) == MAX_SUCCESSFUL_HOSTS:
+                break
+        return hosts
+
+    def save_successful_host(self, ip, port):
+        host = _validated_successful_host(ip, port)
+        hosts = self.load_successful_hosts()
+        hosts = [
+            saved
+            for saved in hosts
+            if saved["ip"] != host["ip"]
+        ]
+        hosts.insert(0, host)
+        self._save_value("successful_hosts", hosts[:MAX_SUCCESSFUL_HOSTS])
 
     def _load_values(self):
         if not self.path.exists():

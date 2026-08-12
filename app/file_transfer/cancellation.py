@@ -29,15 +29,20 @@ class TransferCancellation:
         with self._lock:
             if job_id in self._outbound or job_id in self._finished:
                 return False
-            cancellation_id = uuid.uuid4().hex
-            self._outbound[job_id] = cancellation_id
         changed = self.controller.cancel(job_id)
-        self.receiver.cancel_job(job_id)
+        receiver_changed = self.receiver.cancel_job(job_id)
+        if not changed and not receiver_changed:
+            return False
+        cancellation_id = uuid.uuid4().hex
+        with self._lock:
+            if job_id in self._outbound or job_id in self._finished:
+                return False
+            self._outbound[job_id] = cancellation_id
         self.lane.send({
             "type": "cancel_job", "job_id": job_id,
             "cancellation_id": cancellation_id,
         })
-        return changed
+        return True
 
     def _on_cancel_job(self, metadata, payload):
         job_id = metadata.get("job_id")

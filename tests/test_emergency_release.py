@@ -102,7 +102,6 @@ class EmergencyReleaseTests(unittest.TestCase):
 
         server = DeskFlowServer.__new__(DeskFlowServer)
         server.switching_to_client = True
-        server.remote_files_available = False
         server.pressed_keys = {"ctrl"}
         server.forwarded_keys = {
             ("special", "ctrl"): {"type": "special", "value": "ctrl"}
@@ -110,7 +109,7 @@ class EmergencyReleaseTests(unittest.TestCase):
         server.paste_coordinator = type(
             "Coordinator",
             (),
-            {"set_remote_files_available": lambda self, value: None},
+            {"set_route": lambda self, offer, destination: None},
         )()
         server.control_network = Network()
         server.input_handler = Input()

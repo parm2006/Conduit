@@ -1,3 +1,4 @@
+import gc
 import tempfile
 import threading
 import unittest
@@ -34,6 +35,9 @@ def connect_network(client, host, port):
 
 class FullSecuritySessionTests(unittest.TestCase):
     def test_one_control_session_owns_authenticated_data_and_file_lanes(self):
+        # Finalize any Tk objects left by earlier GUI tests on the main thread.
+        # Tk destructors can otherwise run during a networking worker's GC.
+        gc.collect()
         with (
             tempfile.TemporaryDirectory() as identity_directory,
             tempfile.TemporaryDirectory() as trust_directory,
