@@ -3,7 +3,7 @@ type: structure-outline
 repo: Conduit
 branch: main
 sha: e2c191cb6591ec8cc666058f393ca95932edb279
-status: in-review
+status: accepted
 source_design_discussion: ../../superpowers/specs/2026-08-24-multi-client-topology-design.md
 ---
 
@@ -11,9 +11,9 @@ source_design_discussion: ../../superpowers/specs/2026-08-24-multi-client-topolo
 
 ## Review Status
 
-- **Status:** In review
-- **Review needed:** Confirm the seven independently landable phase boundaries, especially the decision to ship the single-Client topology editor before widening the runtime to two Clients.
-- **Next artifact after acceptance:** Executor-safe implementation plans, one plan per landable phase.
+- **Status:** Accepted on 2026-08-24
+- **Review needed:** None; the seven independently landable phase boundaries are accepted.
+- **Next artifact:** Executor-safe implementation plans, one plan per landable phase.
 
 ## Desired End State
 
@@ -290,4 +290,4 @@ None. Product and architecture choices are resolved in the accepted design. Revi
 
 ## Stop Gate
 
-Stop here for outline review. Do not write the executor plans or modify application source until this outline is accepted or the user explicitly asks to proceed.
+Outline gate passed on 2026-08-24. The next planning stage may write the executor plans. Do not modify application source while writing those plans.

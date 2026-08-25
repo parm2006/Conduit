@@ -3,8 +3,8 @@
 **Source roadmap item:** N/A — direct product request
 **Source improvement plan:** N/A
 **Planned at:** 2026-08-24, `main` at `e2c191cb6591ec8cc666058f393ca95932edb279`
-**Status:** Outlining
-**Current gate:** Review the seven implementation slices in the structure outline before executor plans are written.
+**Status:** Outline accepted
+**Current gate:** Write and review the executor-safe implementation plans before application implementation begins.
 
 ## Purpose
 
@@ -19,7 +19,7 @@ The Server can keep two Clients connected through the same secured three-port ar
 | Artifact | Status | Purpose | Notes |
 |---|---|---|---|
 | [Accepted design](../../superpowers/specs/2026-08-24-multi-client-topology-design.md) | Accepted | Product behavior and architecture | Includes review clarifications through 2026-08-24 |
-| [001 structure outline](001-structure-outline.md) | In review | Define independently landable vertical slices | Review phase boundaries and validation |
+| [001 structure outline](001-structure-outline.md) | Accepted | Define independently landable vertical slices | Seven phases accepted on 2026-08-24 |
 
 ## Current Shape
 
@@ -39,7 +39,7 @@ The Server can keep two Clients connected through the same secured three-port ar
 
 ## Open Gates
 
-- Accept or revise the seven phase boundaries in `001-structure-outline.md`.
+- Write and review one executor-safe implementation plan for each accepted phase.
 
 ## Implementation Routing
 
