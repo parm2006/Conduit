@@ -216,7 +216,7 @@ class FileAvailabilityRoutingTests(unittest.TestCase):
         server.switching_to_client = False
         server.control_network = SessionNetwork()
         server.input_handler = RecordingInputHandler(events)
-        server.layout_position = "right"
+        server._active_edge_side = "right"
         server.on_capture_start = None
         server.paste_coordinator = PasteCoordinator(lambda: None)
         state = server._get_clipboard_offer_state()
@@ -260,7 +260,7 @@ class FileAvailabilityRoutingTests(unittest.TestCase):
         server.switching_to_client = True
         server.control_network = SessionNetwork()
         server.input_handler = RecordingInputHandler(events)
-        server.layout_position = "right"
+        server._active_edge_side = "right"
         server.on_capture_stop = None
         server.pressed_keys = set()
         server.forwarded_keys = {}
@@ -515,7 +515,7 @@ class FileAvailabilityRoutingTests(unittest.TestCase):
         server.input_handler = RecordingInputHandler(events)
         server.file_paste_service = PasteServiceState(active=True)
         server.switching_to_client = False
-        server.layout_position = "right"
+        server._active_edge_side = "right"
         server.paste_coordinator = RecordingCoordinator()
         server.control_network = RecordingNetwork()
         server.on_capture_start = None
@@ -547,7 +547,7 @@ class FileAvailabilityRoutingTests(unittest.TestCase):
         server.file_paste_service = service
         server.input_handler = RecordingInputHandler(events)
         server.switching_to_client = False
-        server.layout_position = "right"
+        server._active_edge_side = "right"
         server.paste_coordinator = RecordingCoordinator()
         server.control_network = RecordingNetwork()
         server.on_capture_start = None

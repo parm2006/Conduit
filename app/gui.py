@@ -1,5 +1,6 @@
 import customtkinter as ctk
 import logging
+import socket
 import threading
 from pathlib import Path
 from tkinter import messagebox
@@ -20,6 +21,14 @@ from app.firewall_onboarding import (
     FirewallSetupOutcome,
     firewall_display,
 )
+from app.display_topology import DraftTopology, PlacedMachine
+from app.topology_editor import CLIENT_COLORS, TopologyEditor
+from app.topology_toast import TopologyIdentificationToast
+from app.windows_displays import (
+    WindowsDisplayDiscovery,
+    display_group_from_message,
+)
+from app.machine_identity import windows_machine_id
 
 logger = logging.getLogger(__name__)
 
@@ -368,7 +377,7 @@ class ConduitGUI(ctk.CTk):
         self._firewall_refresh_token = None
         self._firewall_start_warning = None
         saved_role = self.preferences.load_role()
-        saved_position = self.preferences.load_client_position()
+        self.legacy_layout_position = self.preferences.load_client_position()
         self.known_hosts = self.load_known_hosts()
         self.overlay_center_x = self.winfo_screenwidth() // 2
         self.overlay_center_y = self.winfo_screenheight() // 2
@@ -379,6 +388,10 @@ class ConduitGUI(ctk.CTk):
         self._shutdown_started = False
         self._close_started = False
         self.transfer_toast = TransferToast(self, self._cancel_transfer)
+        self.topology_toast = TopologyIdentificationToast(
+            self,
+            on_disconnect=self.disconnect_client,
+        )
         self.pairing_approval = PairingApprovalController(
             self,
             on_status=lambda message: self._set_status(message, "orange"),
@@ -435,33 +448,45 @@ class ConduitGUI(ctk.CTk):
         self.server_password_entry.pack(pady=2)
         enable_textbox_qol(self.server_password_entry)
         
-        # Layout Selection
-        self.layout_label = ctk.CTkLabel(self.tab_server, text="Client Position:")
-        self.layout_label.pack(pady=5)
-        
-        self.layout_frame = ctk.CTkFrame(self.tab_server, fg_color="transparent")
-        self.layout_frame.pack(pady=5)
-        
-        self.layout_btns = {}
-        
-        # Center server block
-        self.server_btn = ctk.CTkButton(self.layout_frame, text="S", width=40, height=40, fg_color="#555555", state="disabled")
-        self.server_btn.grid(row=1, column=1, padx=5, pady=5)
-        
-        self.layout_btns['top'] = ctk.CTkButton(self.layout_frame, text="", width=40, height=40, fg_color="#333333", command=lambda: self.set_layout_position('top'))
-        self.layout_btns['top'].grid(row=0, column=1, padx=5, pady=5)
-        
-        self.layout_btns['left'] = ctk.CTkButton(self.layout_frame, text="", width=40, height=40, fg_color="#333333", command=lambda: self.set_layout_position('left'))
-        self.layout_btns['left'].grid(row=1, column=0, padx=5, pady=5)
-        
-        self.layout_btns['right'] = ctk.CTkButton(self.layout_frame, text="C", width=40, height=40, fg_color="white", text_color="black", command=lambda: self.set_layout_position('right'))
-        self.layout_btns['right'].grid(row=1, column=2, padx=5, pady=5)
-        
-        self.layout_btns['bottom'] = ctk.CTkButton(self.layout_frame, text="", width=40, height=40, fg_color="#333333", command=lambda: self.set_layout_position('bottom'))
-        self.layout_btns['bottom'].grid(row=2, column=1, padx=5, pady=5)
-        
-        self.layout_position = 'right'
-        self.set_layout_position(saved_position, persist=False)
+        saved_topology = self.preferences.load_active_topology()
+        windows_name = socket.gethostname()
+        server_machine_id = (
+            saved_topology.server_id
+            if saved_topology is not None
+            else windows_machine_id()
+        )
+        try:
+            server_group = WindowsDisplayDiscovery().discover(
+                server_machine_id,
+                windows_name,
+            )
+        except Exception as error:
+            logger.error("Could not discover Server displays (%s)", error_name(error))
+            if saved_topology is None:
+                raise
+            server_group = next(
+                placed.group
+                for placed in saved_topology.machines
+                if placed.group.machine_id == saved_topology.server_id
+            )
+        if saved_topology is None:
+            saved_topology = DraftTopology(
+                server_id=server_machine_id,
+                machines=(PlacedMachine(server_group, 0, 0),),
+            ).validate().validated.activate(version=0)
+        current_draft = DraftTopology(
+            server_id=server_machine_id,
+            machines=(PlacedMachine(server_group, 0, 0),),
+        )
+        self.topology_editor = TopologyEditor(
+            self.tab_server,
+            active=saved_topology,
+            draft=current_draft,
+            on_apply=self._on_topology_apply,
+            on_cancel=self._on_topology_cancel,
+            on_rescan=self._begin_topology_rescan,
+        )
+        self.topology_editor.pack(pady=8)
         
         self.server_start_btn = ctk.CTkButton(self.tab_server, text="Start Server", command=self.start_server)
         self.server_start_btn.pack(pady=10)
@@ -763,11 +788,14 @@ class ConduitGUI(ctk.CTk):
         self.server = ConduitServer(
             password=password, 
             port=port, 
-            layout_position=self.layout_position,
             on_capture_start=self.show_overlay, 
             on_capture_stop=self.hide_overlay,
             on_transfer_status=self._on_transfer_status,
             on_app_shutdown=self._on_emergency_exit_global,
+            on_topology_edit_cancel=lambda: self.after(
+                0,
+                self.topology_editor.cancel_edits,
+            ),
         )
         self.server.control_network.register_callback('connected', self._on_server_client_connected)
         self.server.control_network.register_callback('disconnected', self._on_server_client_disconnected)
@@ -775,6 +803,13 @@ class ConduitGUI(ctk.CTk):
         self.server.control_network.register_callback('disconnect_notice', self._on_disconnect_notice)
         self.server.control_network.register_callback('reload_connection', self._on_remote_reload_connection)
         self.server.control_network.register_callback('shutdown_app', self._on_remote_app_shutdown)
+        self.server.control_network.register_callback(
+            'display_inventory',
+            lambda data, source=self.server: self._on_server_display_inventory(
+                source,
+                data,
+            ),
+        )
         screen_width = self.winfo_screenwidth()
         screen_height = self.winfo_screenheight()
         self.server.set_screen_size(screen_width, screen_height)
@@ -850,6 +885,18 @@ class ConduitGUI(ctk.CTk):
         client.control_network.register_callback('disconnect_notice', self._on_disconnect_notice)
         client.control_network.register_callback('reload_connection', self._on_remote_reload_connection)
         client.control_network.register_callback('shutdown_app', self._on_remote_app_shutdown)
+        client.control_network.register_callback(
+            'topology_identify',
+            lambda data, source=client: self._on_topology_identify(source, data),
+        )
+        client.control_network.register_callback(
+            'topology_applied',
+            lambda data, source=client: self._hide_topology_toast(source),
+        )
+        client.control_network.register_callback(
+            'topology_cancelled',
+            lambda data, source=client: self._hide_topology_toast(source),
+        )
         screen_width = self.winfo_screenwidth()
         screen_height = self.winfo_screenheight()
         client.set_screen_size(screen_width, screen_height)
@@ -938,8 +985,194 @@ class ConduitGUI(ctk.CTk):
 
     def _on_server_client_connected(self, data):
         self.after(0, lambda: self._set_status("Status: Client Connected!", "green"))
+
+    def _on_server_display_inventory(self, source, data):
+        if self.server is not source:
+            return
+        try:
+            group = display_group_from_message(data.get("inventory"))
+        except Exception as error:
+            logger.error("Rejected Client display inventory (%s)", error_name(error))
+            return
+
+        def add_to_draft():
+            if self.server is not source:
+                return
+            if not self.topology_editor.add_client(group):
+                self._set_status(
+                    "Status: Client connected but no free topology position is available.",
+                    "orange",
+                )
+                return
+            if (
+                self.topology_editor.state.active.version == 0
+                and len(self.topology_editor.state.active.machines) == 1
+            ):
+                legacy_positions = {
+                    "right": (1, 0),
+                    "left": (-1, 0),
+                    "top": (0, -1),
+                    "bottom": (0, 1),
+                }
+                x, y = legacy_positions[self.legacy_layout_position]
+                self.topology_editor.state.move_machine(group.machine_id, x, y)
+                self.topology_editor._render()
+            server = self.server
+            if server is not None and server.control_connected:
+                color = self.topology_editor.state.client_color(group.machine_id)
+                server.control_network.send_message(
+                    {
+                        "type": "topology_identify",
+                        "color": color,
+                        "connection_state": "connected",
+                    }
+                )
+            if self.__dict__.get("_pending_topology_rescan") is source:
+                self._pending_topology_rescan = None
+                self.topology_editor.apply_current_draft()
+
+        self.after(0, add_to_draft)
+
+    def _on_topology_identify(self, source, data):
+        def show():
+            if self.client is not source or source.display_group is None:
+                return
+            self.topology_toast.show(
+                source.display_group,
+                data.get("color", CLIENT_COLORS[0]),
+                data.get("connection_state", "connected"),
+            )
+
+        self.after(0, show)
+
+    def _hide_topology_toast(self, source):
+        if self.client is not source:
+            return
+        self.after(0, self.topology_toast.hide)
+
+    def _begin_topology_rescan(self):
+        server_id = self.topology_editor.state.draft.server_id
+        try:
+            server_group = WindowsDisplayDiscovery().discover(
+                server_id,
+                socket.gethostname(),
+            )
+        except Exception as error:
+            logger.error("Could not rescan Server displays (%s)", error_name(error))
+            self._set_status(
+                "Status: Displays could not be rescanned. The previous layout is still active.",
+                "red",
+            )
+            return False
+        self.topology_editor.refresh_machine(server_group)
+
+        server = self.server
+        if server is None or not server.control_connected:
+            return True
+        self._pending_topology_rescan = server
+        sent = server.control_network.send_message({
+            "type": "display_inventory_request",
+        })
+        if not sent:
+            self._pending_topology_rescan = None
+            self._set_status(
+                "Status: Client displays could not be rescanned. The previous layout is still active.",
+                "red",
+            )
+            return False
+        self._set_status("Status: Rescanning displays...", "orange")
+        self.after(3000, lambda: self._expire_topology_rescan(server))
+        return False
+
+    def _expire_topology_rescan(self, source):
+        if self.__dict__.get("_pending_topology_rescan") is not source:
+            return
+        self._pending_topology_rescan = None
+        self._set_status(
+            "Status: Client display rescan timed out. The previous layout is still active.",
+            "red",
+        )
+
+    def _on_topology_apply(self, result, candidate):
+        if not result.is_valid:
+            self._set_status(
+                "Status: Layout is not connected. Move every Client onto a full grid edge.",
+                "red",
+            )
+            return False
+        mappings = tuple(
+            mapping
+            for mapping in candidate.edge_mappings
+            if mapping.source_machine_id == candidate.server_id
+            and mapping.destination_machine_id != candidate.server_id
+        )
+        server = self.server
+        if server is not None and mappings and server.control_connected:
+            self._set_status("Status: Applying machine layout...", "orange")
+
+            def persist(topology):
+                if self.server is not server:
+                    return False
+                self.preferences.save_active_topology(topology)
+                return True
+
+            server.apply_topology_candidate(
+                candidate,
+                on_persist=persist,
+                on_complete=lambda success: self.after(
+                    0,
+                    lambda: self._finish_topology_apply(
+                        server,
+                        candidate,
+                        success,
+                    ),
+                ),
+            )
+            return False
+        try:
+            self.preferences.save_active_topology(candidate)
+            self._set_status("Status: Machine layout applied", "green")
+            return True
+        except Exception as error:
+            logger.error("Could not apply topology (%s)", error_name(error))
+            self._set_status(
+                "Status: Layout could not be applied. The previous layout is still active.",
+                "red",
+            )
+            return False
+
+    def _finish_topology_apply(self, source, candidate, success):
+        if self.server is not source:
+            return
+        if not success:
+            self._set_status(
+                "Status: Client did not accept the layout. The previous layout is still active.",
+                "red",
+            )
+            return
+        self.topology_editor.state.commit(candidate)
+        self.topology_editor._render()
+        mapping = next(
+            mapping
+            for mapping in candidate.edge_mappings
+            if mapping.source_machine_id == candidate.server_id
+            and mapping.destination_machine_id != candidate.server_id
+        )
+        if self.server is not None and self.server.control_connected:
+            self.server.control_network.send_message({'type': 'topology_applied'})
+        self._set_status("Status: Machine layout applied", "green")
+
+    def _on_topology_cancel(self):
+        self._pending_topology_rescan = None
+        server = self.server
+        if server is not None and server.control_connected:
+            server.control_network.send_message({'type': 'topology_cancelled'})
+        self._set_status("Status: Layout changes cancelled", "gray")
         
     def _on_server_client_disconnected(self, data):
+        editor = self.__dict__.get("topology_editor")
+        if editor is not None:
+            self.after(0, editor.remove_clients_from_draft)
         source = self.server
         if source:
             port = self.server_port_entry.get()
@@ -964,24 +1197,6 @@ class ConduitGUI(ctk.CTk):
             white_text=white_text,
             show_ip=show_ip,
         )
-
-    def set_layout_position(self, position, persist=True):
-        if position not in {"top", "left", "right", "bottom"}:
-            position = "right"
-        self.layout_position = position
-        for candidate, button in self.layout_btns.items():
-            if candidate == position:
-                button.configure(text="C", fg_color="white", text_color="black")
-            else:
-                button.configure(text="", fg_color="#333333")
-        if persist:
-            try:
-                self.preferences.save_client_position(position)
-            except Exception as error:
-                logger.error(
-                    "Could not save client position preference (%s)",
-                    error_name(error),
-                )
 
     def set_daemon_mode(self, hidden):
         """Set window visibility to background daemon mode (hidden) or visible mode."""

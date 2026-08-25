@@ -1,11 +1,25 @@
 import logging
 import os
 import threading
+from dataclasses import dataclass
 from pynput.mouse import Controller as MouseController, Listener as MouseListener, Button
 from pynput.keyboard import Controller as KeyboardController, Listener as KeyboardListener, Key, KeyCode
 from app.safe_errors import error_name
+from app.display_topology import edge_ratio
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class TopologyEdgeRegion:
+    source_machine_id: str
+    source_display_id: str
+    source_side: str
+    destination_machine_id: str
+    destination_display_id: str
+    destination_side: str
+    source_rect: object
+    destination_rect: object
 
 
 class WindowsSpecialKeyInjector:
@@ -88,6 +102,39 @@ class InputHandler:
         self.screen_width = w
         self.screen_height = h
 
+    def configure_topology_edges(self, topology, machine_id):
+        machines = {
+            placed.group.machine_id: placed.group
+            for placed in topology.machines
+        }
+        regions = []
+        for mapping in topology.edge_mappings:
+            if mapping.source_machine_id != machine_id:
+                continue
+            source_group = machines[mapping.source_machine_id]
+            destination_group = machines[mapping.destination_machine_id]
+            regions.append(
+                TopologyEdgeRegion(
+                    source_machine_id=mapping.source_machine_id,
+                    source_display_id=mapping.source_display_id,
+                    source_side=mapping.source_side,
+                    destination_machine_id=mapping.destination_machine_id,
+                    destination_display_id=mapping.destination_display_id,
+                    destination_side=mapping.destination_side,
+                    source_rect=source_group.display(mapping.source_display_id).rect,
+                    destination_rect=destination_group.display(
+                        mapping.destination_display_id
+                    ).rect,
+                )
+            )
+        self.topology_edge_regions = tuple(regions)
+
+    def clear_topology_edges(self):
+        self.topology_edge_regions = ()
+
+    def set_client_topology_edge(self, region):
+        self.client_topology_edge_regions = () if region is None else (region,)
+
     def register_callback(self, event_type, cb):
         if event_type not in self.callbacks:
             self.callbacks[event_type] = []
@@ -130,6 +177,17 @@ class InputHandler:
             self.keyboard_listener = None
 
     def _on_move_edge(self, x, y):
+        if hasattr(self, "topology_edge_regions"):
+            for region in self.topology_edge_regions:
+                if self._point_hits_region(region, x, y):
+                    self.trigger(
+                        'edge_hit',
+                        region.source_side,
+                        edge_ratio(region.source_rect, region.source_side, x, y),
+                        region,
+                    )
+                    return
+            return
         if self.server_edge == 'right' and x >= self.screen_width - 2:
             self.trigger('edge_hit', 'right', y / self.screen_height)
         elif self.server_edge == 'left' and x <= 0:
@@ -138,6 +196,19 @@ class InputHandler:
             self.trigger('edge_hit', 'top', x / self.screen_width)
         elif self.server_edge == 'bottom' and y >= self.screen_height - 2:
             self.trigger('edge_hit', 'bottom', x / self.screen_width)
+
+    @staticmethod
+    def _point_hits_region(region, x, y):
+        rect = region.source_rect
+        if region.source_side == "left":
+            return abs(x - rect.left) <= 2 and rect.top <= y < rect.bottom
+        if region.source_side == "right":
+            return abs(x - (rect.right - 1)) <= 2 and rect.top <= y < rect.bottom
+        if region.source_side == "top":
+            return abs(y - rect.top) <= 2 and rect.left <= x < rect.right
+        if region.source_side == "bottom":
+            return abs(y - (rect.bottom - 1)) <= 2 and rect.left <= x < rect.right
+        return False
 
     def _on_key_press(self, key):
         self.trigger('key_press', self._serialize_key(key))
@@ -176,6 +247,17 @@ class InputHandler:
         self.mouse.move(dx, dy)
         # Check if client mouse hits its return edge to switch back to server
         x, y = self.mouse.position
+        if hasattr(self, "client_topology_edge_regions"):
+            for region in self.client_topology_edge_regions:
+                if self._point_hits_region(region, x, y):
+                    self.trigger(
+                        'client_edge_hit',
+                        region.source_side,
+                        edge_ratio(region.source_rect, region.source_side, x, y),
+                        region,
+                    )
+                    return
+            return
         if self.client_edge == 'left' and x <= 0:
             self.trigger('client_edge_hit', 'left', y / self.screen_height)
         elif self.client_edge == 'right' and x >= self.screen_width - 2:

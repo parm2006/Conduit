@@ -128,7 +128,7 @@ class EmergencyReleaseTests(unittest.TestCase):
         server.control_network = Network()
         server.input_handler = Input()
         server.on_capture_stop = None
-        server.layout_position = "right"
+        server._active_edge_side = "right"
 
         server.on_switch_back({"ratio": 0.5})
 

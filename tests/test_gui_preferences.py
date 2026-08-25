@@ -1,3 +1,4 @@
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -11,6 +12,13 @@ from app.gui import (
     write_status_message,
 )
 from app.preferences import UserPreferences
+from app.display_topology import (
+    Display,
+    DraftTopology,
+    MachineDisplayGroup,
+    NativeRect,
+    PlacedMachine,
+)
 
 
 class Button:
@@ -61,6 +69,23 @@ class ValueWidget(ConfigWidget):
 
 
 class PreferencesTests(unittest.TestCase):
+    @staticmethod
+    def _machine(machine_id, name):
+        return MachineDisplayGroup(
+            machine_id=machine_id,
+            windows_name=name,
+            displays=(
+                Display(
+                    display_id=f"{machine_id}-display",
+                    rect=NativeRect(0, 0, 1920, 1080),
+                    work_rect=NativeRect(0, 0, 1920, 1040),
+                    dpi_percent=125,
+                    orientation=0,
+                    primary=True,
+                ),
+            ),
+        )
+
     def test_successful_hosts_round_trip_newest_first_and_preserve_settings(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -200,6 +225,68 @@ class PreferencesTests(unittest.TestCase):
                 self.assertIsNone(UserPreferences(Path(directory)).load_role())
             self.assertNotIn("private invalid data", "\n".join(logs.output))
 
+    def test_active_topology_round_trips_without_replacing_other_preferences(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            store = UserPreferences(root)
+            store.save_role("server")
+            server = self._machine("server-trust", "ParthPC")
+            client = self._machine("client-trust", "ParthSurface")
+            active = DraftTopology(
+                server_id=server.machine_id,
+                machines=(
+                    PlacedMachine(server, 0, 0),
+                    PlacedMachine(client, 1, 0),
+                ),
+            ).validate().validated.activate(version=4)
+
+            store.save_active_topology(active)
+            loaded = UserPreferences(root).load_active_topology()
+
+            self.assertEqual(loaded, active)
+            self.assertEqual(UserPreferences(root).load_role(), "server")
+
+    def test_legacy_position_seeds_a_draft_only_when_no_new_topology_exists(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            store = UserPreferences(root)
+            server = self._machine("server", "ParthPC")
+            client = self._machine("client", "ParthSurface")
+            store.save_client_position("left")
+
+            seeded = store.load_or_seed_draft(server, client)
+
+            self.assertEqual(
+                tuple((machine.group.machine_id, machine.x, machine.y) for machine in seeded.machines),
+                (("server", 0, 0), ("client", -1, 0)),
+            )
+
+            active = seeded.validate().validated.activate(version=8)
+            store.save_active_topology(active)
+            store.save_client_position("bottom")
+
+            restored = store.load_or_seed_draft(server, client)
+
+            self.assertEqual(restored.machines, active.machines)
+
+    def test_invalid_topology_version_is_ignored_without_exposing_contents(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            store = UserPreferences(root)
+            server = self._machine("server", "ParthPC")
+            active = DraftTopology(
+                server_id="server",
+                machines=(PlacedMachine(server, 0, 0),),
+            ).validate().validated.activate(version=1)
+            store.save_active_topology(active)
+            values = json.loads(store.path.read_text(encoding="utf-8"))
+            values["active_topology"]["activation_version"] = "private bad version"
+            store.path.write_text(json.dumps(values), encoding="utf-8")
+
+            loaded = UserPreferences(root).load_active_topology()
+
+            self.assertIsNone(loaded)
+
 
 class SuccessfulRoleTimingTests(unittest.TestCase):
     def test_successful_connection_refreshes_saved_host_dropdown_and_default(self):
@@ -314,60 +401,8 @@ class SuccessfulRoleTimingTests(unittest.TestCase):
             with self.subTest(port=port):
                 self.assertIsNone(parse_port(str(port)))
 
-    def test_selecting_client_position_updates_buttons_and_saves_immediately(self):
-        saved = []
-
-        class LayoutButton:
-            def __init__(self):
-                self.values = {}
-
-            def configure(self, **values):
-                self.values.update(values)
-
-        gui = ConduitGUI.__new__(ConduitGUI)
-        gui.layout_btns = {
-            position: LayoutButton()
-            for position in ("top", "left", "right", "bottom")
-        }
-        gui.preferences = type(
-            "Preferences",
-            (),
-            {"save_client_position": lambda self, value: saved.append(value)},
-        )()
-
-        gui.set_layout_position("bottom")
-
-        self.assertEqual(gui.layout_position, "bottom")
-        self.assertEqual(saved, ["bottom"])
-        self.assertEqual(gui.layout_btns["bottom"].values["text"], "C")
-        self.assertEqual(gui.layout_btns["bottom"].values["fg_color"], "white")
-        self.assertEqual(gui.layout_btns["right"].values["text"], "")
-
-    def test_position_save_failure_keeps_selection_and_redacts_private_detail(self):
-        class LayoutButton:
-            def configure(self, **values):
-                return None
-
-        gui = ConduitGUI.__new__(ConduitGUI)
-        gui.layout_btns = {
-            position: LayoutButton()
-            for position in ("top", "left", "right", "bottom")
-        }
-        gui.preferences = type(
-            "Preferences",
-            (),
-            {
-                "save_client_position": lambda self, value: (_ for _ in ()).throw(
-                    PermissionError("private preference path")
-                ),
-            },
-        )()
-
-        with self.assertLogs("app.gui", level="ERROR") as logs:
-            gui.set_layout_position("top")
-
-        self.assertEqual(gui.layout_position, "top")
-        self.assertNotIn("private preference path", "\n".join(logs.output))
+    def test_scalar_layout_selector_is_not_part_of_the_gui_contract(self):
+        self.assertFalse(hasattr(ConduitGUI, "set_layout_position"))
 
     def test_invalid_ports_show_actionable_status_without_starting_or_connecting(self):
         class Entry:
@@ -729,7 +764,6 @@ class SuccessfulRoleTimingTests(unittest.TestCase):
         gui.server_password_entry = Entry("secret")
         gui.server = None
         gui.overlay = object()
-        gui.layout_position = "right"
         gui.show_overlay = lambda: None
         gui.hide_overlay = lambda: None
         gui._on_transfer_status = lambda status: None

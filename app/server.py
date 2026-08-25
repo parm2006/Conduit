@@ -22,15 +22,28 @@ from app.latest_wins_sender import LatestWinsSender
 from app.safe_errors import error_name
 from app.global_hotkey import GlobalHotkeyMonitor
 from app.ports import DEFAULT_BASE_PORT
+from app.display_topology import NativeRect, edge_entry_point
 
 logger = logging.getLogger(__name__)
 
+
+def _message_rect(values):
+    if not isinstance(values, list) or len(values) != 4:
+        return None
+    if any(type(value) is not int for value in values):
+        return None
+    left, top, right, bottom = values
+    if right <= left or bottom <= top:
+        return None
+    return NativeRect(left, top, right, bottom)
+
 class ConduitServer:
-    def __init__(self, password, port=DEFAULT_BASE_PORT, layout_position='right', on_capture_start=None, on_capture_stop=None, on_transfer_status=None, on_app_shutdown=None):
-        self.layout_position = layout_position
+    def __init__(self, password, port=DEFAULT_BASE_PORT, on_capture_start=None, on_capture_stop=None, on_transfer_status=None, on_app_shutdown=None, on_topology_edit_cancel=None):
+        self._active_edge_side = None
         self.on_capture_start = on_capture_start
         self.on_capture_stop = on_capture_stop
         self.on_app_shutdown = on_app_shutdown
+        self.on_topology_edit_cancel = on_topology_edit_cancel
         
         self.identity = load_identity()
         self.session_coordinator = SessionCoordinator(password)
@@ -74,11 +87,21 @@ class ConduitServer:
         self._client_ready = False
         self._disconnecting = False
         self._client_state_lock = threading.RLock()
+        self._topology_ack_lock = threading.Lock()
+        self._topology_ack_event = None
+        self._topology_ack_version = None
+        self._topology_commit_ack_event = None
+        self._topology_commit_ack_version = None
         
         # Setup control network callbacks
         self.control_network.register_callback('connected', lambda d: self._on_socket_connected('control', d))
         self.control_network.register_callback('disconnected', lambda d: self._on_socket_disconnected('control'))
         self.control_network.register_callback('switch_back', self.on_switch_back)
+        self.control_network.register_callback('topology_ack', self.on_topology_ack)
+        self.control_network.register_callback(
+            'topology_commit_ack',
+            self.on_topology_commit_ack,
+        )
         self.control_network.register_callback(
             'clipboard_offer', self.on_remote_clipboard_offer
         )
@@ -202,19 +225,221 @@ class ConduitServer:
                 self._disconnecting = False
 
     def on_client_connected(self):
-        logger.info(f"Client connected on both ports, starting edge detection for layout: {self.layout_position}")
-        # Send handshake layout config over control
-        self.control_network.send_message({
-            'type': 'layout_config',
-            'position': self.layout_position,
-            'server_width': self.input_handler.screen_width,
-            'server_height': self.input_handler.screen_height
-        })
-        self.input_handler.start_edge_detection(self.layout_position)
+        logger.info(
+            "Client connected on all lanes; waiting for topology Apply before input routing."
+        )
+        self.control_network.send_message({'type': 'display_inventory_request'})
         self.clipboard.start()
         self.hotkey_monitor.start()
         self.pressed_keys.clear()
         self._offer_file_lane()
+
+    def activate_client_topology(self, topology):
+        if isinstance(topology, str):
+            position = topology
+            message = {
+                'type': 'layout_config',
+                'position': position,
+                'server_width': self.input_handler.screen_width,
+                'server_height': self.input_handler.screen_height,
+            }
+            self._active_edge_side = position
+            self.control_network.send_message(message)
+            self.input_handler.start_edge_detection(position)
+            return
+
+        self._install_topology(topology)
+        message = self._topology_layout_message(topology, 'layout_config')
+        if message is not None:
+            self.control_network.send_message(message)
+
+    def _install_topology(self, topology):
+        self.active_topology = topology
+        self.input_handler.configure_topology_edges(topology, topology.server_id)
+        message = self._topology_layout_message(topology, 'layout_config')
+        if message is None:
+            return
+        self._active_edge_side = message['position']
+        if getattr(self, 'control_connected', True):
+            self.input_handler.start_edge_detection()
+
+    def _restore_topology(self, topology):
+        if topology is not None:
+            self._install_topology(topology)
+            return
+        self.active_topology = None
+        self._active_edge_side = None
+        self.input_handler.stop()
+        self.input_handler.clear_topology_edges()
+
+    def _topology_layout_message(self, topology, message_type):
+        mappings = tuple(
+            mapping
+            for mapping in topology.edge_mappings
+            if mapping.source_machine_id == topology.server_id
+            and mapping.destination_machine_id != topology.server_id
+        )
+        if not mappings:
+            return None
+        machines = {
+            placed.group.machine_id: placed.group
+            for placed in topology.machines
+        }
+        mapping = mappings[0]
+        server_display = machines[topology.server_id].display(mapping.source_display_id)
+        client_display = machines[mapping.destination_machine_id].display(
+            mapping.destination_display_id
+        )
+        return {
+            'type': message_type,
+            'position': mapping.source_side,
+            'server_width': self.input_handler.screen_width,
+            'server_height': self.input_handler.screen_height,
+            'server_display_id': mapping.source_display_id,
+            'server_rect': [
+                server_display.rect.left,
+                server_display.rect.top,
+                server_display.rect.right,
+                server_display.rect.bottom,
+            ],
+            'client_display_id': mapping.destination_display_id,
+            'client_rect': [
+                client_display.rect.left,
+                client_display.rect.top,
+                client_display.rect.right,
+                client_display.rect.bottom,
+            ],
+            'client_edge': mapping.destination_side,
+        }
+
+    def apply_topology_candidate(
+        self,
+        topology,
+        on_persist,
+        on_complete,
+        timeout=3.0,
+    ):
+        previous = getattr(self, 'active_topology', None)
+        self._release_forwarded_keys()
+        self.switching_to_client = False
+        self.input_handler.release_all_injected_keys()
+        self.input_handler.stop()
+        if self.on_capture_stop:
+            self.on_capture_stop()
+        server_group = next(
+            placed.group
+            for placed in topology.machines
+            if placed.group.machine_id == topology.server_id
+        )
+        primary = next(
+            display
+            for display in server_group.displays
+            if display.enabled and display.primary
+        )
+        self.input_handler.inject_position(
+            (primary.rect.left + primary.rect.right) // 2,
+            (primary.rect.top + primary.rect.bottom) // 2,
+        )
+        event = threading.Event()
+        with self._topology_ack_lock:
+            self._topology_ack_event = event
+            self._topology_ack_version = topology.version
+        message = self._topology_layout_message(topology, 'topology_apply')
+        if message is None:
+            with self._topology_ack_lock:
+                self._topology_ack_event = None
+                self._topology_ack_version = None
+            try:
+                persisted = bool(on_persist(topology))
+            except Exception:
+                persisted = False
+            if persisted:
+                try:
+                    self._install_topology(topology)
+                except Exception as error:
+                    logger.error(
+                        "Could not install topology (%s)",
+                        error_name(error),
+                    )
+                    persisted = False
+                    self._restore_topology(previous)
+            on_complete(persisted)
+            return
+        message['version'] = topology.version
+        sent = self.control_network.send_message(message)
+
+        def finish():
+            acknowledged = bool(sent and event.wait(timeout))
+            with self._topology_ack_lock:
+                self._topology_ack_event = None
+                self._topology_ack_version = None
+            committed = False
+            commit_event = threading.Event()
+            if acknowledged:
+                with self._topology_ack_lock:
+                    self._topology_commit_ack_event = commit_event
+                    self._topology_commit_ack_version = topology.version
+                commit_sent = self.control_network.send_message({
+                    'type': 'topology_commit',
+                    'version': topology.version,
+                })
+                committed = bool(commit_sent and commit_event.wait(timeout))
+                with self._topology_ack_lock:
+                    self._topology_commit_ack_event = None
+                    self._topology_commit_ack_version = None
+            persisted = False
+            if committed:
+                try:
+                    self._install_topology(topology)
+                except Exception as error:
+                    logger.error(
+                        "Could not install acknowledged topology (%s)",
+                        error_name(error),
+                    )
+                else:
+                    try:
+                        persisted = bool(on_persist(topology))
+                    except Exception as error:
+                        logger.error(
+                            "Could not persist acknowledged topology (%s)",
+                            error_name(error),
+                        )
+            if not persisted:
+                self.control_network.send_message({
+                    'type': 'topology_rollback',
+                    'version': topology.version,
+                })
+                self._restore_topology(previous)
+            else:
+                self.control_network.send_message({
+                    'type': 'topology_finalize',
+                    'version': topology.version,
+                })
+            on_complete(persisted)
+
+        threading.Thread(target=finish, daemon=True).start()
+
+    def on_topology_ack(self, data):
+        version = data.get('version')
+        with self._topology_ack_lock:
+            if version != self._topology_ack_version:
+                return False
+            event = self._topology_ack_event
+            if event is None:
+                return False
+            event.set()
+            return True
+
+    def on_topology_commit_ack(self, data):
+        version = data.get('version')
+        with self._topology_ack_lock:
+            if version != self._topology_commit_ack_version:
+                return False
+            event = self._topology_commit_ack_event
+            if event is None:
+                return False
+            event.set()
+            return True
 
     def _offer_file_lane(self):
         offer = self.control_network.session_offer
@@ -240,9 +465,9 @@ class ConduitServer:
         self.paste_coordinator.reset()
         self.hotkey_monitor.stop()
 
-    def on_edge_hit(self, direction, ratio):
+    def on_edge_hit(self, direction, ratio, region=None):
         with self._get_paste_route_lock():
-            if direction == self.layout_position:
+            if region is not None or direction == self._active_edge_side:
                 paste_service = getattr(self, "file_paste_service", None)
                 if (
                     paste_service is not None
@@ -255,14 +480,40 @@ class ConduitServer:
                 if self.switching_to_client:
                     return
                 self.switching_to_client = True
+                self.active_edge_region = region
+                cancel_edit = getattr(self, 'on_topology_edit_cancel', None)
+                if cancel_edit is not None:
+                    cancel_edit()
                 self._apply_clipboard_offer_route()
 
                 logger.info(f"Hit {direction} edge. Switching to client.")
-                self.control_network.send_message({
+                message = {
                     'type': 'switch',
                     'direction': direction,
                     'ratio': ratio
-                })
+                }
+                if region is not None:
+                    message.update(
+                        {
+                            'source_display_id': region.source_display_id,
+                            'source_side': region.source_side,
+                            'source_rect': [
+                                region.source_rect.left,
+                                region.source_rect.top,
+                                region.source_rect.right,
+                                region.source_rect.bottom,
+                            ],
+                            'destination_display_id': region.destination_display_id,
+                            'destination_side': region.destination_side,
+                            'destination_rect': [
+                                region.destination_rect.left,
+                                region.destination_rect.top,
+                                region.destination_rect.right,
+                                region.destination_rect.bottom,
+                            ],
+                        }
+                    )
+                self.control_network.send_message(message)
                 self.input_handler.stop() # Stop edge detection
                 self.input_handler.start_keyboard_capture()
                 if self.on_capture_start:
@@ -283,19 +534,31 @@ class ConduitServer:
         if self.on_capture_stop:
             self.on_capture_stop()
 
-        # Warp the server mouse cleanly to the boundary
-        w = self.input_handler.screen_width
-        h = self.input_handler.screen_height
-        if self.layout_position == 'right':
-            self.input_handler.inject_position(w - 2, int(h * ratio))
-        elif self.layout_position == 'left':
-            self.input_handler.inject_position(2, int(h * ratio))
-        elif self.layout_position == 'top':
-            self.input_handler.inject_position(int(w * ratio), 2)
-        elif self.layout_position == 'bottom':
-            self.input_handler.inject_position(int(w * ratio), h - 2)
+        destination_rect = _message_rect(data.get('destination_rect'))
+        destination_side = data.get('destination_side')
+        if destination_rect is not None and destination_side in {
+            'left', 'right', 'top', 'bottom'
+        }:
+            self.input_handler.inject_position(
+                *edge_entry_point(destination_rect, destination_side, ratio)
+            )
+        else:
+            # Legacy peers still return through the scalar primary-screen edge.
+            w = self.input_handler.screen_width
+            h = self.input_handler.screen_height
+            if self._active_edge_side == 'right':
+                self.input_handler.inject_position(w - 2, int(h * ratio))
+            elif self._active_edge_side == 'left':
+                self.input_handler.inject_position(2, int(h * ratio))
+            elif self._active_edge_side == 'top':
+                self.input_handler.inject_position(int(w * ratio), 2)
+            elif self._active_edge_side == 'bottom':
+                self.input_handler.inject_position(int(w * ratio), h - 2)
 
-        self.input_handler.start_edge_detection(self.layout_position)
+        if hasattr(self.input_handler, 'topology_edge_regions'):
+            self.input_handler.start_edge_detection()
+        else:
+            self.input_handler.start_edge_detection(self._active_edge_side)
 
     def on_mouse_move(self, dx, dy):
         self.control_network.send_message({

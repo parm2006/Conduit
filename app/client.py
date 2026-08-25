@@ -1,6 +1,7 @@
 import logging
 import threading
 import os
+import socket
 from pathlib import Path
 from app.network import NetworkClient
 from app.trust import PeerTrustStore
@@ -14,16 +15,33 @@ from app.file_transfer.selection import snapshot_selection
 from app.file_transfer.sender import TransferSender
 from app.file_transfer.controller import TransferController
 from app.file_transfer.cancellation import TransferCancellation
-from app.input_handler import InputHandler
+from app.input_handler import InputHandler, TopologyEdgeRegion
 from app.clipboard_handler import ClipboardHandler
 from app.clipboard_formats import encode_clipboard_message
 from app.latest_wins_sender import LatestWinsSender
 from app.input_geometry import client_entry_position
+from app.display_topology import NativeRect, edge_entry_point
 from app.safe_errors import error_name, public_error_message
 from app.global_hotkey import GlobalHotkeyMonitor
+from app.machine_identity import windows_machine_id
 from app.ports import DEFAULT_FILE_PORT
+from app.windows_displays import (
+    WindowsDisplayDiscovery,
+    display_group_to_message,
+)
 
 logger = logging.getLogger(__name__)
+
+
+def _message_rect(values):
+    if not isinstance(values, list) or len(values) != 4:
+        return None
+    if any(type(value) is not int for value in values):
+        return None
+    left, top, right, bottom = values
+    if right <= left or bottom <= top:
+        return None
+    return NativeRect(left, top, right, bottom)
 
 class ConduitClient:
     def __init__(
@@ -35,6 +53,13 @@ class ConduitClient:
         self.fingerprint_approval = fingerprint_approval
         self.lane_timeout = float(lane_timeout)
         self.on_app_shutdown = on_app_shutdown
+        self.windows_name = socket.gethostname()
+        self.machine_id = windows_machine_id()
+        self.display_discovery = WindowsDisplayDiscovery()
+        self.display_group = None
+        self.pending_topology = None
+        self.active_topology_config = None
+        self.committed_topology = None
         self.control_network = NetworkClient(
             password, role='control', trust_store=self.trust_store,
             fingerprint_approval=fingerprint_approval,
@@ -74,6 +99,14 @@ class ConduitClient:
         
         # Setup control network callbacks
         self.control_network.register_callback('layout_config', self.on_layout_config)
+        self.control_network.register_callback('topology_apply', self.on_topology_apply)
+        self.control_network.register_callback('topology_commit', self.on_topology_commit)
+        self.control_network.register_callback('topology_rollback', self.on_topology_rollback)
+        self.control_network.register_callback('topology_finalize', self.on_topology_finalize)
+        self.control_network.register_callback(
+            'display_inventory_request',
+            lambda data: self.send_display_inventory(),
+        )
         self.control_network.register_callback('switch', self.on_switch)
         self.control_network.register_callback('mouse_move', self.on_mouse_move)
         self.control_network.register_callback('mouse_click', self.on_mouse_click)
@@ -139,6 +172,8 @@ class ConduitClient:
 
     def on_disconnected(self, data):
         logger.info("Disconnected from Server.")
+        self.pending_topology = None
+        self.committed_topology = None
         report_setup_failure = False
         internal_disconnect = False
         if hasattr(self, '_connect_lock'):
@@ -307,6 +342,7 @@ class ConduitClient:
                 self.clipboard.start()
                 self.hotkey_monitor.start()
                 self.global_hotkey_monitor.start()
+                self.send_display_inventory()
                 if not self._all_lanes_live():
                     self.clipboard.stop()
                     self.hotkey_monitor.stop()
@@ -326,6 +362,28 @@ class ConduitClient:
                 self.disconnect(preserve_failure=True, error=error)
                 self._report_connect(False, message)
                 return False
+
+    def send_display_inventory(self):
+        try:
+            discovery = getattr(self, "display_discovery", None)
+            if discovery is None:
+                discovery = WindowsDisplayDiscovery()
+                self.display_discovery = discovery
+            machine_id = getattr(self, "machine_id", socket.gethostname())
+            windows_name = getattr(self, "windows_name", socket.gethostname())
+            self.display_group = discovery.discover(machine_id, windows_name)
+            return self.control_network.send_message(
+                {
+                    "type": "display_inventory",
+                    "inventory": display_group_to_message(self.display_group),
+                }
+            )
+        except Exception as error:
+            logger.error(
+                "Could not send display inventory (%s)",
+                error_name(error),
+            )
+            return False
 
     def _all_lanes_live(self):
         return (
@@ -440,6 +498,38 @@ class ConduitClient:
         
         self.speed_scale_x = client_w / server_w
         self.speed_scale_y = client_h / server_h
+        server_rect = _message_rect(data.get('server_rect'))
+        client_rect = _message_rect(data.get('client_rect'))
+        client_edge = data.get('client_edge')
+        if (
+            server_rect is not None
+            and client_rect is not None
+            and client_edge in {'left', 'right', 'top', 'bottom'}
+        ):
+            self.speed_scale_x = (
+                (client_rect.right - client_rect.left)
+                / (server_rect.right - server_rect.left)
+            )
+            self.speed_scale_y = (
+                (client_rect.bottom - client_rect.top)
+                / (server_rect.bottom - server_rect.top)
+            )
+            if hasattr(self.input_handler, 'set_client_topology_edge'):
+                self.input_handler.set_client_topology_edge(
+                    TopologyEdgeRegion(
+                        source_machine_id='client',
+                        source_display_id=data.get('client_display_id', 'client'),
+                        source_side=client_edge,
+                        destination_machine_id='server',
+                        destination_display_id=data.get(
+                            'server_display_id',
+                            'server',
+                        ),
+                        destination_side=server_pos,
+                        source_rect=client_rect,
+                        destination_rect=server_rect,
+                    )
+                )
         logger.info(f"Resolution scaling factor calculated: X={self.speed_scale_x:.3f}, Y={self.speed_scale_y:.3f}")
         
         # Calculate our return edge (opposite of our position relative to server)
@@ -453,6 +543,55 @@ class ConduitClient:
         }
         return_edge = opposites.get(server_pos, 'left')
         self.input_handler.set_layout(server_edge=server_pos, client_edge=return_edge)
+        self.active_topology_config = dict(data)
+
+    def on_topology_apply(self, data):
+        self.input_handler.release_all_injected_keys()
+        self.is_active = False
+        version = data.get('version')
+        if type(version) is int:
+            self.pending_topology = dict(data)
+            self.control_network.send_message(
+                {'type': 'topology_ack', 'version': version}
+            )
+
+    def on_topology_commit(self, data):
+        pending = self.pending_topology
+        if pending is None or data.get('version') != pending.get('version'):
+            return False
+        previous = getattr(self, 'active_topology_config', None)
+        self.on_layout_config(pending)
+        self.pending_topology = None
+        self.committed_topology = (pending.get('version'), previous)
+        return self.control_network.send_message({
+            'type': 'topology_commit_ack',
+            'version': pending.get('version'),
+        })
+
+    def on_topology_rollback(self, data):
+        pending = self.pending_topology
+        version = data.get('version')
+        if pending is not None and version == pending.get('version'):
+            self.pending_topology = None
+            return True
+        committed = getattr(self, 'committed_topology', None)
+        if committed is None or version != committed[0]:
+            return False
+        previous = committed[1]
+        self.committed_topology = None
+        if previous is None:
+            self.active_topology_config = None
+            self.input_handler.set_client_topology_edge(None)
+        else:
+            self.on_layout_config(previous)
+        return True
+
+    def on_topology_finalize(self, data):
+        committed = getattr(self, 'committed_topology', None)
+        if committed is None or data.get('version') != committed[0]:
+            return False
+        self.committed_topology = None
+        return True
 
     def on_switch(self, data):
         logger.info("Server switched control to this client.")
@@ -461,12 +600,51 @@ class ConduitClient:
         direction = data.get('direction')
         ratio = data.get('ratio', 0.5)
         
-        w = self.input_handler.screen_width
-        h = self.input_handler.screen_height
-        
-        self.input_handler.inject_position(
-            *client_entry_position(direction, w, h, ratio)
-        )
+        destination_rect = _message_rect(data.get('destination_rect'))
+        destination_side = data.get('destination_side')
+        source_rect = _message_rect(data.get('source_rect'))
+        source_side = data.get('source_side')
+        if (
+            destination_rect is not None
+            and source_rect is not None
+            and destination_side in {'left', 'right', 'top', 'bottom'}
+            and source_side in {'left', 'right', 'top', 'bottom'}
+            and hasattr(self.input_handler, 'set_client_topology_edge')
+        ):
+            self.input_handler.set_client_topology_edge(
+                TopologyEdgeRegion(
+                    source_machine_id='client',
+                    source_display_id=data.get(
+                        'destination_display_id',
+                        'client',
+                    ),
+                    source_side=destination_side,
+                    destination_machine_id='server',
+                    destination_display_id=data.get(
+                        'source_display_id',
+                        'server',
+                    ),
+                    destination_side=source_side,
+                    source_rect=destination_rect,
+                    destination_rect=source_rect,
+                )
+            )
+        if destination_rect is not None and destination_side in {
+            'left', 'right', 'top', 'bottom'
+        }:
+            position = edge_entry_point(
+                destination_rect,
+                destination_side,
+                ratio,
+            )
+        else:
+            position = client_entry_position(
+                direction,
+                self.input_handler.screen_width,
+                self.input_handler.screen_height,
+                ratio,
+            )
+        self.input_handler.inject_position(*position)
 
     def on_mouse_move(self, data):
         dx = data.get('dx', 0) * self.speed_scale_x
@@ -493,12 +671,12 @@ class ConduitClient:
         if key_data:
             self.input_handler.inject_key_release(key_data)
 
-    def on_client_edge_hit(self, direction, ratio):
+    def on_client_edge_hit(self, direction, ratio, region=None):
         with self._get_paste_route_lock():
             if not self.is_active:
                 return
 
-            if direction == self.input_handler.client_edge:
+            if region is not None or direction == self.input_handler.client_edge:
                 paste_service = getattr(self, "file_paste_service", None)
                 if (
                     paste_service is not None
@@ -514,10 +692,24 @@ class ConduitClient:
                 if coordinator is not None:
                     coordinator.set_route(None, "client")
                 self.input_handler.release_all_injected_keys()
-                self.control_network.send_message({
+                message = {
                     'type': 'switch_back',
                     'ratio': ratio
-                })
+                }
+                if region is not None:
+                    message.update(
+                        {
+                            'destination_display_id': region.destination_display_id,
+                            'destination_side': region.destination_side,
+                            'destination_rect': [
+                                region.destination_rect.left,
+                                region.destination_rect.top,
+                                region.destination_rect.right,
+                                region.destination_rect.bottom,
+                            ],
+                        }
+                    )
+                self.control_network.send_message(message)
 
     def on_local_copy(self, snapshot):
         work = {"snapshot": snapshot}

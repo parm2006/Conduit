@@ -7,9 +7,107 @@ from app.input_geometry import (
     windows_toplevel_handle,
     configure_windows_window_api,
 )
+from app.display_topology import (
+    Display,
+    DraftTopology,
+    MachineDisplayGroup,
+    NativeRect,
+    PlacedMachine,
+)
+from app.input_handler import InputHandler, TopologyEdgeRegion
 
 
 class InputGeometryTests(unittest.TestCase):
+    def test_topology_edge_detection_uses_actual_negative_monitor_rectangle(self):
+        server = MachineDisplayGroup(
+            "server",
+            "ParthPC",
+            (
+                Display(
+                    "server-left",
+                    NativeRect(-2560, 0, 0, 1440),
+                    150,
+                    0,
+                    False,
+                ),
+                Display(
+                    "server-primary",
+                    NativeRect(0, 0, 1920, 1080),
+                    100,
+                    0,
+                    True,
+                ),
+            ),
+        )
+        client = MachineDisplayGroup(
+            "client",
+            "ParthSurface",
+            (
+                Display(
+                    "client-primary",
+                    NativeRect(0, 0, 1920, 1080),
+                    100,
+                    0,
+                    True,
+                ),
+            ),
+        )
+        active = DraftTopology(
+            "server",
+            (
+                PlacedMachine(server, 0, 0),
+                PlacedMachine(client, -2, 0),
+            ),
+        ).validate().validated.activate(1)
+        events = []
+        handler = InputHandler.__new__(InputHandler)
+        handler.callbacks = {"edge_hit": [lambda *args: events.append(args)]}
+        handler.configure_topology_edges(active, "server")
+
+        handler._on_move_edge(-2560, 720)
+        handler._on_move_edge(0, 720)
+
+        self.assertEqual(len(events), 1)
+        direction, ratio, region = events[0]
+        self.assertEqual(direction, "left")
+        self.assertEqual(ratio, 0.5)
+        self.assertEqual(region.source_display_id, "server-left")
+        self.assertEqual(region.destination_display_id, "client-primary")
+
+    def test_injected_client_return_detects_only_its_configured_physical_edge(self):
+        class Mouse:
+            def __init__(self):
+                self.position = (1921, 720)
+
+            def move(self, dx, dy):
+                x, y = self.position
+                self.position = (x + dx, y + dy)
+
+        region = TopologyEdgeRegion(
+            "client",
+            "client-hdmi",
+            "left",
+            "server",
+            "server-primary",
+            "right",
+            NativeRect(1920, 0, 4480, 1440),
+            NativeRect(0, 0, 1920, 1080),
+        )
+        events = []
+        handler = InputHandler.__new__(InputHandler)
+        handler.mouse = Mouse()
+        handler.callbacks = {
+            "client_edge_hit": [lambda *args: events.append(args)]
+        }
+        handler.set_client_topology_edge(region)
+
+        handler.inject_move(-1, 0)
+
+        self.assertEqual(len(events), 1)
+        direction, ratio, crossed = events[0]
+        self.assertEqual(direction, "left")
+        self.assertEqual(ratio, 0.5)
+        self.assertEqual(crossed, region)
     def test_client_entry_is_visually_at_edge_without_triggering_return(self):
         positions = {
             "right": client_entry_position("right", 1920, 1080, 0.5),

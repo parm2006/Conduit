@@ -9,12 +9,20 @@ import uuid
 
 from app.safe_errors import error_name
 from app.ports import DEFAULT_BASE_PORT
+from app.display_topology import (
+    Display,
+    DraftTopology,
+    MachineDisplayGroup,
+    NativeRect,
+    PlacedMachine,
+)
 
 
 logger = logging.getLogger(__name__)
 VALID_ROLES = frozenset(("server", "client"))
 VALID_CLIENT_POSITIONS = frozenset(("top", "left", "right", "bottom"))
 MAX_SUCCESSFUL_HOSTS = 10
+TOPOLOGY_SCHEMA_VERSION = 1
 
 
 def _validated_successful_host(ip, port):
@@ -71,6 +79,114 @@ class UserPreferences:
             raise ValueError(
                 "port must be an integer between 1 and 65533"
             ) from error
+
+    def save_active_topology(self, topology):
+        machines = []
+        for placed in topology.machines:
+            displays = []
+            for display in placed.group.displays:
+                displays.append(
+                    {
+                        "display_id": display.display_id,
+                        "rect": _rect_values(display.rect),
+                        "work_rect": (
+                            _rect_values(display.work_rect)
+                            if display.work_rect is not None
+                            else None
+                        ),
+                        "dpi_percent": display.dpi_percent,
+                        "orientation": display.orientation,
+                        "primary": display.primary,
+                        "enabled": display.enabled,
+                    }
+                )
+            machines.append(
+                {
+                    "machine_id": placed.group.machine_id,
+                    "windows_name": placed.group.windows_name,
+                    "x": placed.x,
+                    "y": placed.y,
+                    "displays": displays,
+                }
+            )
+        self._save_value(
+            "active_topology",
+            {
+                "schema_version": TOPOLOGY_SCHEMA_VERSION,
+                "activation_version": topology.version,
+                "server_id": topology.server_id,
+                "machines": machines,
+            },
+        )
+
+    def load_active_topology(self):
+        stored = self._load_values().get("active_topology")
+        if stored is None:
+            return None
+        try:
+            if stored["schema_version"] != TOPOLOGY_SCHEMA_VERSION:
+                return None
+            activation_version = stored["activation_version"]
+            if type(activation_version) is not int or activation_version < 0:
+                return None
+            machines = []
+            for machine in stored["machines"]:
+                displays = tuple(
+                    Display(
+                        display_id=display["display_id"],
+                        rect=NativeRect(*display["rect"]),
+                        work_rect=(
+                            NativeRect(*display["work_rect"])
+                            if display.get("work_rect") is not None
+                            else None
+                        ),
+                        dpi_percent=display["dpi_percent"],
+                        orientation=display["orientation"],
+                        primary=display["primary"],
+                        enabled=display["enabled"],
+                    )
+                    for display in machine["displays"]
+                )
+                group = MachineDisplayGroup(
+                    machine_id=machine["machine_id"],
+                    windows_name=machine["windows_name"],
+                    displays=displays,
+                )
+                machines.append(
+                    PlacedMachine(group, x=machine["x"], y=machine["y"])
+                )
+            result = DraftTopology(
+                server_id=stored["server_id"],
+                machines=tuple(machines),
+            ).validate()
+            if not result.is_valid:
+                return None
+            return result.validated.activate(activation_version)
+        except Exception as error:
+            logger.error("Could not load Conduit topology (%s)", error_name(error))
+            return None
+
+    def load_or_seed_draft(self, server_group, client_group=None):
+        active = self.load_active_topology()
+        if active is not None:
+            return DraftTopology(
+                server_id=active.server_id,
+                machines=active.machines,
+            )
+        machines = [PlacedMachine(server_group, x=0, y=0)]
+        if client_group is not None:
+            positions = {
+                "right": (1, 0),
+                "left": (-1, 0),
+                "top": (0, -1),
+                "bottom": (0, 1),
+            }
+            x, y = positions[self.load_client_position()]
+            machines.append(PlacedMachine(client_group, x=x, y=y))
+        return DraftTopology(
+            server_id=server_group.machine_id,
+            machines=tuple(machines),
+        )
 
     def load_successful_hosts(self):
         stored = self._load_values().get("successful_hosts", [])
@@ -134,3 +250,7 @@ class UserPreferences:
             os.replace(temporary, self.path)
         finally:
             temporary.unlink(missing_ok=True)
+
+
+def _rect_values(rect):
+    return [rect.left, rect.top, rect.right, rect.bottom]

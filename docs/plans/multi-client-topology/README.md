@@ -6,7 +6,7 @@ This effort expands Conduit into one fixed Server hub with at most two simultane
 
 | Plan | Title | Effort | Depends on | Status |
 |---|---|---:|---|---|
-| [002](002-land-single-client-topology.md) | Land the single-Client multi-monitor topology editor | L | — | TODO |
+| [002](002-land-single-client-topology.md) | Land the single-Client multi-monitor topology editor | L | — | IN PROGRESS — automated gate passes; real two-PC Windows validation remains |
 | [003](003-land-two-client-sessions.md) | Keep two isolated Client sessions on existing ports | L | 002 | TODO |
 | [004](004-land-graph-input-routing.md) | Route the Server-owned cursor across the active display graph | L | 002, 003 | TODO |
 | [005](005-land-global-clipboard.md) | Synchronize one global newest clipboard item | L | 003, 004 | TODO |
@@ -28,6 +28,7 @@ Status values: TODO | IN PROGRESS | DONE | BLOCKED (one-line reason) | SUPERSEDE
 ## Reconciliation log
 
 - **2026-08-24:** Accepted the seven-slice structure at `3d76acb`; wrote Plans 002–008 for final review. Next executable plan: 002.
+- **2026-08-25:** Implemented Plan 002 on `multimonitor`; 620 tests, compileall, and `diff --check` pass. Physical two-PC validation remains before marking DONE.
 
 ## Considered and rejected
 

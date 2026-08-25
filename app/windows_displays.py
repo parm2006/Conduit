@@ -1,0 +1,189 @@
+from dataclasses import dataclass
+
+from app.display_topology import Display, MachineDisplayGroup, NativeRect
+
+EDD_GET_DEVICE_INTERFACE_NAME = 0x00000001
+
+
+class DisplayDiscoveryError(RuntimeError):
+    pass
+
+
+@dataclass(frozen=True)
+class NativeDisplayRecord:
+    stable_id: str
+    rect: tuple[int, int, int, int]
+    work_rect: tuple[int, int, int, int]
+    dpi: int
+    orientation_code: int
+    primary: bool
+    enabled: bool
+
+
+class WindowsDisplayDiscovery:
+    def __init__(self, backend=None):
+        self._backend = backend or _Win32DisplayBackend()
+
+    def discover(self, machine_id, windows_name):
+        try:
+            records = self._backend.snapshot()
+            displays = tuple(self._translate(record) for record in records)
+            return MachineDisplayGroup(
+                machine_id=machine_id,
+                windows_name=windows_name,
+                displays=displays,
+            )
+        except DisplayDiscoveryError:
+            raise
+        except Exception as error:
+            raise DisplayDiscoveryError("display discovery failed") from error
+
+    @staticmethod
+    def _translate(record):
+        orientations = {0: 0, 1: 90, 2: 180, 3: 270}
+        return Display(
+            display_id=record.stable_id,
+            rect=NativeRect(*record.rect),
+            work_rect=NativeRect(*record.work_rect),
+            dpi_percent=round(record.dpi * 100 / 96),
+            orientation=orientations[record.orientation_code],
+            primary=record.primary,
+            enabled=record.enabled,
+        )
+
+
+def display_group_to_message(group):
+    return {
+        "machine_id": group.machine_id,
+        "windows_name": group.windows_name,
+        "displays": [
+            {
+                "display_id": display.display_id,
+                "rect": _rect_to_message(display.rect),
+                "work_rect": (
+                    _rect_to_message(display.work_rect)
+                    if display.work_rect is not None
+                    else None
+                ),
+                "dpi_percent": display.dpi_percent,
+                "orientation": display.orientation,
+                "primary": display.primary,
+                "enabled": display.enabled,
+            }
+            for display in group.displays
+        ],
+    }
+
+
+def display_group_from_message(message):
+    try:
+        machine_id = _required_text(message["machine_id"])
+        windows_name = _required_text(message["windows_name"])
+        stored_displays = message["displays"]
+        if not isinstance(stored_displays, list) or not stored_displays:
+            raise ValueError("display list is empty")
+        displays = []
+        for stored in stored_displays:
+            dpi_percent = _required_int(stored["dpi_percent"])
+            orientation = _required_int(stored["orientation"])
+            if dpi_percent <= 0 or orientation not in (0, 90, 180, 270):
+                raise ValueError("invalid display metrics")
+            if type(stored["primary"]) is not bool or type(stored["enabled"]) is not bool:
+                raise ValueError("invalid display flags")
+            work_rect = stored.get("work_rect")
+            displays.append(
+                Display(
+                    display_id=_required_text(stored["display_id"]),
+                    rect=_rect_from_message(stored["rect"]),
+                    work_rect=(
+                        _rect_from_message(work_rect)
+                        if work_rect is not None
+                        else None
+                    ),
+                    dpi_percent=dpi_percent,
+                    orientation=orientation,
+                    primary=stored["primary"],
+                    enabled=stored["enabled"],
+                )
+            )
+        return MachineDisplayGroup(machine_id, windows_name, tuple(displays))
+    except Exception as error:
+        raise DisplayDiscoveryError("invalid display inventory") from error
+
+
+def _rect_to_message(rect):
+    return [rect.left, rect.top, rect.right, rect.bottom]
+
+
+def _rect_from_message(values):
+    if not isinstance(values, list) or len(values) != 4:
+        raise ValueError("invalid display rectangle")
+    left, top, right, bottom = (_required_int(value) for value in values)
+    if right <= left or bottom <= top:
+        raise ValueError("invalid display rectangle")
+    return NativeRect(left, top, right, bottom)
+
+
+def _required_text(value):
+    if not isinstance(value, str) or not value:
+        raise ValueError("missing text value")
+    return value
+
+
+def _required_int(value):
+    if type(value) is not int:
+        raise ValueError("integer required")
+    return value
+
+
+class _Win32DisplayBackend:
+    def snapshot(self):
+        import ctypes
+
+        import win32api
+        import win32con
+
+        records = []
+        for monitor_handle, _device_context, _rect in win32api.EnumDisplayMonitors():
+            info = win32api.GetMonitorInfo(monitor_handle)
+            device_name = info["Device"]
+            device = win32api.EnumDisplayDevices(
+                device_name,
+                0,
+                EDD_GET_DEVICE_INTERFACE_NAME,
+            )
+            settings = win32api.EnumDisplaySettings(
+                device_name,
+                win32con.ENUM_CURRENT_SETTINGS,
+            )
+            dpi = self._effective_dpi(ctypes, monitor_handle)
+            records.append(
+                NativeDisplayRecord(
+                    stable_id=device.DeviceID or device.DeviceKey or device_name,
+                    rect=tuple(info["Monitor"]),
+                    work_rect=tuple(info["Work"]),
+                    dpi=dpi,
+                    orientation_code=settings.DisplayOrientation,
+                    primary=bool(info["Flags"] & win32con.MONITORINFOF_PRIMARY),
+                    enabled=True,
+                )
+            )
+        return tuple(records)
+
+    @staticmethod
+    def _effective_dpi(ctypes_module, monitor_handle):
+        try:
+            shcore = ctypes_module.WinDLL("shcore", use_last_error=True)
+            dpi_x = ctypes_module.c_uint()
+            dpi_y = ctypes_module.c_uint()
+            result = shcore.GetDpiForMonitor(
+                ctypes_module.c_void_p(int(monitor_handle)),
+                0,
+                ctypes_module.byref(dpi_x),
+                ctypes_module.byref(dpi_y),
+            )
+            if result == 0 and dpi_x.value:
+                return dpi_x.value
+        except (AttributeError, OSError):
+            pass
+        return 96
