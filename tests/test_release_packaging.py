@@ -3,7 +3,9 @@ import unittest
 from pathlib import Path
 import platform
 import hashlib
+import subprocess
 import struct
+import sys
 
 from app.version import (
     FILE_VERSION,
@@ -77,6 +79,7 @@ class ReleaseMetadataTests(unittest.TestCase):
             tuple(sorted(RELEASE_DISTRIBUTIONS, key=str.casefold)),
         )
         self.assertIn("PyInstaller", RELEASE_DISTRIBUTIONS)
+        self.assertIn("Pillow", RELEASE_DISTRIBUTIONS)
         self.assertIn("pywin32", RELEASE_DISTRIBUTIONS)
         self.assertIn("customtkinter", RELEASE_DISTRIBUTIONS)
 
@@ -563,6 +566,10 @@ class ReleaseBuildScriptTests(unittest.TestCase):
         positions = [self.lower.index(marker.casefold()) for marker in ordered]
         self.assertEqual(positions, sorted(positions))
 
+    def test_build_uses_python_icon_generator(self):
+        self.assertIn('"scripts\\generate_app_icon.py"', self.script)
+        self.assertNotIn("generate_app_icon.ps1", self.script)
+
     def test_native_failures_and_artifacts_are_checked(self):
         self.assertIn("$LASTEXITCODE", self.script)
         self.assertIn("Test-Path", self.script)
@@ -683,6 +690,7 @@ class ReleaseDependencyLockTests(unittest.TestCase):
         for expected in (
             "cryptography==50.0.0",
             "customtkinter==5.2.2",
+            "pillow==12.3.0",
             "pynput==1.7.7",
             "pyinstaller==6.22.0",
             "pywin32==312",
@@ -711,7 +719,7 @@ class ProjectLicenseAndAssetTests(unittest.TestCase):
     def test_application_icon_is_original_multiresolution_artwork(self):
         icon = self.root / "app" / "assets" / "app_icon.ico"
         source = self.root / "app" / "assets" / "app_icon_source.png"
-        generator = self.root / "scripts" / "generate_app_icon.ps1"
+        generator = self.root / "scripts" / "generate_app_icon.py"
         self.assertTrue(source.is_file())
         self.assertTrue(generator.is_file())
         self.assertEqual(
@@ -727,6 +735,41 @@ class ProjectLicenseAndAssetTests(unittest.TestCase):
         self.assertGreaterEqual(image_count, 7)
         copyright_notice = (self.root / "COPYRIGHT").read_text(encoding="utf-8")
         self.assertIn("Conduit icon artwork", copyright_notice)
+
+    def test_python_icon_generator_tightly_centers_visible_artwork(self):
+        source = self.root / "app" / "assets" / "app_icon_source.png"
+        generator = self.root / "scripts" / "generate_app_icon.py"
+        self.assertTrue(generator.is_file())
+
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory)
+            subprocess.run(
+                [
+                    sys.executable,
+                    str(generator),
+                    "--source",
+                    str(source),
+                    "--output-dir",
+                    str(output),
+                ],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+
+            from PIL import Image
+
+            with Image.open(output / "app_icon.png") as image:
+                alpha = image.getchannel("A")
+                visible = alpha.point(lambda value: 255 if value > 8 else 0)
+                left, top, right, bottom = visible.getbbox()
+                horizontal_margins = (left, image.width - right)
+                vertical_margins = (top, image.height - bottom)
+                occupied = (right - left, bottom - top)
+
+        self.assertLessEqual(abs(horizontal_margins[0] - horizontal_margins[1]), 1)
+        self.assertLessEqual(abs(vertical_margins[0] - vertical_margins[1]), 1)
+        self.assertGreaterEqual(max(occupied), 252)
 
 
 class ReleaseDocumentationTests(unittest.TestCase):

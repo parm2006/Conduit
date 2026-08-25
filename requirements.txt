@@ -1,5 +1,6 @@
 pynput==1.7.7
 customtkinter==5.2.2
+Pillow==12.3.0
 cryptography>=42.0.4
 pywin32>=311
 pyinstaller>=6.0.0
