@@ -119,7 +119,7 @@ Use the old `client_position` only as a one-time seed when no new topology exist
 
 ### Step 5: Build the compact Server editor and Client identification toast
 
-Create `TopologyEditor` as a cohesive CustomTkinter component. It renders exact 40×40 cells, repeats the Windows-name initial on each physical display, fixes the Server in gray, colors the one current Client by its stable slot color, and places Apply/Cancel inside the grid. It shows no IP, legend, add button, detect button, or Server-ready text.
+Create `TopologyEditor` as a cohesive CustomTkinter component. Its canvas is exactly seven cells wide by four cells tall (280×160 px), using exact 40×40 neutral dark grid cells. It repeats the Windows-name initial on each physical display, fixes the Server in gray, colors the one current Client by its stable slot color, and places Apply/Cancel inside the grid. It shows no IP, legend, add button, detect button, “Client Position” label, or Server-ready text.
 
 Create a separate persistent topology-identification toast for the Client primary display. The whole body uses the assigned color and shows Windows name, display count, resolutions, and connection state. Do not reuse file-transfer toast lifetime rules. Include a Client-side disconnect action only if the current GUI already exposes an equivalent safe disconnect path.
 
@@ -150,7 +150,7 @@ Delete the four production edge controls and active runtime dependence on `layou
 
 - Add pure topology tables in `tests/test_display_topology.py` for every adjacency and connectivity rule.
 - Add recorded Win32 API fixtures in `tests/test_windows_displays.py`; test malformed, disabled, rotated, negative, and duplicate-name displays.
-- Add editor view-state tests in `tests/test_topology_editor.py` for exact cell size, fixed Server, automatic Client, Apply/Cancel, and delayed red state.
+- Add editor view-state tests in `tests/test_topology_editor.py` for exact 7×4 canvas dimensions, exact cell size, fixed Server, automatic Client, Apply/Cancel, and delayed red state.
 - Add primary-work-area toast tests in `tests/test_topology_toast.py`, following `tests/test_input_geometry.py`.
 - Extend `tests/test_gui_preferences.py` for version migration and corruption.
 - Preserve all existing one-Client behavior tests through the full suite.

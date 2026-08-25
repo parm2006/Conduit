@@ -134,7 +134,7 @@ Physical monitors form one immutable machine-local group. The topology editor no
 
 The editor exists only on the Server and fits within a sub-500×500 area of the existing CustomTkinter GUI. Production UI contains no manual add button and no display-detection button. Clients appear automatically; monitor discovery is automatic.
 
-The editor shows:
+The editor canvas is exactly seven cells wide by four cells tall (280×160 px). It uses neutral dark grid lines rather than machine-status colors; machine cells and Client identification toasts carry the slot colors. The editor shows:
 
 - exact 40×40 grid cells;
 - one gray Server group fixed as the anchor;
@@ -144,7 +144,7 @@ The editor shows:
 
 The Server is gray, the two active Client slots are blue and green, and a pending third candidate is purple. Purple is temporary and never represents a third active slot. The candidate's primary display shows its purple identification toast during the 15-second decision window; if selected, that toast persists through draft editing. When the replacement successfully Applies, the newcomer takes the evicted Client slot's blue or green color. Cancel or timeout dismisses the temporary toast. Initial collisions are acceptable because color and the persistent Client toast provide disambiguation.
 
-The grid does not show IP addresses, machine names, resolutions, headers, legends, or a “Server ready” overlay. The Server uses its Windows name, such as `ParthPC`; `.208` is not user-facing product text.
+The grid does not show IP addresses, machine names, resolutions, headers, legends, a “Client Position” label, or a “Server ready” overlay. The Server uses its Windows name, such as `ParthPC`; `.208` is not user-facing product text.
 
 When a Client joins a draft, that Client—not the Server—shows a persistent toast on its primary display. The entire toast body uses the Client's assigned color and shows its Windows name, display count, resolutions, and connection state. It remains visible throughout editing and disappears only after Apply or Cancel. The Client may disconnect through its own toast or existing Client controls.
 
