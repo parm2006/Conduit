@@ -65,7 +65,7 @@ hidden_imports = [
 ]
 
 datas = collect_data_files("customtkinter") + [
-    (str(ASSETS), "app/assets"),
+    (str(ASSETS / "app_icon.ico"), "app/assets"),
     (str(ROOT / "LICENSE"), "."),
     (str(NOTICES), "."),
 ]

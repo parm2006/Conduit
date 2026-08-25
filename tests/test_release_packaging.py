@@ -551,6 +551,7 @@ class ReleaseBuildScriptTests(unittest.TestCase):
 
     def test_build_gate_runs_in_security_first_order(self):
         ordered = (
+            "# generate app icon",
             "# compileall",
             "# unittest",
             "# git diff --check",
@@ -709,10 +710,14 @@ class ProjectLicenseAndAssetTests(unittest.TestCase):
 
     def test_application_icon_is_original_multiresolution_artwork(self):
         icon = self.root / "app" / "assets" / "app_icon.ico"
-        source = self.root / "app" / "assets" / "app_icon.svg"
-        generator = self.root / "scripts" / "generate_app_icon.py"
+        source = self.root / "app" / "assets" / "app_icon_source.png"
+        generator = self.root / "scripts" / "generate_app_icon.ps1"
         self.assertTrue(source.is_file())
         self.assertTrue(generator.is_file())
+        self.assertEqual(
+            hashlib.sha256(source.read_bytes()).hexdigest().upper(),
+            "E62F2AF96DAF712AEC6D54ED0CBD5A82442790AF4ED57F775D6598820761C532",
+        )
         self.assertNotEqual(
             hashlib.sha256(icon.read_bytes()).hexdigest().upper(),
             "1234C017C871EB2E20D36F668F93E066CDCB93DB464D5CEF9D7A5BF83506D28C",
@@ -720,7 +725,8 @@ class ProjectLicenseAndAssetTests(unittest.TestCase):
         reserved, kind, image_count = struct.unpack("<HHH", icon.read_bytes()[:6])
         self.assertEqual((reserved, kind), (0, 1))
         self.assertGreaterEqual(image_count, 7)
-        self.assertIn("Project-owned Conduit artwork", source.read_text(encoding="utf-8"))
+        copyright_notice = (self.root / "COPYRIGHT").read_text(encoding="utf-8")
+        self.assertIn("Conduit icon artwork", copyright_notice)
 
 
 class ReleaseDocumentationTests(unittest.TestCase):

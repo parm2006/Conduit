@@ -134,6 +134,15 @@ try {
         }
     }
 
+    # generate app icon
+    $CurrentPowerShell = (Get-Process -Id $PID).Path
+    Invoke-Checked -Description "Application icon generation" -FilePath $CurrentPowerShell -ArgumentList @(
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        "scripts\generate_app_icon.ps1"
+    )
+
     # compileall
     Invoke-Checked -Description "Python compilation" -FilePath $PythonPath -ArgumentList @(
         "-m", "compileall", "-q", "app", "tests", "run.py"
