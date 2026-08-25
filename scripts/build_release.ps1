@@ -90,8 +90,15 @@ try {
     if ($LASTEXITCODE -ne 0 -or -not $CurrentCommit) {
         throw "Could not identify the release commit."
     }
-    $CurrentTag = (& git -c "safe.directory=$GitSafeDirectory" `
-        describe --exact-match --tags HEAD 2>$null)
+    # git tag --points-at HEAD
+    $PointingTags = @(& git -c "safe.directory=$GitSafeDirectory" `
+        tag --points-at HEAD)
+    if ($LASTEXITCODE -ne 0) {
+        throw "Could not inspect the release tag."
+    }
+    $CurrentTag = @(
+        $PointingTags | Where-Object { $_ -eq $ExpectedTag }
+    ) | Select-Object -First 1
     if (-not $DevelopmentBuild -and $CurrentTag -ne $ExpectedTag) {
         throw "Release HEAD must be tagged exactly $ExpectedTag."
     }

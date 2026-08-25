@@ -636,7 +636,8 @@ class ReleaseBuildScriptTests(unittest.TestCase):
 
     def test_release_identity_is_clean_tagged_and_recorded(self):
         self.assertIn("git status --porcelain", self.script)
-        self.assertIn("describe --exact-match --tags", self.script)
+        self.assertIn("tag --points-at HEAD", self.script)
+        self.assertNotIn("describe --exact-match --tags", self.script)
         self.assertIn("DevelopmentBuild", self.script)
         self.assertIn("RELEASE_MANIFEST.txt", self.script)
         self.assertIn("SHA256SUMS.txt", self.script)
