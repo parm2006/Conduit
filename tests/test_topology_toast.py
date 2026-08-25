@@ -1,7 +1,13 @@
 import unittest
+from unittest.mock import patch
 
 from app.display_topology import Display, MachineDisplayGroup, NativeRect
-from app.topology_toast import topology_toast_rect, topology_toast_view
+from app.file_transfer.toast import TOAST_HEIGHT, TOAST_WIDTH
+from app.topology_toast import (
+    TopologyIdentificationToast,
+    topology_toast_rect,
+    topology_toast_view,
+)
 
 
 class TopologyToastTests(unittest.TestCase):
@@ -45,6 +51,51 @@ class TopologyToastTests(unittest.TestCase):
         rect = topology_toast_rect(self._group(), window_size=(360, 104))
 
         self.assertEqual(rect, (-380, 916, -20, 1020))
+
+    def test_identification_toast_never_adopts_transient_tk_window_dimensions(self):
+        class Widget:
+            def configure(self, **kwargs):
+                pass
+
+        class Window:
+            def __init__(self):
+                self.geometries = []
+
+            def update_idletasks(self):
+                pass
+
+            def winfo_width(self):
+                return 3840
+
+            def winfo_height(self):
+                return 2160
+
+            def winfo_id(self):
+                return 1
+
+            def geometry(self, value):
+                self.geometries.append(value)
+
+            def deiconify(self):
+                pass
+
+            def lift(self):
+                pass
+
+        toast = TopologyIdentificationToast.__new__(TopologyIdentificationToast)
+        toast.window = Window()
+        toast.body = Widget()
+        toast.title = Widget()
+        toast.details = Widget()
+
+        with patch("app.input_geometry.place_windows_window_in_work_area"):
+            toast.show(self._group(), "#3B82F6")
+
+        self.assertTrue(
+            toast.window.geometries[-1].startswith(
+                f"{TOAST_WIDTH}x{TOAST_HEIGHT}"
+            )
+        )
 
 
 if __name__ == "__main__":

@@ -1,8 +1,14 @@
 from dataclasses import dataclass
+import logging
 
 import customtkinter as ctk
 
-from app.input_geometry import toast_rect_in_work_area
+from app import input_geometry
+from app.file_transfer.toast import TOAST_HEIGHT, TOAST_WIDTH
+from app.safe_errors import error_name
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -35,7 +41,7 @@ def topology_toast_rect(group, window_size):
     )
     work_rect = primary.work_rect or primary.rect
     dpi = round(96 * primary.dpi_percent / 100)
-    return toast_rect_in_work_area(
+    return input_geometry.toast_rect_in_work_area(
         (work_rect.left, work_rect.top, work_rect.right, work_rect.bottom),
         window_size,
         dpi,
@@ -51,7 +57,7 @@ class TopologyIdentificationToast:
         self.window.withdraw()
         self.window.overrideredirect(True)
         self.window.attributes("-topmost", True)
-        self.window.geometry("360x104")
+        self.window.geometry(f"{TOAST_WIDTH}x{TOAST_HEIGHT}")
         self.body = ctk.CTkFrame(self.window, corner_radius=12)
         self.body.pack(fill="both", expand=True)
         self.title = ctk.CTkLabel(
@@ -79,15 +85,24 @@ class TopologyIdentificationToast:
         self.body.configure(fg_color=view.color)
         self.title.configure(text=view.title, fg_color=view.color)
         self.details.configure(text=view.details, fg_color=view.color)
-        self.window.update_idletasks()
-        width = max(1, self.window.winfo_width())
-        height = max(1, self.window.winfo_height())
         left, top, _right, _bottom = topology_toast_rect(
             group,
-            (width, height),
+            (TOAST_WIDTH, TOAST_HEIGHT),
         )
-        self.window.geometry(f"{width}x{height}{left:+d}{top:+d}")
+        self.window.geometry(
+            f"{TOAST_WIDTH}x{TOAST_HEIGHT}{left:+d}{top:+d}"
+        )
         self.window.deiconify()
+        self.window.update_idletasks()
+        try:
+            input_geometry.place_windows_window_in_work_area(
+                self.window.winfo_id()
+            )
+        except OSError as error:
+            logger.error(
+                "Could not position topology toast in its monitor work area (%s)",
+                error_name(error),
+            )
         self.window.lift()
 
     def hide(self):
