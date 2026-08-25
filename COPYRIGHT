@@ -4,5 +4,6 @@ Conduit is free software licensed under the GNU General Public License,
 version 3 only (SPDX-License-Identifier: GPL-3.0-only). See LICENSE for the
 complete license terms.
 
-The Conduit icon artwork in app/assets/app_icon_source.png was provided by
-Parth Mohnot for use as Conduit's project-owned application icon.
+Parth Mohnot generated the Conduit icon artwork in
+app/assets/app_icon_source.png with Google Gemini's Nano Banana model and
+supplied it for use and redistribution with Conduit.
