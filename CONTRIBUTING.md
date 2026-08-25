@@ -4,7 +4,7 @@ Thank you for helping improve Conduit. Bug reports, feature ideas,
 documentation fixes, tests, and code contributions are welcome.
 
 By submitting a contribution, you agree that it may be distributed under the
-project's [GPL-3.0 license](LICENSE).
+project's [GPL-3.0-only license](LICENSE).
 
 ## Before you start
 

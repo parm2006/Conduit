@@ -15,7 +15,7 @@ body:
     attributes:
       label: Conduit version
       description: Find the version in the window title or release name.
-      placeholder: "5.1"
+      placeholder: "5.1.1"
     validations:
       required: true
   - type: dropdown

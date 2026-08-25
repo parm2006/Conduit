@@ -1,0 +1,17 @@
+# Exact dependency graph used for the Conduit v5.1.1 Windows release.
+# Regenerate and re-audit this file before changing Python or any dependency.
+altgraph==0.17.5
+cffi==2.1.1
+cryptography==50.0.0
+customtkinter==5.2.2
+darkdetect==0.8.0
+packaging==26.3
+pefile==2024.8.26
+pycparser==3.0
+PyInstaller==6.22.0
+pyinstaller-hooks-contrib==2026.6
+pynput==1.7.7
+pywin32==312
+pywin32-ctypes==0.2.3
+setuptools==84.0.0
+six==1.17.0

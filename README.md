@@ -1,4 +1,4 @@
-# Conduit v5.1
+# Conduit v5.1.1
 
 Conduit is a Windows wireless KVM for sharing a mouse, keyboard, rich
 clipboard, and Explorer file pastes between two PCs on the same local network.
@@ -68,28 +68,38 @@ use a Conduit-specific executable rule.
 
 ## Build a Windows release
 
-Install Python dependencies and official NSIS, then run:
+Install the exact release dependencies and official NSIS 3.12. A public
+release build must run from a clean commit tagged for the canonical product
+version:
 
 ```powershell
+.\venv\Scripts\python.exe -m pip install -r requirements-release.txt
 powershell -ExecutionPolicy Bypass -File scripts\build_release.ps1
 ```
+
+For local verification before creating the tag, pass `-DevelopmentBuild`.
+That explicit mode records the commit but disables only the clean-worktree and
+exact-tag release gates.
 
 The build removes old release outputs before compilation so a failed build
 cannot leave a stale executable or installer looking current. It then runs all
 tests and whitespace checks, generates dependency notices, builds the one-file
 `Conduit.exe`, smoke-tests the restricted firewall helper, and builds the NSIS
-installer. The NSIS source rejects direct compilation, so a new installer
-cannot silently embed a stale executable. The script does not download NSIS or
-other tools. You can pass `-MakensisPath` when NSIS is not on `PATH`.
+installer. It signs the inner executable before installer assembly when signing
+is configured. It also produces exact corresponding source, a release manifest,
+third-party notices, and SHA-256 checksums. The NSIS source rejects direct
+compilation, so a new installer cannot silently embed a stale executable. The
+script does not download NSIS or other tools. You can pass `-MakensisPath` or
+`-PythonPath` when those tools are not at their default locations.
 
 Optional signing accepts an explicit `-SigningToolPath` and
 `-SigningArguments`; the repository contains no certificate or secret.
 
 ## License and source
 
-Conduit is distributed under GPL-3.0. The installer includes `LICENSE`,
+Conduit is distributed under GPL-3.0-only. The installer includes `LICENSE`,
 generated third-party notices, and a source link. Corresponding source is
-available at https://github.com/parm2006/Conduit.
+available at https://github.com/parm2006/Conduit/tree/v5.1.1.
 
 The generated notices use the installed distributions' own metadata and
 license files and stop the build when required license information is missing.

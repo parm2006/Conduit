@@ -2,6 +2,8 @@ import tempfile
 import unittest
 from pathlib import Path
 import platform
+import hashlib
+import struct
 
 from app.version import (
     FILE_VERSION,
@@ -11,6 +13,7 @@ from app.version import (
     PRODUCT_VERSION,
     PYINSTALLER_LICENSE_URL,
     PYINSTALLER_SOURCE_URL,
+    RELEASE_SOURCE_URL,
     SOURCE_URL,
 )
 from scripts.generate_third_party_notices import (
@@ -52,10 +55,14 @@ class FakeDistribution:
 
 class ReleaseMetadataTests(unittest.TestCase):
     def test_product_and_tool_metadata_is_canonical(self):
-        self.assertEqual(PRODUCT_VERSION, "5.1")
-        self.assertEqual(FILE_VERSION, (5, 1, 0, 0))
-        self.assertEqual(FILE_VERSION_STRING, "5.1.0.0")
+        self.assertEqual(PRODUCT_VERSION, "5.1.1")
+        self.assertEqual(FILE_VERSION, (5, 1, 1, 0))
+        self.assertEqual(FILE_VERSION_STRING, "5.1.1.0")
         self.assertEqual(SOURCE_URL, "https://github.com/parm2006/Conduit")
+        self.assertEqual(
+            RELEASE_SOURCE_URL,
+            "https://github.com/parm2006/Conduit/tree/v5.1.1",
+        )
         for value in (
             PYINSTALLER_LICENSE_URL,
             PYINSTALLER_SOURCE_URL,
@@ -98,6 +105,28 @@ class ReleaseMetadataTests(unittest.TestCase):
         self.assertIn(NSIS_SOURCE_URL, first)
         self.assertIn(f"Python {platform.python_version()} runtime", first)
         self.assertIn("Tcl/Tk runtime", first)
+
+    def test_notice_generation_names_bundled_assets_and_exact_licenses(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            customtkinter = FakeDistribution(root, "customtkinter")
+            customtkinter.metadata.values["License"] = (
+                "Creative Commons Zero v1.0 Universal"
+            )
+            notice = generate_notices(
+                ("customtkinter",),
+                distribution_factory=lambda name: customtkinter,
+            )
+
+        self.assertIn("Conduit is licensed under GPL-3.0-only.", notice)
+        self.assertIn("Declared license: MIT", notice)
+        self.assertNotIn("Declared license: Creative Commons Zero", notice)
+        self.assertIn("Roboto Regular and Roboto Medium", notice)
+        self.assertIn("Copyright 2011 Google Inc.", notice)
+        self.assertIn("Apache License 2.0", notice)
+        self.assertIn("NSIS LZMA module", notice)
+        self.assertIn("Common Public License 1.0", notice)
+        self.assertIn("special linking exception", notice)
 
     def test_notice_generation_fails_closed_without_license_or_source(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -490,7 +519,7 @@ class NsisInstallerContractTests(unittest.TestCase):
         for marker in (
             "LICENSE",
             "THIRD_PARTY_NOTICES.txt",
-            SOURCE_URL,
+            RELEASE_SOURCE_URL,
             "Conduit Source.url",
         ):
             with self.subTest(marker=marker):
@@ -604,6 +633,84 @@ class ReleaseBuildScriptTests(unittest.TestCase):
         self.assertIn("SigningToolPath", self.script)
         self.assertIn("SigningArguments", self.script)
         self.assertNotIn("Invoke-Expression", self.script)
+
+    def test_release_identity_is_clean_tagged_and_recorded(self):
+        self.assertIn("git status --porcelain", self.script)
+        self.assertIn("describe --exact-match --tags", self.script)
+        self.assertIn("DevelopmentBuild", self.script)
+        self.assertIn("RELEASE_MANIFEST.txt", self.script)
+        self.assertIn("SHA256SUMS.txt", self.script)
+        self.assertIn("git archive", self.script)
+
+    def test_inner_executable_is_signed_before_installer_assembly(self):
+        executable_signing = '"Conduit executable signing"'
+        installer_assembly = "# makensis"
+        installer_signing = '"Conduit installer signing"'
+        self.assertLess(
+            self.script.index(executable_signing),
+            self.script.index(installer_assembly),
+        )
+        self.assertGreater(
+            self.script.index(installer_signing),
+            self.script.index(installer_assembly),
+        )
+
+
+class ReleaseDependencyLockTests(unittest.TestCase):
+    def test_release_dependency_graph_is_exactly_pinned(self):
+        root = Path(__file__).resolve().parents[1]
+        lock = root / "requirements-release.txt"
+        self.assertTrue(lock.is_file())
+        requirements = [
+            line.strip()
+            for line in lock.read_text(encoding="utf-8").splitlines()
+            if line.strip() and not line.startswith("#")
+        ]
+        self.assertTrue(requirements)
+        self.assertTrue(all("==" in requirement for requirement in requirements))
+        self.assertFalse(any(">=" in requirement for requirement in requirements))
+        for expected in (
+            "cryptography==50.0.0",
+            "customtkinter==5.2.2",
+            "pynput==1.7.7",
+            "pyinstaller==6.22.0",
+            "pywin32==312",
+        ):
+            self.assertIn(expected, [item.casefold() for item in requirements])
+
+
+class ProjectLicenseAndAssetTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.root = Path(__file__).resolve().parents[1]
+
+    def test_project_applies_gpl_3_only_consistently(self):
+        copyright_notice = (self.root / "COPYRIGHT").read_text(encoding="utf-8")
+        readme = (self.root / "README.md").read_text(encoding="utf-8")
+        contributing = (self.root / "CONTRIBUTING.md").read_text(
+            encoding="utf-8"
+        )
+        installer = (self.root / "installer" / "Conduit.nsi").read_text(
+            encoding="utf-8"
+        )
+        for text in (copyright_notice, readme, contributing, installer):
+            self.assertIn("GPL-3.0-only", text)
+        self.assertNotIn("GPL-3.0-or-later", installer)
+
+    def test_application_icon_is_original_multiresolution_artwork(self):
+        icon = self.root / "app" / "assets" / "app_icon.ico"
+        source = self.root / "app" / "assets" / "app_icon.svg"
+        generator = self.root / "scripts" / "generate_app_icon.py"
+        self.assertTrue(source.is_file())
+        self.assertTrue(generator.is_file())
+        self.assertNotEqual(
+            hashlib.sha256(icon.read_bytes()).hexdigest().upper(),
+            "1234C017C871EB2E20D36F668F93E066CDCB93DB464D5CEF9D7A5BF83506D28C",
+        )
+        reserved, kind, image_count = struct.unpack("<HHH", icon.read_bytes()[:6])
+        self.assertEqual((reserved, kind), (0, 1))
+        self.assertGreaterEqual(image_count, 7)
+        self.assertIn("Project-owned Conduit artwork", source.read_text(encoding="utf-8"))
 
 
 class ReleaseDocumentationTests(unittest.TestCase):

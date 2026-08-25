@@ -1,0 +1,15 @@
+<!-- Project-owned Conduit artwork. Copyright (C) 2026 Parth Mohnot and Conduit contributors. -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" role="img" aria-labelledby="title desc">
+  <title id="title">Conduit application icon</title>
+  <desc id="desc">A white open conduit shaped like the letter C on a blue rounded square.</desc>
+  <defs>
+    <linearGradient id="background" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0c1c40"/>
+      <stop offset="1" stop-color="#00a2d5"/>
+    </linearGradient>
+  </defs>
+  <rect x="64" y="64" width="896" height="896" rx="216" fill="url(#background)"/>
+  <path d="M724 300 A300 300 0 1 0 724 724" fill="none" stroke="#ffffff" stroke-width="112" stroke-linecap="round"/>
+  <circle cx="724" cy="300" r="18" fill="#42d8ff"/>
+  <circle cx="724" cy="724" r="18" fill="#42d8ff"/>
+</svg>
