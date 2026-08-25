@@ -1,55 +1,43 @@
 # Two-Client Multi-Monitor Conduit
 
-**Source roadmap item:** N/A — direct product request
-**Source improvement plan:** N/A
-**Planned at:** 2026-08-24, `main` at `e2c191cb6591ec8cc666058f393ca95932edb279`
-**Status:** Outline accepted
-**Current gate:** Write and review the executor-safe implementation plans before application implementation begins.
+This effort expands Conduit into one fixed Server hub with at most two simultaneous Clients, automatic physical-monitor groups, a compact validated topology editor, Server-owned graph input routing, one global newest clipboard item, and on-paste Server-relayed files. The plans derive from the [accepted design](../../superpowers/specs/2026-08-24-multi-client-topology-design.md) and [accepted structure outline](001-structure-outline.md), planned on `main` at `3d76acb3daa28e5dbc5331af4da93ca427317795`. Execute in the order below. Each executor must read its plan fully, run its drift check first, honor STOP conditions, keep the repository green, and update its row when done.
 
-## Purpose
+## Execution order and status
 
-Expand Conduit from one Server/one Client/one configured edge into a bounded three-PC cluster with automatic physical-monitor discovery, a compact Server-only topology editor, Server-owned graph input routing, one global newest clipboard item, and Server-relayed Explorer paste.
+| Plan | Title | Effort | Depends on | Status |
+|---|---|---:|---|---|
+| [002](002-land-single-client-topology.md) | Land the single-Client multi-monitor topology editor | L | — | TODO |
+| [003](003-land-two-client-sessions.md) | Keep two isolated Client sessions on existing ports | L | 002 | TODO |
+| [004](004-land-graph-input-routing.md) | Route the Server-owned cursor across the active display graph | L | 002, 003 | TODO |
+| [005](005-land-global-clipboard.md) | Synchronize one global newest clipboard item | L | 003, 004 | TODO |
+| [006](006-land-file-relay-and-cluster-commands.md) | Relay file jobs and cluster commands through the Server | L | 003–005 | TODO |
+| [007](007-land-atomic-apply.md) | Activate topology through one atomic cluster Apply | L | 002–006 | TODO |
+| [008](008-prove-system-and-release.md) | Prove the three-PC system and release contracts | L | 002–007 | TODO |
 
-## What Better Means
+Status values: TODO | IN PROGRESS | DONE | BLOCKED (one-line reason) | SUPERSEDED (one-line pointer).
 
-The Server can keep two Clients connected through the same secured three-port architecture; every physical display is represented accurately; only validated, acknowledged topology becomes active; input is never left logically held during transitions; copy remains non-blocking; file bytes move only on paste; and a one-Client setup, firewall scope, trust model, and current clipboard behavior do not regress.
+## Dependency notes
 
-## Artifact Index
+- **002 → 003:** session fan-out needs stable machine/display identity, draft placement, and the compact editor contract.
+- **002 + 003 → 004:** input routing needs a validated active graph and stable ready-session IDs.
+- **003 + 004 → 005:** clipboard broadcast needs isolated data lanes; cursor location must not control copy eligibility.
+- **003–005 → 006:** file jobs need session-owned file lanes, stable destination identity, and global offer revisions.
+- **002–006 → 007:** atomic Apply composes already-tested topology, input, clipboard, file, and session pause/cleanup interfaces.
+- **002–007 → 008:** system, package, firewall, and physical acceptance begins only after feature behavior is complete and green.
 
-| Artifact | Status | Purpose | Notes |
-|---|---|---|---|
-| [Accepted design](../../superpowers/specs/2026-08-24-multi-client-topology-design.md) | Accepted | Product behavior and architecture | Includes review clarifications through 2026-08-24 |
-| [001 structure outline](001-structure-outline.md) | Accepted | Define independently landable vertical slices | Seven phases accepted on 2026-08-24 |
+## Reconciliation log
 
-## Current Shape
+- **2026-08-24:** Accepted the seven-slice structure at `3d76acb`; wrote Plans 002–008 for final review. Next executable plan: 002.
 
-- One fixed Server hub and at most two ready Client sessions.
-- Physical displays are immutable per-machine groups; machine groups form a validated graph.
-- Old active behavior continues during editing; Apply uses an acknowledged cluster barrier and rollback.
-- Server-owned cursor routing, global latest clipboard state, and file jobs are separate services over session-owned lanes.
-- Seven landable slices take the feature from single-Client topology through physical three-PC acceptance.
+## Considered and rejected
 
-## Accepted Decisions
+- More than two active Clients — outside the bounded release and editor model.
+- Direct Client-to-Client sockets — rejected because the Server remains trust, routing, clipboard, and file-relay authority.
+- Extra ports or wider firewall rules — unnecessary; each of the existing three listeners retains per-session connections.
+- Per-Client passwords — rejected setup complexity; shared password plus per-device pairing remains accepted.
+- Clipboard FIFO/history — conflicts with the current non-blocking latest-wins contract and memory-only newest state.
+- One giant implementation plan — rejected because it would mix topology, security, input, clipboard, files, Apply, and physical acceptance into an unreviewable landing.
 
-- Keep the existing three TCP ports and firewall scope; retain multiple session-owned sockets per listener.
-- Require a successful Apply for every new, returning, or replacement Client before routing.
-- Preserve one shared password plus per-device fingerprint pairing.
-- Give a third authenticated candidate one purple 15-second replacement window, never a third active slot.
-- Pause clipboard delivery during valid Apply but keep local capture and latest-wins submission non-blocking.
+## Deferred
 
-## Open Gates
-
-- Write and review one executor-safe implementation plan for each accepted phase.
-
-## Implementation Routing
-
-After outline acceptance, write one self-contained, independently landable executor plan per phase. Each plan will carry exact drift checks, source excerpts, focused tests, the full landing gate, and phase-specific STOP conditions.
-
-## Rejected or Deferred
-
-| Item | Reason | Revisit if |
-|---|---|---|
-| More than two Clients | Explicit release bound keeps state, UI, and resource limits understandable | A later product cycle requests a larger cluster |
-| Direct Client-to-Client sockets | The Server is the trust, routing, and clipboard authority | The hub becomes a measured throughput bottleneck |
-| Per-Client passwords | Rejected setup complexity; pairing remains per device | The trust model changes |
-| Clipboard history or disk persistence | Only the newest in-memory item is required | A separate history feature is designed |
+- More than two Clients, WAN/internet relay, non-Windows support, custom Conduit machine names, direct Client transport, clipboard history, and manual rearrangement of monitors inside one Windows-detected machine group.
