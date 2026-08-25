@@ -590,6 +590,15 @@ class ReleaseBuildScriptTests(unittest.TestCase):
             self.script.index(pyinstaller),
         )
 
+    def test_release_output_directory_exists_before_notice_copy(self):
+        create_directory = "New-Item -ItemType Directory -Path $DistDirectory"
+        notice_copy = "Copy-Item -LiteralPath $notices"
+        self.assertIn(create_directory, self.script)
+        self.assertLess(
+            self.script.index(create_directory),
+            self.script.index(notice_copy),
+        )
+
     def test_supported_build_is_the_only_nsis_entry_point(self):
         root = Path(__file__).resolve().parents[1]
         installer = (root / "installer" / "Conduit.nsi").read_text(

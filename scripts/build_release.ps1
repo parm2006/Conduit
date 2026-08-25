@@ -69,12 +69,13 @@ try {
         throw "Could not read the canonical Conduit product version."
     }
     $ExpectedTag = "v$ProductVersion"
-    $ConduitExecutable = Join-Path $RepoRoot "dist\Conduit-v$ProductVersion.exe"
-    $InstallerExecutable = Join-Path $RepoRoot "dist\Conduit-v$ProductVersion-Setup.exe"
-    $SourceArchive = Join-Path $RepoRoot "dist\Conduit-v$ProductVersion-source.zip"
-    $ReleaseNotices = Join-Path $RepoRoot "dist\THIRD_PARTY_NOTICES.txt"
-    $ReleaseManifest = Join-Path $RepoRoot "dist\RELEASE_MANIFEST.txt"
-    $Checksums = Join-Path $RepoRoot "dist\SHA256SUMS.txt"
+    $DistDirectory = Join-Path $RepoRoot "dist"
+    $ConduitExecutable = Join-Path $DistDirectory "Conduit-v$ProductVersion.exe"
+    $InstallerExecutable = Join-Path $DistDirectory "Conduit-v$ProductVersion-Setup.exe"
+    $SourceArchive = Join-Path $DistDirectory "Conduit-v$ProductVersion-source.zip"
+    $ReleaseNotices = Join-Path $DistDirectory "THIRD_PARTY_NOTICES.txt"
+    $ReleaseManifest = Join-Path $DistDirectory "RELEASE_MANIFEST.txt"
+    $Checksums = Join-Path $DistDirectory "SHA256SUMS.txt"
 
     # git status --porcelain
     $GitStatus = & git -c "safe.directory=$GitSafeDirectory" `
@@ -110,6 +111,9 @@ try {
     $NsisLicense = Join-Path (Split-Path $ResolvedMakensis -Parent) "COPYING"
     if (-not (Test-Path -LiteralPath $NsisLicense -PathType Leaf)) {
         throw "The installed NSIS COPYING file was not found."
+    }
+    if (-not (Test-Path -LiteralPath $DistDirectory -PathType Container)) {
+        New-Item -ItemType Directory -Path $DistDirectory | Out-Null
     }
 
     # remove stale release outputs
