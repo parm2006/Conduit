@@ -167,10 +167,28 @@ class SessionRegistry:
         peer_address=None,
         lane=None,
     ):
-        if not isinstance(candidate, str) or not hmac.compare_digest(
-            candidate.encode("utf-8"), self._password.encode("utf-8")
+        candidate_bytes = (
+            candidate.encode("utf-8")
+            if isinstance(candidate, str)
+            else None
+        )
+        expected_bytes = self._password.encode("utf-8")
+        if candidate_bytes is None or not hmac.compare_digest(
+            candidate_bytes,
+            expected_bytes,
         ):
-            logger.warning("Control lane password authentication failed")
+            logger.warning(
+                "Control lane password authentication failed "
+                "(Windows name=%r, peer=%r, text_value=%s, "
+                "byte_length_match=%s)",
+                windows_name,
+                peer_address,
+                candidate_bytes is not None,
+                (
+                    candidate_bytes is not None
+                    and len(candidate_bytes) == len(expected_bytes)
+                ),
+            )
             raise SessionAuthenticationError("authentication failed")
         if not isinstance(peer_identity, str) or not peer_identity.strip():
             raise SessionAuthenticationError("peer identity is invalid")

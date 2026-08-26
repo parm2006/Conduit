@@ -646,10 +646,39 @@ class ConduitClient:
             current_topology.get('version'),
         )
         incoming_version = data.get('topology_version')
+        logger.info(
+            "[cursor] Switch received current_topology=%r incoming_topology=%r "
+            "destination_display=%r destination_side=%r requested_position=%r",
+            current_version,
+            incoming_version,
+            data.get('destination_display_id'),
+            data.get('destination_side'),
+            data.get('position'),
+        )
         if (
             type(current_version) is int
             and incoming_version != current_version
         ):
+            destination_display_id = data.get('destination_display_id')
+            destination_side = data.get('destination_side')
+            if (
+                isinstance(destination_display_id, str)
+                and destination_side in {'left', 'right', 'top', 'bottom'}
+                and type(incoming_version) is int
+            ):
+                self.control_network.send_message({
+                    'type': 'switch_back',
+                    'source_display_id': destination_display_id,
+                    'source_side': destination_side,
+                    'ratio': data.get('ratio', 0.5),
+                    'topology_version': incoming_version,
+                })
+            logger.warning(
+                "[cursor] Switch rejected because Client topology=%r differs "
+                "from Server topology=%r; ownership return requested",
+                current_version,
+                incoming_version,
+            )
             return False
         logger.info("Server switched control to this client.")
         self.is_active = True
@@ -743,34 +772,60 @@ class ConduitClient:
                 self.input_handler.screen_height,
                 ratio,
             )
-        self.input_handler.inject_position(*position)
+        observed_position = self.input_handler.inject_position(*position)
+        logger.info(
+            "[cursor] Switch accepted display=%r side=%r "
+            "target=%s observed=%s edge_count=%d",
+            data.get('destination_display_id'),
+            destination_side,
+            position,
+            observed_position,
+            len(edge_regions),
+        )
         self.active_topology_config = dict(data)
         return True
 
     def on_mouse_move(self, data):
+        if not self.is_active:
+            return False
         dx = data.get('dx', 0) * self.speed_scale_x
         dy = data.get('dy', 0) * self.speed_scale_y
         self.input_handler.inject_move(dx, dy)
+        return True
 
     def on_mouse_click(self, data):
+        if not self.is_active:
+            return False
         button_name = data.get('button')
         pressed = data.get('pressed')
         self.input_handler.inject_click(button_name, pressed)
+        return True
 
     def on_mouse_scroll(self, data):
+        if not self.is_active:
+            return False
         dx = data.get('dx', 0)
         dy = data.get('dy', 0)
         self.input_handler.inject_scroll(dx, dy)
+        return True
 
     def on_key_press(self, data):
+        if not self.is_active:
+            return False
         key_data = data.get('key')
         if key_data:
             self.input_handler.inject_key_press(key_data)
+            return True
+        return False
 
     def on_key_release(self, data):
+        if not self.is_active:
+            return False
         key_data = data.get('key')
         if key_data:
             self.input_handler.inject_key_release(key_data)
+            return True
+        return False
 
     def on_client_edge_hit(self, direction, ratio, region=None):
         with self._get_paste_route_lock():

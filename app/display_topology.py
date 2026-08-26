@@ -1,6 +1,10 @@
 from dataclasses import dataclass
 
 
+EDGE_HIT_TOLERANCE = 2
+EDGE_ENTRY_INSET = EDGE_HIT_TOLERANCE + 1
+
+
 @dataclass(frozen=True)
 class NativeRect:
     left: int
@@ -49,7 +53,7 @@ def edge_ratio(rect, side, x, y):
     return max(0.0, min(1.0, position / extent))
 
 
-def edge_entry_point(rect, side, ratio, inset=1):
+def edge_entry_point(rect, side, ratio, inset=EDGE_ENTRY_INSET):
     ratio = max(0.0, min(1.0, ratio))
     x_at_ratio = min(rect.right - 1, rect.left + int((rect.right - rect.left) * ratio))
     y_at_ratio = min(rect.bottom - 1, rect.top + int((rect.bottom - rect.top) * ratio))

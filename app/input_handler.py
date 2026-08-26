@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from pynput.mouse import Controller as MouseController, Listener as MouseListener, Button
 from pynput.keyboard import Controller as KeyboardController, Listener as KeyboardListener, Key, KeyCode
 from app.safe_errors import error_name
-from app.display_topology import edge_ratio
+from app.display_topology import EDGE_HIT_TOLERANCE, edge_ratio
 
 logger = logging.getLogger(__name__)
 
@@ -185,6 +185,15 @@ class InputHandler:
         if hasattr(self, "topology_edge_regions"):
             for region in self.topology_edge_regions:
                 if self._point_hits_region(region, x, y):
+                    logger.info(
+                        "[cursor] Server edge hit display=%r side=%s "
+                        "position=(%s, %s) destination=%r",
+                        region.source_display_id,
+                        region.source_side,
+                        x,
+                        y,
+                        region.destination_machine_id,
+                    )
                     self.trigger(
                         'edge_hit',
                         region.source_side,
@@ -206,13 +215,25 @@ class InputHandler:
     def _point_hits_region(region, x, y):
         rect = region.source_rect
         if region.source_side == "left":
-            return abs(x - rect.left) <= 2 and rect.top <= y < rect.bottom
+            return (
+                abs(x - rect.left) <= EDGE_HIT_TOLERANCE
+                and rect.top <= y < rect.bottom
+            )
         if region.source_side == "right":
-            return abs(x - (rect.right - 1)) <= 2 and rect.top <= y < rect.bottom
+            return (
+                abs(x - (rect.right - 1)) <= EDGE_HIT_TOLERANCE
+                and rect.top <= y < rect.bottom
+            )
         if region.source_side == "top":
-            return abs(y - rect.top) <= 2 and rect.left <= x < rect.right
+            return (
+                abs(y - rect.top) <= EDGE_HIT_TOLERANCE
+                and rect.left <= x < rect.right
+            )
         if region.source_side == "bottom":
-            return abs(y - (rect.bottom - 1)) <= 2 and rect.left <= x < rect.right
+            return (
+                abs(y - (rect.bottom - 1)) <= EDGE_HIT_TOLERANCE
+                and rect.left <= x < rect.right
+            )
         return False
 
     def _on_key_press(self, key):
@@ -255,6 +276,15 @@ class InputHandler:
         if hasattr(self, "client_topology_edge_regions"):
             for region in self.client_topology_edge_regions:
                 if self._point_hits_region(region, x, y):
+                    logger.info(
+                        "[cursor] Client edge hit display=%r side=%s "
+                        "position=(%s, %s) destination=%r",
+                        region.source_display_id,
+                        region.source_side,
+                        x,
+                        y,
+                        region.destination_machine_id,
+                    )
                     self.trigger(
                         'client_edge_hit',
                         region.source_side,
@@ -273,7 +303,17 @@ class InputHandler:
             self.trigger('client_edge_hit', 'bottom', x / self.screen_width)
 
     def inject_position(self, x, y):
-        self.mouse.position = (x, y)
+        before = tuple(self.mouse.position)
+        target = (x, y)
+        self.mouse.position = target
+        observed = tuple(self.mouse.position)
+        logger.info(
+            "[cursor] Warp before=%s target=%s observed=%s",
+            before,
+            target,
+            observed,
+        )
+        return observed
 
     def inject_click(self, button_name, pressed):
         btn = getattr(Button, button_name, None)

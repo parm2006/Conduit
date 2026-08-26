@@ -16,11 +16,30 @@ phases.
    ```
 
    Expected hash:
-   `EC4C38174466A4F5FA60B806F8A1F885E509B28AE675F57CE8CD252D334A751D`
+   `DC38D2689EC4736BFD98D6AEA1164E3D8A2CAE99F2D1E6A58DA4F4F2AA6B63A6`
 4. Use `ParthPC` as the Server. Use the same password and base port on both
    Clients. Keep the Server network classified as Private in Windows.
 5. Write down each PC's Windows machine name. Conduit should show those names,
    never the Server's development address, in topology-related UI.
+
+## Capture diagnostics for an input or connection failure
+
+Each app writes privacy-safe diagnostics to:
+
+```text
+%LOCALAPPDATA%\Conduit\conduit.log
+```
+
+The log rotates automatically at 2 MB and keeps two older files. It records
+machine names, local connection endpoints, authentication outcome metadata,
+topology versions, graph edges, cursor ownership changes, and requested versus
+observed cursor-warp coordinates. It does not record passwords, clipboard
+contents, file contents, or private filenames.
+
+For an intermittent failure, close older Conduit processes, reproduce the
+failure once, then close Conduit normally and collect `conduit.log` from both
+the Server and affected Client. Include which machine was Server and which
+grid side the Client occupied.
 
 ## Phase 1: One-Client baseline
 

@@ -792,6 +792,16 @@ class ConduitServer:
         router = getattr(self, 'input_router', None)
         if router is None:
             return False
+        logger.info(
+            "[cursor] Switch-back received machine=%r session=%s "
+            "display=%r side=%r ratio=%r topology=%r",
+            data.get('peer_identity'),
+            str(data.get('session_id'))[:8],
+            data.get('source_display_id'),
+            data.get('source_side'),
+            data.get('ratio'),
+            data.get('topology_version'),
+        )
         switched = router.handle_edge(
             data.get('peer_identity'),
             data.get('source_display_id'),
@@ -802,6 +812,9 @@ class ConduitServer:
         )
         if switched:
             self._apply_clipboard_offer_route()
+            logger.info("[cursor] Switch-back accepted; Server owns the cursor")
+        else:
+            logger.warning("[cursor] Switch-back rejected; router state unchanged")
         return switched
 
     def on_mouse_move(self, dx, dy):

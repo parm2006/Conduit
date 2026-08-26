@@ -239,7 +239,7 @@ class TopologyProtocolTests(unittest.TestCase):
             }
         )
 
-        self.assertEqual(positions, [(1921, 720)])
+        self.assertEqual(positions, [(1923, 720)])
         self.assertEqual(configured[0].source_display_id, "client-hdmi")
         self.assertEqual(configured[0].destination_display_id, "server-left")
 

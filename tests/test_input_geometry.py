@@ -108,6 +108,71 @@ class InputGeometryTests(unittest.TestCase):
         self.assertEqual(direction, "left")
         self.assertEqual(ratio, 0.5)
         self.assertEqual(crossed, region)
+
+    def test_cursor_warp_reports_requested_and_observed_positions(self):
+        class Mouse:
+            position = (1800, 900)
+
+        handler = InputHandler.__new__(InputHandler)
+        handler.mouse = Mouse()
+
+        with self.assertLogs("app.input_handler", level="INFO") as captured:
+            observed = handler.inject_position(3, 540)
+
+        self.assertEqual(observed, (3, 540))
+        self.assertIn("before=(1800, 900)", captured.output[0])
+        self.assertIn("target=(3, 540)", captured.output[0])
+        self.assertIn("observed=(3, 540)", captured.output[0])
+
+    def test_topology_entry_position_is_outside_the_return_edge_hit_zone(self):
+        cases = (
+            ("left", (1, 0)),
+            ("right", (-1, 0)),
+            ("top", (0, 1)),
+            ("bottom", (0, -1)),
+        )
+        rect = NativeRect(0, 0, 1920, 1080)
+
+        for side, movement_away_from_edge in cases:
+            with self.subTest(side=side):
+                events = []
+
+                class Mouse:
+                    def __init__(self):
+                        from app.display_topology import edge_entry_point
+
+                        self.position = edge_entry_point(rect, side, 0.5)
+
+                    def move(self, dx, dy):
+                        x, y = self.position
+                        self.position = (x + dx, y + dy)
+
+                region = TopologyEdgeRegion(
+                    "client",
+                    "client-primary",
+                    side,
+                    "server",
+                    "server-primary",
+                    {
+                        "left": "right",
+                        "right": "left",
+                        "top": "bottom",
+                        "bottom": "top",
+                    }[side],
+                    rect,
+                    rect,
+                )
+                handler = InputHandler.__new__(InputHandler)
+                handler.mouse = Mouse()
+                handler.callbacks = {
+                    "client_edge_hit": [lambda *args: events.append(args)]
+                }
+                handler.set_client_topology_edge(region)
+
+                handler.inject_move(*movement_away_from_edge)
+
+                self.assertEqual(events, [])
+
     def test_client_entry_is_visually_at_edge_without_triggering_return(self):
         positions = {
             "right": client_entry_position("right", 1920, 1080, 0.5),

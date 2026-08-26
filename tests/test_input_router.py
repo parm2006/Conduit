@@ -173,7 +173,7 @@ class InputRouterTests(unittest.TestCase):
         )
         self.assertEqual(
             self.router.state,
-            LocalServer("server-primary", (1918, 540)),
+            LocalServer("server-primary", (1916, 540)),
         )
 
     def test_same_machine_monitor_edge_stays_native_and_outer_edge_routes(self):
@@ -236,7 +236,7 @@ class InputRouterTests(unittest.TestCase):
         )
         self.assertEqual(
             router.state,
-            LocalServer("server-left", (-2559, 720)),
+            LocalServer("server-left", (-2557, 720)),
         )
 
     def test_entry_mapping_clamps_corners_and_reports_native_resolution_scale(self):
@@ -255,7 +255,7 @@ class InputRouterTests(unittest.TestCase):
             if item[0] == "session-1"
         )
 
-        self.assertEqual(message["position"], [1, 0])
+        self.assertEqual(message["position"], [3, 0])
         self.assertAlmostEqual(message["scale_x"], 2560 / 1920)
         self.assertAlmostEqual(message["scale_y"], 1440 / 1080)
         self.assertEqual(message["destination_dpi_percent"], 150)
@@ -491,9 +491,13 @@ class ClientEdgeReportingTests(unittest.TestCase):
 
     def test_client_ignores_switch_from_a_stale_topology_version(self):
         positions = []
+        messages = []
         client = ConduitClient.__new__(ConduitClient)
         client.is_active = False
         client.active_topology_config = {"version": 8}
+        client.control_network = SimpleNamespace(
+            send_message=lambda message: messages.append(dict(message)) or True
+        )
         client.input_handler = SimpleNamespace(
             inject_position=lambda x, y: positions.append((x, y)),
             screen_width=1920,
@@ -506,13 +510,49 @@ class ClientEdgeReportingTests(unittest.TestCase):
                 "topology_version": 7,
                 "direction": "right",
                 "ratio": 0.5,
+                "destination_display_id": "client-primary",
+                "destination_side": "left",
             })
         )
 
         self.assertFalse(client.is_active)
         self.assertEqual(positions, [])
+        self.assertEqual(
+            messages,
+            [
+                {
+                    "type": "switch_back",
+                    "source_display_id": "client-primary",
+                    "source_side": "left",
+                    "ratio": 0.5,
+                    "topology_version": 7,
+                }
+            ],
+        )
         self.assertEqual(self.router.held_keys, ())
         self.assertEqual(self.router.held_buttons, ())
+
+    def test_inactive_client_ignores_remote_input_packets(self):
+        calls = []
+        client = ConduitClient.__new__(ConduitClient)
+        client.is_active = False
+        client.speed_scale_x = 1
+        client.speed_scale_y = 1
+        client.input_handler = SimpleNamespace(
+            inject_move=lambda *args: calls.append(("move", args)),
+            inject_click=lambda *args: calls.append(("click", args)),
+            inject_scroll=lambda *args: calls.append(("scroll", args)),
+            inject_key_press=lambda *args: calls.append(("press", args)),
+            inject_key_release=lambda *args: calls.append(("release", args)),
+        )
+
+        client.on_mouse_move({"dx": 4, "dy": 5})
+        client.on_mouse_click({"button": "left", "pressed": True})
+        client.on_mouse_scroll({"dx": 0, "dy": 1})
+        client.on_key_press({"key": {"type": "char", "value": "x"}})
+        client.on_key_release({"key": {"type": "char", "value": "x"}})
+
+        self.assertEqual(calls, [])
 
     def test_failed_forward_send_is_destination_loss_and_returns_center(self):
         self.router.handle_edge(

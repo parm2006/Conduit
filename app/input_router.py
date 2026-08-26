@@ -1,7 +1,13 @@
 """Topology-backed ownership for Conduit's single roaming Server cursor."""
 
 from dataclasses import dataclass
+import logging
 import threading
+
+from app.display_topology import edge_ratio
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -81,16 +87,39 @@ class InputRouter:
     ):
         with self._lock:
             if isinstance(self.state, (Paused, Transitioning)):
+                logger.warning(
+                    "[cursor] Rejected edge while router state=%s",
+                    type(self.state).__name__,
+                )
                 return False
             if topology_version != self.topology.version:
+                logger.warning(
+                    "[cursor] Rejected edge with topology version %r; active=%r",
+                    topology_version,
+                    self.topology.version,
+                )
                 return False
             if isinstance(self.state, LocalServer):
                 if source_machine_id != self.topology.server_id or session_id is not None:
+                    logger.warning(
+                        "[cursor] Rejected Server edge from unexpected owner "
+                        "machine=%r session=%r",
+                        source_machine_id,
+                        session_id,
+                    )
                     return False
             elif (
                 source_machine_id != self.state.machine_id
                 or session_id != self.state.session_id
             ):
+                logger.warning(
+                    "[cursor] Rejected Client edge from unexpected owner "
+                    "machine=%r session=%r active_machine=%r active_session=%r",
+                    source_machine_id,
+                    str(session_id)[:8] if session_id else None,
+                    self.state.machine_id,
+                    str(self.state.session_id)[:8],
+                )
                 return False
             try:
                 edge = self.topology.resolve_edge(
@@ -100,7 +129,26 @@ class InputRouter:
                     ratio,
                 )
             except (KeyError, ValueError):
+                logger.warning(
+                    "[cursor] No graph edge for machine=%r display=%r side=%r",
+                    source_machine_id,
+                    source_display_id,
+                    side,
+                )
                 return False
+            logger.info(
+                "[cursor] Graph transition %s/%s:%s -> %s/%s:%s "
+                "ratio=%.4f entry=%s topology=%s",
+                edge.mapping.source_machine_id,
+                edge.mapping.source_display_id,
+                edge.mapping.source_side,
+                edge.mapping.destination_machine_id,
+                edge.mapping.destination_display_id,
+                edge.mapping.destination_side,
+                ratio,
+                edge.destination_position,
+                self.topology.version,
+            )
             return self._transition(edge)
 
     def forward_mouse_move(self, dx, dy):
@@ -224,6 +272,11 @@ class InputRouter:
             "destination_side": mapping.destination_side,
             "destination_rect": self._rect_values(edge.destination_rect),
             "position": list(edge.destination_position),
+            "ratio": edge_ratio(
+                edge.destination_rect,
+                mapping.destination_side,
+                *edge.destination_position,
+            ),
             "scale_x": edge.scale_x,
             "scale_y": edge.scale_y,
             "destination_dpi_percent": edge.destination_dpi_percent,
@@ -232,10 +285,21 @@ class InputRouter:
             ),
         }
         if not session.control_lane.send_message(message):
+            logger.warning(
+                "[cursor] Switch command failed for machine=%r session=%s",
+                mapping.destination_machine_id,
+                str(session.session_id)[:8],
+            )
             self._return_to_server_center()
             return False
         if isinstance(previous, LocalServer):
             self._input_effects.begin_remote_capture(session.session_id)
+        logger.info(
+            "[cursor] Remote ownership active on machine=%r session=%s entry=%s",
+            mapping.destination_machine_id,
+            str(session.session_id)[:8],
+            edge.destination_position,
+        )
         self.state = RemoteClient(
             session.session_id,
             mapping.destination_machine_id,

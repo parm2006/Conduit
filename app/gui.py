@@ -415,6 +415,12 @@ class ConduitGUI(ctk.CTk):
         self.tab_server = self.tabview.add("Server (Host)")
         self.tab_client = self.tabview.add("Client")
         restore_saved_role(self.tabview, saved_role)
+
+        # A machine may switch roles while testing or reconnecting. Keep one
+        # in-memory password across both tabs so the hidden fields cannot drift
+        # into two different credentials. The value is intentionally not
+        # persisted by UserPreferences.
+        self.shared_password = tkinter.StringVar(master=self)
         
         # Server UI
         saved_server_port = str(self.preferences.load_server_port())
@@ -451,7 +457,11 @@ class ConduitGUI(ctk.CTk):
         
         self.server_password_label = ctk.CTkLabel(self.tab_server, text="Password:")
         self.server_password_label.pack(pady=2)
-        self.server_password_entry = ctk.CTkEntry(self.tab_server, show="*")
+        self.server_password_entry = ctk.CTkEntry(
+            self.tab_server,
+            show="*",
+            textvariable=self.shared_password,
+        )
         self.server_password_entry.pack(pady=2)
         enable_textbox_qol(self.server_password_entry)
         
@@ -525,7 +535,11 @@ class ConduitGUI(ctk.CTk):
         
         self.client_password_label = ctk.CTkLabel(self.tab_client, text="Password:")
         self.client_password_label.pack(pady=5)
-        self.client_password_entry = ctk.CTkEntry(self.tab_client, show="*")
+        self.client_password_entry = ctk.CTkEntry(
+            self.tab_client,
+            show="*",
+            textvariable=self.shared_password,
+        )
         self.client_password_entry.pack(pady=5)
         enable_textbox_qol(self.client_password_entry)
         

@@ -30,12 +30,18 @@ class SessionRegistrySecurityTests(unittest.TestCase):
     def test_wrong_password_and_expired_or_cross_session_tokens_are_rejected(self):
         now = [10.0]
         coordinator = SessionRegistry("secret", clock=lambda: now[0], token_ttl=2.0)
-        with self.assertRaises(SessionAuthenticationError):
-            coordinator.authenticate_control(
-                "wrong",
-                peer_identity="device-a",
-                windows_name="DeviceA",
-            )
+        with self.assertLogs("app.session", level="WARNING") as captured:
+            with self.assertRaises(SessionAuthenticationError):
+                coordinator.authenticate_control(
+                    "wrong",
+                    peer_identity="device-a",
+                    windows_name="DeviceA",
+                    peer_address="192.0.2.10",
+                )
+        self.assertIn("byte_length_match=False", captured.output[0])
+        self.assertIn("DeviceA", captured.output[0])
+        self.assertNotIn("wrong", captured.output[0])
+        self.assertNotIn("secret", captured.output[0])
         session = coordinator.authenticate_control(
             "secret",
             peer_identity="device-a",
