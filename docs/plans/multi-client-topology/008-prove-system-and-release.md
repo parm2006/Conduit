@@ -179,11 +179,11 @@ For any failure, add or tighten an automated test through the nearest real seam 
 
 ## Done criteria
 
-- [ ] System/security focused tests pass without leaks or hangs.
-- [ ] Compileall, full suite, and whitespace checks pass.
-- [ ] Development package build and packaged helper smoke pass.
-- [ ] Firewall remains exact three-port, Private, local-subnet, executable-specific TCP scope.
-- [ ] README describes the final workflow without development-only IPs.
+- [x] System/security focused tests pass without leaks or hangs.
+- [x] Compileall, full suite, and whitespace checks pass.
+- [x] Development package build and packaged helper smoke pass.
+- [x] Firewall remains exact three-port, Private, local-subnet, executable-specific TCP scope.
+- [x] README describes the final workflow without development-only IPs.
 - [ ] Every required physical matrix row passes on one Server and two Clients.
 - [ ] One-Client regression path passes.
 - [ ] No unresolved BLOCKED validation row remains.

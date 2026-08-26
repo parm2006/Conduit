@@ -14,15 +14,12 @@ from app.ports import DEFAULT_FILE_PORT
 class RecordingControl:
     def __init__(self):
         self.messages = []
-        self.session_offer = SimpleNamespace(
-            session_id="logical-session", file_token="file-token"
-        )
         self.session_info = {
             "session_id": "logical-session", "file_token": "file-token"
         }
 
-    def send_message(self, message):
-        self.messages.append(message)
+    def send_message(self, message, session_id=None):
+        self.messages.append((session_id, message))
         return True
 
     def peer_certificate_fingerprint(self):
@@ -367,15 +364,26 @@ class FileLaneLifecycleTests(unittest.TestCase):
         server = ConduitServer.__new__(ConduitServer)
         server.control_network = RecordingControl()
         server.file_network = RecordingFileServer()
-        server.data_network = SimpleNamespace(session_id="logical-session")
+        server.session_registry = SimpleNamespace(
+            get=lambda session_id: SimpleNamespace(data_lane=object())
+        )
 
-        server._offer_file_lane()
+        server._offer_file_lane("logical-session")
 
         self.assertEqual(
             server.control_network.messages,
-            [{"type": "file_lane_offer", "port": 5002, "session_id": "logical-session"}],
+            [
+                (
+                    "logical-session",
+                    {
+                        "type": "file_lane_offer",
+                        "port": 5002,
+                        "session_id": "logical-session",
+                    },
+                )
+            ],
         )
-        self.assertEqual(server.file_network.offers, [("file-token", "logical-session")])
+        self.assertEqual(server.file_network.offers, [(None, "logical-session")])
 
     def test_client_binds_offer_to_live_control_certificate(self):
         client = ConduitClient.__new__(ConduitClient)

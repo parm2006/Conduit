@@ -84,6 +84,8 @@ class InputHandler:
         self.callbacks = {}
         self._injected_keys = {}
         self._injected_keys_lock = threading.Lock()
+        self._injected_buttons = set()
+        self._injected_buttons_lock = threading.Lock()
         
         self.screen_width = 1920 # Will be updated
         self.screen_height = 1080
@@ -133,7 +135,10 @@ class InputHandler:
         self.topology_edge_regions = ()
 
     def set_client_topology_edge(self, region):
-        self.client_topology_edge_regions = () if region is None else (region,)
+        self.set_client_topology_edges(() if region is None else (region,))
+
+    def set_client_topology_edges(self, regions):
+        self.client_topology_edge_regions = tuple(regions)
 
     def register_callback(self, event_type, cb):
         if event_type not in self.callbacks:
@@ -275,8 +280,10 @@ class InputHandler:
         if btn:
             if pressed:
                 self.mouse.press(btn)
+                self._remember_injected_button(button_name)
             else:
                 self.mouse.release(btn)
+                self._forget_injected_button(button_name)
 
     def inject_scroll(self, dx, dy):
         self.mouse.scroll(dx, dy)
@@ -351,6 +358,37 @@ class InputHandler:
                 logger.error("Could not release injected key (%s)", error_name(error))
         with self._injected_keys_lock:
             return not self._injected_keys
+
+    def release_all_injected_input(self):
+        keys_released = self.release_all_injected_keys()
+        self._ensure_injected_button_state()
+        with self._injected_buttons_lock:
+            buttons = tuple(sorted(self._injected_buttons))
+        for button_name in buttons:
+            try:
+                self.inject_click(button_name, False)
+            except Exception as error:
+                logger.error(
+                    "Could not release injected mouse button (%s)",
+                    error_name(error),
+                )
+        with self._injected_buttons_lock:
+            return keys_released and not self._injected_buttons
+
+    def _ensure_injected_button_state(self):
+        if not hasattr(self, '_injected_buttons_lock'):
+            self._injected_buttons_lock = threading.Lock()
+            self._injected_buttons = set()
+
+    def _remember_injected_button(self, button_name):
+        self._ensure_injected_button_state()
+        with self._injected_buttons_lock:
+            self._injected_buttons.add(button_name)
+
+    def _forget_injected_button(self, button_name):
+        self._ensure_injected_button_state()
+        with self._injected_buttons_lock:
+            self._injected_buttons.discard(button_name)
 
     def _inject_native_key(self, key_data, pressed):
         virtual_key = key_data.get('vk')

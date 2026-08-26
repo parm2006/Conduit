@@ -203,7 +203,6 @@ class ClipboardSequenceTests(unittest.TestCase):
 class PeerClipboardSchedulingTests(unittest.TestCase):
     def test_stale_remote_snapshot_cannot_overwrite_newer_local_file_offer(self):
         server = ConduitServer.__new__(ConduitServer)
-        server.switching_to_client = False
         server.control_network = SessionNetwork()
         server.paste_coordinator = PasteCoordinator(lambda: None)
         server.clipboard = RecordingClipboard()
@@ -222,14 +221,13 @@ class PeerClipboardSchedulingTests(unittest.TestCase):
         )
         payload["offer"] = remote_offer
 
-        self.assertFalse(server.on_remote_copy(payload))
+        self.assertIsNone(server._accepted_clipboard_payload(payload))
 
         self.assertEqual(server.clipboard.injected, [])
         self.assertEqual(server.clipboard_offer_state.current_offer.source, "server")
 
     def test_snapshot_can_establish_matching_offer_when_data_arrives_first(self):
         server = ConduitServer.__new__(ConduitServer)
-        server.switching_to_client = False
         server.control_network = SessionNetwork()
         server.paste_coordinator = PasteCoordinator(lambda: None)
         server.clipboard = RecordingClipboard()
@@ -245,7 +243,8 @@ class PeerClipboardSchedulingTests(unittest.TestCase):
         payload = encode_clipboard_message(snapshot)
         payload["offer"] = remote_offer
 
-        server.on_remote_copy(payload)
+        accepted = server._accepted_clipboard_payload(payload)
+        server.clipboard.inject(accepted)
 
         self.assertEqual(len(server.clipboard.injected), 1)
         self.assertEqual(
@@ -283,27 +282,19 @@ class PeerClipboardSchedulingTests(unittest.TestCase):
         self.assertIn("Clipboard snapshot queued", output)
         self.assertNotIn("PRIVATE-RTF-CONTENT", output)
 
-    def test_client_to_server_trace_identifies_boundaries_without_payload_content(self):
+    def test_client_submission_trace_identifies_boundary_without_payload_content(self):
         client = ConduitClient.__new__(ConduitClient)
         client.data_network = RecordingNetwork()
-        server = ConduitServer.__new__(ConduitServer)
-        server.clipboard = RecordingClipboard()
         snapshot = ClipboardSnapshot([
             ClipboardEntry("html", b"PRIVATE-CLIPBOARD-CONTENT"),
         ])
 
-        with self.assertLogs(level="INFO") as logs:
+        with self.assertLogs("app.client", level="INFO") as logs:
             self.assertTrue(client._send_clipboard_snapshot({"snapshot": snapshot}))
-            server.on_remote_copy(client.data_network.messages[0])
 
         output = "\n".join(logs.output)
         self.assertIn("Clipboard snapshot sent", output)
-        self.assertIn("Clipboard snapshot received", output)
         self.assertNotIn("PRIVATE-CLIPBOARD-CONTENT", output)
-        self.assertEqual(
-            decode_clipboard_message(server.clipboard.injected[0]),
-            snapshot,
-        )
 
     def test_client_submits_snapshot_without_mutating_it(self):
         client = ConduitClient.__new__(ConduitClient)
@@ -331,6 +322,25 @@ class PeerClipboardSchedulingTests(unittest.TestCase):
             [{"snapshot": snapshot}],
         )
 
+    def test_server_captures_source_sequence_with_each_queued_snapshot(self):
+        server = ConduitServer.__new__(ConduitServer)
+        server.clipboard_sender = RecordingSender()
+        first = ClipboardSnapshot([ClipboardEntry("html", b"first")])
+        second = ClipboardSnapshot([ClipboardEntry("html", b"second")])
+
+        server._pending_local_ordinary_sequence = 40
+        server.on_local_copy(first)
+        server._pending_local_ordinary_sequence = 41
+        server.on_local_copy(second)
+
+        self.assertEqual(
+            [
+                work["source_sequence"]
+                for work in server.clipboard_sender.submitted
+            ],
+            [40, 41],
+        )
+
     def test_client_encodes_snapshot_and_preserves_message_type(self):
         client = ConduitClient.__new__(ConduitClient)
         client.data_network = RecordingNetwork()
@@ -339,11 +349,16 @@ class PeerClipboardSchedulingTests(unittest.TestCase):
         self.assertTrue(client._send_clipboard_snapshot({"snapshot": snapshot}))
 
         message = client.data_network.messages[0]
-        self.assertEqual(decode_clipboard_message(message), snapshot)
+        wire_payload = {
+            key: value
+            for key, value in message.items()
+            if key in {"type", "version", "formats"}
+        }
+        self.assertEqual(decode_clipboard_message(wire_payload), snapshot)
+        self.assertEqual(message["source_sequence"], 1)
 
-    def test_server_encodes_snapshot_and_preserves_message_type(self):
+    def test_server_submits_snapshot_to_cluster_authority(self):
         server = ConduitServer.__new__(ConduitServer)
-        server.data_network = RecordingNetwork()
         snapshot = ClipboardSnapshot(
             [
                 ClipboardEntry("png", b"png"),
@@ -353,8 +368,9 @@ class PeerClipboardSchedulingTests(unittest.TestCase):
 
         self.assertTrue(server._send_clipboard_snapshot({"snapshot": snapshot}))
 
-        message = server.data_network.messages[0]
-        self.assertEqual(decode_clipboard_message(message), snapshot)
+        self.addCleanup(server.clipboard_hub.stop)
+        self.assertEqual(server.clipboard_hub.latest_item.snapshot, snapshot)
+        self.assertEqual(server.clipboard_hub.latest_item.source_id, "server")
 
 
 if __name__ == "__main__":

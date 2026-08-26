@@ -95,6 +95,50 @@ class LatestWinsSenderTests(unittest.TestCase):
         self.assertFalse(sender.submit({"text": "late"}))
         self.assertEqual(sent, [{"text": "active"}])
 
+    def test_pause_holds_delivery_without_blocking_or_losing_latest_submit(self):
+        sent = []
+        sender = LatestWinsSender(sent.append)
+        self.addCleanup(sender.stop)
+
+        sender.pause()
+        self.assertTrue(sender.submit({"text": "A"}))
+        self.assertTrue(sender.submit({"text": "B"}))
+        self.assertFalse(sender.wait_until_idle(timeout=0.02))
+        self.assertEqual(sent, [])
+
+        sender.resume()
+
+        self.assertTrue(sender.wait_until_idle(timeout=1))
+        self.assertEqual(sent, [{"text": "B"}])
+
+    def test_pause_allows_active_send_to_finish_then_holds_only_newest_pending(self):
+        first_started = threading.Event()
+        release_first = threading.Event()
+        sent = []
+
+        def send(payload):
+            sent.append(payload)
+            if payload["text"] == "A":
+                first_started.set()
+                self.assertTrue(release_first.wait(timeout=1))
+
+        sender = LatestWinsSender(send)
+        self.addCleanup(sender.stop)
+        sender.submit({"text": "A"})
+        self.assertTrue(first_started.wait(timeout=1))
+
+        sender.pause()
+        sender.submit({"text": "B"})
+        sender.submit({"text": "C"})
+        release_first.set()
+        self.assertFalse(sender.wait_until_idle(timeout=0.02))
+        self.assertEqual(sent, [{"text": "A"}])
+
+        sender.resume()
+
+        self.assertTrue(sender.wait_until_idle(timeout=1))
+        self.assertEqual(sent, [{"text": "A"}, {"text": "C"}])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -12,6 +12,7 @@ from app.preferences import UserPreferences
 from app.network import NetworkServer
 from app.server import ConduitServer
 from app.file_transfer.transport import FileLaneServer
+from app.session import SessionRegistry
 
 
 class DefaultPortTests(unittest.TestCase):
@@ -40,6 +41,20 @@ class DefaultPortTests(unittest.TestCase):
             inspect.signature(FileLaneServer).parameters["port"].default,
             DEFAULT_FILE_PORT,
         )
+
+    def test_two_client_server_composition_adds_no_fourth_listener(self):
+        source = inspect.getsource(ConduitServer.__init__)
+
+        self.assertEqual(source.count("NetworkServer("), 2)
+        self.assertEqual(source.count("FileLaneServer("), 1)
+        self.assertIn("port + 1", source)
+        self.assertIn("port + 2", source)
+
+    def test_session_capacity_and_pending_candidate_timeout_are_bounded(self):
+        parameters = inspect.signature(SessionRegistry).parameters
+
+        self.assertEqual(parameters["capacity"].default, 2)
+        self.assertEqual(parameters["candidate_timeout"].default, 15.0)
 
 
 if __name__ == "__main__":

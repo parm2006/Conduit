@@ -13,7 +13,7 @@ from app.file_transfer.models import FileItem, ItemType, Manifest
 from app.file_transfer.receiver import TransferReceiver
 from app.file_transfer.sender import TransferSender
 from app.file_transfer.source import SourceFile
-from app.session import SessionCoordinator
+from app.session import SessionRegistry
 
 from app.file_transfer.protocol import FrameError, encode_frame
 from app.file_transfer.protocol import AuthenticationError, SessionAuthenticator
@@ -50,8 +50,12 @@ class FragmentedSocket:
 
 class TransportTests(unittest.TestCase):
     def test_closing_server_revokes_pending_control_session_file_token(self):
-        coordinator = SessionCoordinator("secret")
-        offer = coordinator.authenticate_control("secret")
+        coordinator = SessionRegistry("secret")
+        offer = coordinator.authenticate_control(
+            "secret",
+            peer_identity="device-a",
+            windows_name="DeviceA",
+        )
         server = FileLaneServer(
             identity=self.identity, host="127.0.0.1", port=0,
             coordinator=coordinator,
@@ -65,7 +69,7 @@ class TransportTests(unittest.TestCase):
             ).hexdigest()
         try:
             with self.assertRaises(Exception):
-                FileLaneClient().connect(
+                FileLaneClient(peer_identity="device-a").connect(
                     "127.0.0.1", server.port, fingerprint,
                     offer.file_token, session_id=offer.session_id,
                 )
@@ -120,14 +124,18 @@ class TransportTests(unittest.TestCase):
             authenticate_server_connection(wrong, authenticator, "expected")
 
     def test_file_lane_rejects_wrong_peer_without_consuming_token(self):
-        coordinator = SessionCoordinator("secret")
+        coordinator = SessionRegistry("secret")
         offer = coordinator.authenticate_control(
-            "secret", peer_address="192.0.2.10"
+            "secret",
+            peer_identity="device-a",
+            windows_name="DeviceA",
+            peer_address="192.0.2.10",
         )
         frame = encode_frame({
             "type": "authenticate",
             "token": offer.file_token,
             "session_id": offer.session_id,
+            "peer_identity": "device-a",
         })
 
         with self.assertRaises(AuthenticationError):
@@ -184,9 +192,12 @@ class TransportTests(unittest.TestCase):
             server.stop()
 
     def test_tls_file_server_rejects_another_source_without_consuming_token(self):
-        coordinator = SessionCoordinator("secret")
+        coordinator = SessionRegistry("secret")
         offer = coordinator.authenticate_control(
-            "secret", peer_address="127.0.0.1"
+            "secret",
+            peer_identity="device-a",
+            windows_name="DeviceA",
+            peer_address="127.0.0.1",
         )
         server = FileLaneServer(
             identity=self.identity,
@@ -208,8 +219,8 @@ class TransportTests(unittest.TestCase):
             sock.connect(address)
             return sock
 
-        wrong = FileLaneClient()
-        rightful = FileLaneClient()
+        wrong = FileLaneClient(peer_identity="device-a")
+        rightful = FileLaneClient(peer_identity="device-a")
         try:
             with patch(
                 "app.file_transfer.transport.socket.create_connection",

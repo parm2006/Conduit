@@ -4,7 +4,6 @@ import hashlib
 import json
 import logging
 import os
-import select
 import socket
 import ssl
 import struct
@@ -15,7 +14,12 @@ from enum import Enum
 from app.crypto import load_identity
 from app.ports import DEFAULT_BASE_PORT
 from app.safe_errors import error_name, public_error_message
-from app.session import SessionAuthenticationError, SessionCoordinator
+from app.machine_identity import windows_machine_id
+from app.session import (
+    AdmissionOutcome,
+    SessionAuthenticationError,
+    SessionRegistry,
+)
 from app.trust import PeerTrustStore, PendingPeerTrust
 
 
@@ -62,6 +66,10 @@ class SecureConnectionFailed(ConnectionError):
 
 
 class SecureLaneAuthenticationFailed(ConnectionError):
+    safe_for_user = True
+
+
+class ServerAtCapacity(ConnectionError):
     safe_for_user = True
 
 
@@ -306,7 +314,65 @@ class NetworkNode:
             pass
 
 
-class NetworkServer(NetworkNode):
+class _ServerPeerConnection(NetworkNode):
+    def __init__(
+        self,
+        owner,
+        session_id,
+        peer_identity,
+        address,
+        candidate_socket=None,
+    ):
+        super().__init__(
+            heartbeat_interval=owner.heartbeat_interval,
+            heartbeat_timeout=owner.heartbeat_timeout,
+        )
+        self.owner = owner
+        self.session_id = session_id
+        self.peer_identity = peer_identity
+        self.address = address
+        self._candidate_socket = candidate_socket
+        self._candidate_close_requested = False
+
+    def _attach_socket(self, conn):
+        self._candidate_socket = None
+        self._candidate_close_requested = False
+        return super()._attach_socket(conn)
+
+    def disconnect(self):
+        disconnected = super().disconnect()
+        candidate, self._candidate_socket = self._candidate_socket, None
+        if candidate is not None:
+            self._candidate_socket = candidate
+            self._candidate_close_requested = True
+            return True
+        return disconnected
+
+    def close_candidate_socket(self):
+        candidate, self._candidate_socket = self._candidate_socket, None
+        self._candidate_close_requested = False
+        if candidate is None:
+            return False
+        self._close_socket(candidate)
+        return True
+
+    def trigger_callbacks(self, event_type, data):
+        payload = dict(data)
+        payload["session_id"] = self.session_id
+        payload["peer_identity"] = self.peer_identity
+        payload["addr"] = self.address
+        self.owner._trigger_callbacks(event_type, payload)
+
+    def _disconnect_socket(self, conn, generation):
+        disconnected = super()._disconnect_socket(conn, generation)
+        if disconnected:
+            self.owner._connection_disconnected(self)
+        return disconnected
+
+
+class NetworkServer:
+    _close_socket = staticmethod(NetworkNode._close_socket)
+
     def __init__(
         self,
         password,
@@ -319,7 +385,6 @@ class NetworkServer(NetworkNode):
         handshake_timeout=3.0,
         auth_timeout=120.0,
     ):
-        super().__init__()
         if role not in {"control", "data"}:
             raise ValueError("network server role must be control or data")
         self.is_server = True
@@ -327,10 +392,12 @@ class NetworkServer(NetworkNode):
         self.host = host
         self.port = port
         self.role = role
-        self.coordinator = coordinator or SessionCoordinator(password)
+        self.coordinator = coordinator or SessionRegistry(password)
         self.identity = identity or load_identity()
         self.handshake_timeout = float(handshake_timeout)
         self.auth_timeout = float(auth_timeout)
+        self.heartbeat_interval = 2.0
+        self.heartbeat_timeout = 6.0
         self.server_sock = None
         self.accept_thread = None
         self._running = False
@@ -338,9 +405,9 @@ class NetworkServer(NetworkNode):
         self._candidate_slots = threading.BoundedSemaphore(16)
         self._candidate_lock = threading.Lock()
         self._candidate_sockets = set()
-        self.client_addr = None
-        self.session_id = None
-        self.session_offer = None
+        self.callbacks = {}
+        self.connections = {}
+        self._connections_lock = threading.RLock()
         self._admission_lock = threading.Lock()
         self.ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
         self.ssl_context.minimum_version = ssl.TLSVersion.TLSv1_2
@@ -349,6 +416,74 @@ class NetworkServer(NetworkNode):
             keyfile=self.identity.key_path,
             password=self.identity.password,
         )
+
+    @property
+    def connected(self):
+        with self._connections_lock:
+            return any(connection.connected for connection in self.connections.values())
+
+    @property
+    def authenticated(self):
+        return self.connected
+
+    @property
+    def session_id(self):
+        with self._connections_lock:
+            if len(self.connections) != 1:
+                return None
+            return next(iter(self.connections))
+
+    @property
+    def client_addr(self):
+        with self._connections_lock:
+            if len(self.connections) != 1:
+                return None
+            return next(iter(self.connections.values())).address
+
+    def register_callback(self, event_type, callback):
+        self.callbacks.setdefault(event_type, []).append(callback)
+
+    def _trigger_callbacks(self, event_type, data):
+        for callback in tuple(self.callbacks.get(event_type, ())):
+            try:
+                callback(data)
+            except Exception as error:
+                logger.error(
+                    "Network callback failed for event %s (%s)",
+                    event_type,
+                    error_name(error),
+                )
+
+    def send_message(self, message, session_id=None):
+        with self._connections_lock:
+            if session_id is None:
+                if len(self.connections) != 1:
+                    return False
+                connection = next(iter(self.connections.values()))
+            else:
+                connection = self.connections.get(session_id)
+        return False if connection is None else connection.send_message(message)
+
+    def connection(self, session_id):
+        with self._connections_lock:
+            return self.connections.get(session_id)
+
+    def disconnect(self, session_id=None):
+        with self._connections_lock:
+            if session_id is None:
+                connections = tuple(self.connections.values())
+            else:
+                connection = self.connections.get(session_id)
+                connections = () if connection is None else (connection,)
+        disconnected = False
+        for connection in connections:
+            disconnected = connection.disconnect() or disconnected
+        return disconnected
+
+    def _connection_disconnected(self, connection):
+        with self._connections_lock:
+            if self.connections.get(connection.session_id) is connection:
+                self.connections.pop(connection.session_id, None)
 
     def start(self):
         try:
@@ -431,59 +566,126 @@ class NetworkServer(NetworkNode):
                 if self.role == "control":
                     if request.get("type") != "auth":
                         raise SessionAuthenticationError("control authentication is required")
-                    offer = self.coordinator.authenticate_control(
-                        request.get("password"), peer_address=address[0]
+                    connection = _ServerPeerConnection(
+                        self,
+                        None,
+                        request.get("peer_identity"),
+                        address,
+                        candidate_socket=secure,
                     )
+                    offer = self.coordinator.authenticate_control(
+                        request.get("password"),
+                        peer_identity=request.get("peer_identity"),
+                        windows_name=request.get("windows_name"),
+                        peer_address=address[0],
+                        lane=connection,
+                    )
+                    if offer.outcome is AdmissionOutcome.PENDING:
+                        connection.session_id = offer.session_id
+                        pending_message = {
+                            "type": "auth_pending",
+                            "candidate_id": offer.session_id,
+                            "deadline": offer.deadline,
+                            "color": offer.color,
+                            "label": offer.label,
+                            "windows_name": offer.windows_name,
+                            "peer_identity": offer.peer_identity,
+                        }
+                        _write_message(secure, pending_message)
+                        connection.trigger_callbacks(
+                            "candidate_pending",
+                            pending_message,
+                        )
+                        self._admission_lock.release()
+                        try:
+                            resolution = self.coordinator.wait_candidate_resolution(
+                                offer.session_id,
+                                self.coordinator.candidate_timeout + 0.25,
+                            )
+                        finally:
+                            self._admission_lock.acquire()
+                        if resolution is None:
+                            self.coordinator.expire()
+                            resolution = self.coordinator.take_candidate_resolution(
+                                offer.session_id
+                            )
+                        if (
+                            not self._running
+                            or server_generation != self._server_generation
+                        ):
+                            connection.close_candidate_socket()
+                            return
+                        if (
+                            resolution is None
+                            or resolution.outcome is not AdmissionOutcome.ADMITTED
+                        ):
+                            try:
+                                _write_message(
+                                    secure,
+                                    {
+                                        "type": "auth_rejected",
+                                        "reason": (
+                                            "timeout"
+                                            if resolution is not None
+                                            and resolution.outcome
+                                            is AdmissionOutcome.TIMED_OUT
+                                            else "rejected"
+                                        ),
+                                    },
+                                )
+                            except Exception:
+                                pass
+                            connection.close_candidate_socket()
+                            return
+                        offer = resolution
+                        connection.session_id = offer.session_id
+                    elif offer.outcome is AdmissionOutcome.REJECTED:
+                        _write_message(
+                            secure,
+                            {"type": "auth_rejected", "reason": "busy"},
+                        )
+                        self._close_socket(secure)
+                        return
                     response = {
                         "type": "auth_success",
                         "session_id": offer.session_id,
                         "data_token": offer.data_token,
                         "file_token": offer.file_token,
                     }
+                    if getattr(offer, "color", None) is not None:
+                        response["color"] = offer.color
+                    if getattr(offer, "label", None) is not None:
+                        response["label"] = offer.label
                     session_id = offer.session_id
-                    self.session_offer = offer
-                with self._state_lock:
-                    if self.connected:
-                        stale = False
-                        if self.sock is not None:
-                            try:
-                                r, _, _ = select.select([self.sock], [], [], 0)
-                                if r:
-                                    peek = self.sock.recv(1, socket.MSG_PEEK)
-                                    if not peek:
-                                        stale = True
-                            except Exception:
-                                stale = True
-                        else:
-                            stale = True
-
-                        if stale or self.role == "control":
-                            logger.info("Server: Replacing prior control session with new incoming connection candidate.")
-                            conn_to_close = self.sock
-                            self.sock = None
-                            self.connected = False
-                            self.authenticated = False
-                            self._heartbeat_stop.set()
-                            if conn_to_close:
-                                self._close_socket(conn_to_close)
-                        else:
-                            raise ConnectionError("a peer is already connected")
+                    connection.session_id = session_id
                 if self.role != "control":
                     if request.get("type") != "lane_auth":
                         raise SessionAuthenticationError("lane authentication is required")
                     session_id = request.get("session_id")
-                    self.coordinator.consume_lane(
+                    connection = _ServerPeerConnection(
+                        self,
+                        session_id,
+                        request.get("peer_identity"),
+                        address,
+                        candidate_socket=secure,
+                    )
+                    self.coordinator.bind_lane(
                         request.get("token"),
                         "data",
                         session_id,
+                        peer_identity=request.get("peer_identity"),
                         peer_address=address[0],
+                        lane=connection,
                     )
                     response = {"type": "auth_success", "session_id": session_id}
                 _write_message(secure, response)
                 secure.settimeout(None)
-                generation = self._attach_socket(secure)
-                self.client_addr = address
-                self.session_id = session_id
+                generation = connection._attach_socket(secure)
+                with self._connections_lock:
+                    previous = self.connections.get(session_id)
+                    self.connections[session_id] = connection
+                if previous is not None:
+                    previous.disconnect()
             logger.info(
                 "[server][%s-lane] INCOMING connection authenticated from "
                 "%s:%d (session %s)",
@@ -494,8 +696,13 @@ class NetworkServer(NetworkNode):
             )
             with self._candidate_lock:
                 self._candidate_sockets.discard(secure)
-            self.trigger_callbacks("connected", {"addr": address, "session_id": session_id})
-            self._receive_loop(secure, generation)
+            connection.trigger_callbacks("connected", {})
+            connection.receive_thread = threading.Thread(
+                target=connection._receive_loop,
+                args=(secure, generation),
+                daemon=True,
+            )
+            connection.receive_thread.start()
         except SessionAuthenticationError:
             if secure is not None:
                 try:
@@ -528,7 +735,7 @@ class NetworkServer(NetworkNode):
         self.disconnect()
         server, self.server_sock = self.server_sock, None
         if server is not None:
-            self._close_socket(server)
+            NetworkNode._close_socket(server)
 
 
 class NetworkClient(NetworkNode):
@@ -546,6 +753,8 @@ class NetworkClient(NetworkNode):
         handshake_timeout=3.0,
         auth_timeout=3.0,
         approval_timeout=120.0,
+        peer_identity=None,
+        windows_name=None,
     ):
         super().__init__()
         if role not in {"control", "data"}:
@@ -562,6 +771,8 @@ class NetworkClient(NetworkNode):
         self.handshake_timeout = float(handshake_timeout)
         self.auth_timeout = float(auth_timeout)
         self.approval_timeout = float(approval_timeout)
+        self.peer_identity = peer_identity or windows_machine_id()
+        self.windows_name = windows_name or socket.gethostname()
         self.host = None
         self.port = None
         self.session_info = None
@@ -579,6 +790,7 @@ class NetworkClient(NetworkNode):
             raw = None
             secure = None
             reported = False
+            candidate_pending_seen = False
 
             def report(success, error):
                 nonlocal reported
@@ -624,7 +836,12 @@ class NetworkClient(NetworkNode):
                                     raise PairingDeclined("Pairing was declined.")
                                 pending.approve()
                                 self._pending_trust = pending
-                            request = {"type": "auth", "password": self.password}
+                            request = {
+                                "type": "auth",
+                                "password": self.password,
+                                "peer_identity": self.peer_identity,
+                                "windows_name": self.windows_name,
+                            }
                         else:
                             if not self.expected_fingerprint or fingerprint != self.expected_fingerprint:
                                 raise PeerIdentityChanged("secondary lane certificate does not match control")
@@ -632,11 +849,22 @@ class NetworkClient(NetworkNode):
                                 "type": "lane_auth",
                                 "token": self.lane_token,
                                 "session_id": self.session_id,
+                                "peer_identity": self.peer_identity,
                             }
                         self._set_phase(ConnectionPhase.AUTHENTICATING)
                         secure.settimeout(self.auth_timeout)
                         _write_message(secure, request)
                         response = _read_message(secure)
+                        if response.get("type") == "auth_pending":
+                            candidate_pending_seen = True
+                            self.trigger_callbacks("candidate_pending", response)
+                            secure.settimeout(max(self.auth_timeout, 16.0))
+                            response = _read_message(secure)
+                            if response.get("type") == "auth_rejected":
+                                self.trigger_callbacks("candidate_closed", response)
+                                raise ServerAtCapacity(
+                                    "The Server already has two Clients. The connection was not accepted."
+                                )
                         if response.get("type") == "auth_failure":
                             if self.role == "control":
                                 raise IncorrectPassword(
@@ -647,6 +875,8 @@ class NetworkClient(NetworkNode):
                             )
                         if response.get("type") != "auth_success":
                             raise SessionAuthenticationError("authentication was not acknowledged")
+                        if candidate_pending_seen:
+                            self.trigger_callbacks("candidate_admitted", response)
                         break
                     except (SessionAuthenticationError, IncorrectPassword, PairingDeclined, PeerIdentityChanged):
                         raise
@@ -657,7 +887,11 @@ class NetworkClient(NetworkNode):
                             self._close_socket(secure)
                         raw = None
                         secure = None
-                        if attempt < max_attempts - 1 and self.role == "control":
+                        if (
+                            attempt < max_attempts - 1
+                            and self.role == "control"
+                            and not candidate_pending_seen
+                        ):
                             logger.warning("[%s-lane] Connection attempt %d failed (%s); retrying in 0.4s...", self.role, attempt + 1, err)
                             time.sleep(0.4)
                             continue

@@ -789,6 +789,12 @@ class ReleaseDocumentationTests(unittest.TestCase):
             "Uninstall",
             "firewall rule",
             "removes old release outputs before compilation",
+            "up to two Clients",
+            "Windows machine name",
+            "15 seconds",
+            "Apply",
+            "newest clipboard",
+            "on-paste file relay",
         )
         for marker in required:
             with self.subTest(marker=marker):

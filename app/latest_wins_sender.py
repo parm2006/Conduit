@@ -16,6 +16,7 @@ class LatestWinsSender:
         self._condition = threading.Condition()
         self._pending = None
         self._sending = False
+        self._paused = False
         self._stopped = False
         self._worker = threading.Thread(target=self._run, daemon=True)
         self._worker.start()
@@ -39,6 +40,21 @@ class LatestWinsSender:
                 self._condition.wait(remaining)
             return True
 
+    def pause(self):
+        with self._condition:
+            if self._stopped:
+                return False
+            self._paused = True
+            return True
+
+    def resume(self):
+        with self._condition:
+            if self._stopped:
+                return False
+            self._paused = False
+            self._condition.notify_all()
+            return True
+
     def stop(self):
         with self._condition:
             self._stopped = True
@@ -50,7 +66,10 @@ class LatestWinsSender:
     def _run(self):
         while True:
             with self._condition:
-                while self._pending is None and not self._stopped:
+                while (
+                    (self._pending is None or self._paused)
+                    and not self._stopped
+                ):
                     self._condition.wait()
                 if self._stopped:
                     return

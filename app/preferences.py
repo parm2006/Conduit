@@ -81,6 +81,9 @@ class UserPreferences:
             ) from error
 
     def save_active_topology(self, topology):
+        if topology is None:
+            self._save_value("active_topology", None)
+            return
         machines = []
         for placed in topology.machines:
             displays = []

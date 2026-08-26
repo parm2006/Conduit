@@ -244,6 +244,15 @@ class PreferencesTests(unittest.TestCase):
             loaded = UserPreferences(root).load_active_topology()
 
             self.assertEqual(loaded, active)
+
+    def test_active_topology_can_be_cleared_without_replacing_other_preferences(self):
+        with tempfile.TemporaryDirectory() as root:
+            store = UserPreferences(root)
+            store.save_role("server")
+            store.save_active_topology(None)
+
+            self.assertIsNone(store.load_active_topology())
+            self.assertEqual(store.load_role(), "server")
             self.assertEqual(UserPreferences(root).load_role(), "server")
 
     def test_legacy_position_seeds_a_draft_only_when_no_new_topology_exists(self):

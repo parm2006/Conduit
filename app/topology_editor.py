@@ -159,6 +159,43 @@ class TopologyEditorState:
         )
         self.invalid_machine_ids = ()
 
+    def remove_client(self, machine_id):
+        if machine_id == self.draft.server_id:
+            return None
+        removed = next(
+            (
+                placed
+                for placed in self.draft.machines
+                if placed.group.machine_id == machine_id
+            ),
+            None,
+        )
+        if removed is None:
+            return None
+        self.draft = DraftTopology(
+            self.draft.server_id,
+            tuple(
+                placed
+                for placed in self.draft.machines
+                if placed.group.machine_id != machine_id
+            ),
+        )
+        self._client_colors.pop(machine_id, None)
+        self.invalid_machine_ids = ()
+        return removed
+
+    def set_client_color(self, machine_id, color):
+        if (
+            machine_id == self.draft.server_id
+            or not any(
+                placed.group.machine_id == machine_id
+                for placed in self.draft.machines
+            )
+        ):
+            return False
+        self._client_colors[machine_id] = color
+        return True
+
     def client_color(self, machine_id):
         return self._client_colors[machine_id]
 
@@ -261,6 +298,16 @@ class TopologyEditor(ctk.CTkFrame):
     def remove_clients_from_draft(self):
         self.state.remove_clients_from_draft()
         self._render()
+
+    def remove_client(self, machine_id):
+        removed = self.state.remove_client(machine_id)
+        self._render()
+        return removed
+
+    def set_client_color(self, machine_id, color):
+        changed = self.state.set_client_color(machine_id, color)
+        self._render()
+        return changed
 
     def refresh_machine(self, group):
         refreshed = self.state.refresh_machine(group)

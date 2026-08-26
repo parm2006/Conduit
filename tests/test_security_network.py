@@ -10,9 +10,9 @@ from app.crypto import IdentityStore
 from app.network import (
     ConnectionPhase, IncorrectPassword, NetworkClient, NetworkNode,
     NetworkServer, PairingTimeout, PeerIdentityChanged, ServerUnavailable,
-    _tls_client_context,
+    _ServerPeerConnection, _tls_client_context,
 )
-from app.session import SessionCoordinator
+from app.session import CandidateDecision, SessionRegistry
 from app.trust import PeerTrustStore
 
 
@@ -41,6 +41,31 @@ class FakeSocket:
 
 
 class NetworkGenerationTests(unittest.TestCase):
+    def test_server_callback_identity_overwrites_claimed_wire_identity(self):
+        captured = []
+
+        class Owner:
+            heartbeat_interval = 2
+            heartbeat_timeout = 6
+
+            def _trigger_callbacks(self, event_type, data):
+                captured.append((event_type, data))
+
+        connection = _ServerPeerConnection(
+            Owner(),
+            "real-session",
+            "real-machine",
+            ("192.0.2.1", 1234),
+        )
+
+        connection.trigger_callbacks("clipboard_sync", {
+            "session_id": "spoofed-session",
+            "peer_identity": "spoofed-machine",
+        })
+
+        self.assertEqual(captured[0][1]["session_id"], "real-session")
+        self.assertEqual(captured[0][1]["peer_identity"], "real-machine")
+
     def test_pinned_tls_context_does_not_load_the_windows_ca_store(self):
         with patch(
             "app.network.ssl.create_default_context",
@@ -95,7 +120,8 @@ class SecureControlConnectionTests(unittest.TestCase):
             legacy_root=False,
             protector=FakeProtector(),
         ).load_or_create()
-        self.coordinator = SessionCoordinator("secret")
+        self.coordinator = SessionRegistry("secret")
+        self._client_number = 0
         self.server = NetworkServer(
             "secret",
             "127.0.0.1",
@@ -124,6 +150,9 @@ class SecureControlConnectionTests(unittest.TestCase):
             handshake_timeout=1.0,
             auth_timeout=1.0,
         )
+        self._client_number += 1
+        client.peer_identity = f"test-device-{self._client_number}"
+        client.windows_name = f"TestPC{self._client_number}"
         client.connect(
             "127.0.0.1",
             self.server.port,
@@ -239,6 +268,131 @@ class SecureControlConnectionTests(unittest.TestCase):
                 bad.disconnect()
         finally:
             good.disconnect()
+
+    def test_control_listener_keeps_two_authenticated_connections(self):
+        first, first_result = self.connect()
+        second, second_result = self.connect()
+        try:
+            self.assertEqual(first_result, (True, None))
+            self.assertEqual(second_result, (True, None))
+            connections = getattr(self.server, "connections", {})
+            self.assertEqual(
+                set(connections),
+                {
+                    first.session_info["session_id"],
+                    second.session_info["session_id"],
+                },
+            )
+            self.assertTrue(first.connected)
+            self.assertTrue(second.connected)
+        finally:
+            second.disconnect()
+            first.disconnect()
+
+    def test_third_control_candidate_waits_for_an_explicit_reject(self):
+        first, first_result = self.connect()
+        second, second_result = self.connect()
+        pending_seen = threading.Event()
+        server_pending_seen = threading.Event()
+        finished = threading.Event()
+        result = []
+        third = NetworkClient(
+            "secret",
+            trust_store=self.trust,
+            fingerprint_approval=lambda fingerprint, peer: True,
+            auth_timeout=2.0,
+            peer_identity="third-device",
+            windows_name="ThirdPC",
+        )
+        third.register_callback(
+            "candidate_pending",
+            lambda data: pending_seen.set(),
+        )
+        self.server.register_callback(
+            "candidate_pending",
+            lambda data: server_pending_seen.set(),
+        )
+        try:
+            self.assertEqual(first_result, (True, None))
+            self.assertEqual(second_result, (True, None))
+            third.connect(
+                "127.0.0.1",
+                self.server.port,
+                lambda success, error: (
+                    result.append((success, error)),
+                    finished.set(),
+                ),
+            )
+            self.assertTrue(pending_seen.wait(1))
+            self.assertTrue(server_pending_seen.is_set())
+            pending = self.coordinator.pending_candidate()
+            self.assertIsNotNone(pending)
+
+            self.coordinator.resolve_candidate(CandidateDecision.REJECT)
+
+            self.assertTrue(finished.wait(1))
+            self.assertFalse(result[0][0])
+            self.assertIsNone(self.coordinator.pending_candidate())
+            self.assertEqual(len(self.server.connections), 2)
+        finally:
+            third.disconnect()
+            second.disconnect()
+            first.disconnect()
+
+    def test_selected_third_candidate_reports_admission_and_replaces_exact_session(self):
+        first, first_result = self.connect()
+        second, second_result = self.connect()
+        pending_seen = threading.Event()
+        admitted_seen = threading.Event()
+        finished = threading.Event()
+        result = []
+        third = NetworkClient(
+            "secret",
+            trust_store=self.trust,
+            fingerprint_approval=lambda fingerprint, peer: True,
+            auth_timeout=2.0,
+            peer_identity="third-device",
+            windows_name="ThirdPC",
+        )
+        third.register_callback(
+            "candidate_pending",
+            lambda data: pending_seen.set(),
+        )
+        third.register_callback(
+            "candidate_admitted",
+            lambda data: admitted_seen.set(),
+        )
+        try:
+            self.assertEqual(first_result, (True, None))
+            self.assertEqual(second_result, (True, None))
+            third.connect(
+                "127.0.0.1",
+                self.server.port,
+                lambda success, error: (
+                    result.append((success, error)),
+                    finished.set(),
+                ),
+            )
+            self.assertTrue(pending_seen.wait(1))
+            pending = self.coordinator.pending_candidate()
+            replacement = self.coordinator.resolve_candidate(
+                CandidateDecision.REPLACE,
+                replace_session_id=first.session_info["session_id"],
+            )
+
+            self.assertTrue(finished.wait(1))
+            self.assertEqual(result, [(True, None)])
+            self.assertTrue(admitted_seen.is_set())
+            self.assertEqual(third.session_info["session_id"], replacement.session_id)
+            self.assertEqual(
+                set(self.server.connections),
+                {second.session_info["session_id"], replacement.session_id},
+            )
+            self.assertFalse(first.connected)
+        finally:
+            third.disconnect()
+            second.disconnect()
+            first.disconnect()
 
     def test_refused_connection_is_actionable_and_does_not_expose_os_text(self):
         event = threading.Event()
@@ -363,6 +517,8 @@ class SecureControlConnectionTests(unittest.TestCase):
                 handshake_timeout=1.0,
                 auth_timeout=1.0,
             )
+            wrong_client.peer_identity = control_client.peer_identity
+            wrong_client.windows_name = control_client.windows_name
             with patch(
                 "app.network.socket.create_connection",
                 side_effect=connect_from_other_peer,
@@ -390,6 +546,8 @@ class SecureControlConnectionTests(unittest.TestCase):
                 handshake_timeout=1.0,
                 auth_timeout=1.0,
             )
+            rightful_client.peer_identity = control_client.peer_identity
+            rightful_client.windows_name = control_client.windows_name
             rightful_finished = threading.Event()
             rightful_result = []
             rightful_client.connect(

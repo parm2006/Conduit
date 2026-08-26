@@ -1,8 +1,11 @@
 from dataclasses import dataclass
+import logging
+import threading
 
 from app.display_topology import Display, MachineDisplayGroup, NativeRect
 
 EDD_GET_DEVICE_INTERFACE_NAME = 0x00000001
+logger = logging.getLogger(__name__)
 
 
 class DisplayDiscoveryError(RuntimeError):
@@ -50,6 +53,109 @@ class WindowsDisplayDiscovery:
             primary=record.primary,
             enabled=record.enabled,
         )
+
+
+class DisplayChangeMonitor:
+    """Poll Windows display inventory without changing active routing."""
+
+    def __init__(
+        self,
+        discovery,
+        machine_id,
+        windows_name,
+        on_change,
+        *,
+        interval=1.0,
+    ):
+        self.discovery = discovery
+        self.machine_id = machine_id
+        self.windows_name = windows_name
+        self.on_change = on_change
+        self.interval = float(interval)
+        self._lock = threading.RLock()
+        self._stop_event = threading.Event()
+        self._thread = None
+        self._baseline = None
+
+    @property
+    def running(self):
+        thread = self._thread
+        return thread is not None and thread.is_alive()
+
+    def start(self, initial_group=None):
+        with self._lock:
+            if self.running:
+                return False
+            if initial_group is None:
+                initial_group = self.discovery.discover(
+                    self.machine_id,
+                    self.windows_name,
+                )
+            self._baseline = initial_group
+            self._stop_event.clear()
+            self._thread = threading.Thread(
+                target=self._run,
+                name="ConduitDisplayMonitor",
+                daemon=True,
+            )
+            self._thread.start()
+            return True
+
+    def update_baseline(self, group):
+        with self._lock:
+            self._baseline = group
+
+    def stop(self):
+        with self._lock:
+            thread = self._thread
+            if thread is None:
+                return False
+            self._stop_event.set()
+        if thread is not threading.current_thread():
+            thread.join(timeout=max(1.0, self.interval * 2))
+        with self._lock:
+            if self._thread is thread and not thread.is_alive():
+                self._thread = None
+        return True
+
+    def _run(self):
+        try:
+            while not self._stop_event.wait(self.interval):
+                try:
+                    group = self.discovery.discover(
+                        self.machine_id,
+                        self.windows_name,
+                    )
+                except DisplayDiscoveryError as error:
+                    logger.warning(
+                        "Could not poll display inventory (%s)",
+                        type(error).__name__,
+                    )
+                    continue
+                with self._lock:
+                    previous = self._baseline
+                    if group == previous:
+                        continue
+                    self._baseline = group
+                try:
+                    delivered = self.on_change(group)
+                    if delivered is False:
+                        with self._lock:
+                            if self._baseline == group:
+                                self._baseline = previous
+                except Exception as error:
+                    with self._lock:
+                        if self._baseline == group:
+                            self._baseline = previous
+                    logger.error(
+                        "Display change callback failed (%s)",
+                        type(error).__name__,
+                        exc_info=True,
+                    )
+        finally:
+            with self._lock:
+                if self._thread is threading.current_thread():
+                    self._thread = None
 
 
 def display_group_to_message(group):

@@ -48,7 +48,31 @@ def topology_toast_rect(group, window_size):
     )
 
 
+def display_change_warning_view(group):
+    enabled = tuple(display for display in group.displays if display.enabled)
+    noun = "display" if len(enabled) == 1 else "displays"
+    return TopologyToastView(
+        title=f"{group.windows_name} displays changed",
+        details=(
+            f"{len(enabled)} {noun} detected · Apply to rebuild mouse routing"
+        ),
+        color="#D97706",
+        hide_after_ms=5000,
+    )
+
+
+def connection_lost_warning_view(windows_name):
+    return TopologyToastView(
+        title=f"{windows_name} disconnected",
+        details="Removed from the draft · Active routing stays unchanged",
+        color="#D97706",
+        hide_after_ms=5000,
+    )
+
+
 class TopologyIdentificationToast:
+    DETAILS_WRAP_LENGTH = TOAST_WIDTH - 32
+
     def __init__(self, root, on_disconnect=None):
         self.root = root
         self.on_disconnect = on_disconnect
@@ -67,7 +91,13 @@ class TopologyIdentificationToast:
             font=ctk.CTkFont(size=15, weight="bold"),
         )
         self.title.pack(fill="x", padx=16, pady=(12, 0))
-        self.details = ctk.CTkLabel(self.body, text="", anchor="w")
+        self.details = ctk.CTkLabel(
+            self.body,
+            text="",
+            anchor="w",
+            justify="left",
+            wraplength=self.DETAILS_WRAP_LENGTH,
+        )
         self.details.pack(fill="x", padx=16, pady=(2, 12))
         if on_disconnect is not None:
             self.disconnect = ctk.CTkButton(
@@ -107,4 +137,67 @@ class TopologyIdentificationToast:
 
     def hide(self):
         self.group = None
+        self.window.withdraw()
+
+
+class DisplayChangeWarningToast:
+    WINDOW_SIZE = (TOAST_WIDTH, TOAST_HEIGHT)
+    DETAILS_WRAP_LENGTH = TopologyIdentificationToast.DETAILS_WRAP_LENGTH
+
+    def __init__(self, root):
+        self.root = root
+        self._hide_after = None
+        self.window = ctk.CTkToplevel(root)
+        self.window.withdraw()
+        self.window.overrideredirect(True)
+        self.window.attributes("-topmost", True)
+        self.window.geometry(f"{TOAST_WIDTH}x{TOAST_HEIGHT}")
+        self.body = ctk.CTkFrame(self.window, corner_radius=12)
+        self.body.pack(fill="both", expand=True)
+        self.title = ctk.CTkLabel(
+            self.body,
+            text="",
+            anchor="w",
+            font=ctk.CTkFont(size=15, weight="bold"),
+        )
+        self.title.pack(fill="x", padx=16, pady=(12, 0))
+        self.details = ctk.CTkLabel(
+            self.body,
+            text="",
+            anchor="w",
+            justify="left",
+            wraplength=self.DETAILS_WRAP_LENGTH,
+        )
+        self.details.pack(fill="x", padx=16, pady=(2, 12))
+
+    def show(self, group):
+        self._show_view(display_change_warning_view(group))
+
+    def show_connection_lost(self, windows_name):
+        self._show_view(connection_lost_warning_view(windows_name))
+
+    def _show_view(self, view):
+        if self._hide_after is not None:
+            self.root.after_cancel(self._hide_after)
+            self._hide_after = None
+        self.body.configure(fg_color=view.color)
+        self.title.configure(text=view.title, fg_color=view.color)
+        self.details.configure(text=view.details, fg_color=view.color)
+        self.window.geometry(f"{TOAST_WIDTH}x{TOAST_HEIGHT}")
+        self.window.deiconify()
+        self.window.update_idletasks()
+        try:
+            input_geometry.place_windows_window_in_work_area(
+                self.window.winfo_id()
+            )
+        except OSError as error:
+            logger.error(
+                "Could not position display warning (%s)",
+                error_name(error),
+            )
+        self.window.lift()
+        self._hide_after = self.root.after(view.hide_after_ms, self.hide)
+
+    def hide(self):
+        self._hide_after = None
         self.window.withdraw()

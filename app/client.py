@@ -26,6 +26,7 @@ from app.global_hotkey import GlobalHotkeyMonitor
 from app.machine_identity import windows_machine_id
 from app.ports import DEFAULT_FILE_PORT
 from app.windows_displays import (
+    DisplayChangeMonitor,
     WindowsDisplayDiscovery,
     display_group_to_message,
 )
@@ -57,6 +58,12 @@ class ConduitClient:
         self.machine_id = windows_machine_id()
         self.display_discovery = WindowsDisplayDiscovery()
         self.display_group = None
+        self.display_monitor = DisplayChangeMonitor(
+            self.display_discovery,
+            self.machine_id,
+            self.windows_name,
+            self._on_display_group_changed,
+        )
         self.pending_topology = None
         self.active_topology_config = None
         self.committed_topology = None
@@ -89,7 +96,7 @@ class ConduitClient:
         self._paste_route_lock = threading.RLock()
         self.global_hotkey_monitor = GlobalHotkeyMonitor(
             on_emergency_exit=self._request_app_shutdown,
-            on_reload_connection=self.reload_connection,
+            on_reload_connection=self.request_cluster_reload,
         )
         self.is_active = False
         self.clipboard_offer_state = ClipboardOfferState("client")
@@ -159,9 +166,17 @@ class ConduitClient:
         self.disconnect()
 
     def prepare_app_shutdown(self):
+        self._release_all_injected_input()
+
+    def _release_all_injected_input(self):
         input_handler = getattr(self, "input_handler", None)
-        if input_handler is not None:
-            input_handler.release_all_injected_keys()
+        if input_handler is None:
+            return True
+        release = (
+            getattr(input_handler, 'release_all_injected_input', None)
+            or input_handler.release_all_injected_keys
+        )
+        return release()
 
     def _get_paste_route_lock(self):
         lock = getattr(self, "_paste_route_lock", None)
@@ -172,6 +187,9 @@ class ConduitClient:
 
     def on_disconnected(self, data):
         logger.info("Disconnected from Server.")
+        monitor = getattr(self, "display_monitor", None)
+        if monitor is not None:
+            monitor.stop()
         self.pending_topology = None
         self.committed_topology = None
         report_setup_failure = False
@@ -208,7 +226,7 @@ class ConduitClient:
         logger.info("RELOAD CONNECTION TRIGGERED on Client (Ctrl+Shift+Alt+R)! Soft-resetting and auto-reconnecting...")
         if hasattr(self, 'input_handler') and self.input_handler:
             try:
-                self.input_handler.release_all_injected_keys()
+                self._release_all_injected_input()
             except Exception:
                 pass
         
@@ -233,6 +251,16 @@ class ConduitClient:
                 new_client = ConduitClient(password=password)
                 new_client.connect(host, port, callback)
             threading.Thread(target=_auto_reconnect, daemon=True).start()
+
+    def request_cluster_reload(self):
+        self._release_all_injected_input()
+        network = getattr(self, "control_network", None)
+        if network is not None and network.send_message({
+            "type": "reload_connection_request",
+        }):
+            return True
+        self.reload_connection()
+        return False
 
     def set_screen_size(self, w, h):
         self.input_handler.set_screen_size(w, h)
@@ -342,7 +370,8 @@ class ConduitClient:
                 self.clipboard.start()
                 self.hotkey_monitor.start()
                 self.global_hotkey_monitor.start()
-                self.send_display_inventory()
+                if self.send_display_inventory():
+                    self.display_monitor.start(self.display_group)
                 if not self._all_lanes_live():
                     self.clipboard.stop()
                     self.hotkey_monitor.stop()
@@ -363,7 +392,7 @@ class ConduitClient:
                 self._report_connect(False, message)
                 return False
 
-    def send_display_inventory(self):
+    def send_display_inventory(self, group=None, reason=None):
         try:
             discovery = getattr(self, "display_discovery", None)
             if discovery is None:
@@ -371,19 +400,29 @@ class ConduitClient:
                 self.display_discovery = discovery
             machine_id = getattr(self, "machine_id", socket.gethostname())
             windows_name = getattr(self, "windows_name", socket.gethostname())
-            self.display_group = discovery.discover(machine_id, windows_name)
-            return self.control_network.send_message(
-                {
-                    "type": "display_inventory",
-                    "inventory": display_group_to_message(self.display_group),
-                }
+            self.display_group = group or discovery.discover(
+                machine_id,
+                windows_name,
             )
+            monitor = getattr(self, "display_monitor", None)
+            if monitor is not None:
+                monitor.update_baseline(self.display_group)
+            message = {
+                "type": "display_inventory",
+                "inventory": display_group_to_message(self.display_group),
+            }
+            if reason is not None:
+                message["reason"] = reason
+            return self.control_network.send_message(message)
         except Exception as error:
             logger.error(
                 "Could not send display inventory (%s)",
                 error_name(error),
             )
             return False
+
+    def _on_display_group_changed(self, group):
+        return self.send_display_inventory(group, reason="display_changed")
 
     def _all_lanes_live(self):
         return (
@@ -421,9 +460,10 @@ class ConduitClient:
         )
 
     def disconnect(self, preserve_failure=False, error=None):
-        input_handler = getattr(self, 'input_handler', None)
-        if input_handler is not None:
-            input_handler.release_all_injected_keys()
+        self._release_all_injected_input()
+        monitor = getattr(self, "display_monitor", None)
+        if monitor is not None:
+            monitor.stop()
         if getattr(self, 'is_active', False) and getattr(self, 'control_network', None) and getattr(self.control_network, 'connected', False):
             try:
                 self.control_network.send_message({'type': 'switch_back', 'ratio': 0.5})
@@ -546,7 +586,7 @@ class ConduitClient:
         self.active_topology_config = dict(data)
 
     def on_topology_apply(self, data):
-        self.input_handler.release_all_injected_keys()
+        self._release_all_injected_input()
         self.is_active = False
         version = data.get('version')
         if type(version) is int:
@@ -573,7 +613,10 @@ class ConduitClient:
         version = data.get('version')
         if pending is not None and version == pending.get('version'):
             self.pending_topology = None
-            return True
+            return self.control_network.send_message({
+                'type': 'topology_rollback_ack',
+                'version': version,
+            })
         committed = getattr(self, 'committed_topology', None)
         if committed is None or version != committed[0]:
             return False
@@ -584,7 +627,10 @@ class ConduitClient:
             self.input_handler.set_client_topology_edge(None)
         else:
             self.on_layout_config(previous)
-        return True
+        return self.control_network.send_message({
+            'type': 'topology_rollback_ack',
+            'version': version,
+        })
 
     def on_topology_finalize(self, data):
         committed = getattr(self, 'committed_topology', None)
@@ -594,18 +640,64 @@ class ConduitClient:
         return True
 
     def on_switch(self, data):
+        current_topology = getattr(self, 'active_topology_config', None) or {}
+        current_version = current_topology.get(
+            'topology_version',
+            current_topology.get('version'),
+        )
+        incoming_version = data.get('topology_version')
+        if (
+            type(current_version) is int
+            and incoming_version != current_version
+        ):
+            return False
         logger.info("Server switched control to this client.")
         self.is_active = True
         self._apply_clipboard_offer_route()
         direction = data.get('direction')
         ratio = data.get('ratio', 0.5)
+        supplied_scale_x = data.get('scale_x')
+        supplied_scale_y = data.get('scale_y')
+        if isinstance(supplied_scale_x, (int, float)) and supplied_scale_x > 0:
+            self.speed_scale_x = supplied_scale_x
+        if isinstance(supplied_scale_y, (int, float)) and supplied_scale_y > 0:
+            self.speed_scale_y = supplied_scale_y
+
+        edge_regions = []
+        for edge in data.get('destination_edges', ()):
+            if not isinstance(edge, dict):
+                continue
+            edge_source_rect = _message_rect(edge.get('source_rect'))
+            edge_destination_rect = _message_rect(edge.get('destination_rect'))
+            source_side = edge.get('source_side')
+            destination_side_value = edge.get('destination_side')
+            if (
+                edge_source_rect is None
+                or edge_destination_rect is None
+                or source_side not in {'left', 'right', 'top', 'bottom'}
+                or destination_side_value not in {'left', 'right', 'top', 'bottom'}
+            ):
+                continue
+            edge_regions.append(TopologyEdgeRegion(
+                source_machine_id=edge.get('source_machine_id'),
+                source_display_id=edge.get('source_display_id'),
+                source_side=source_side,
+                destination_machine_id=edge.get('destination_machine_id'),
+                destination_display_id=edge.get('destination_display_id'),
+                destination_side=destination_side_value,
+                source_rect=edge_source_rect,
+                destination_rect=edge_destination_rect,
+            ))
+        if edge_regions and hasattr(self.input_handler, 'set_client_topology_edges'):
+            self.input_handler.set_client_topology_edges(edge_regions)
         
         destination_rect = _message_rect(data.get('destination_rect'))
         destination_side = data.get('destination_side')
         source_rect = _message_rect(data.get('source_rect'))
         source_side = data.get('source_side')
         if (
-            destination_rect is not None
+            not edge_regions
+            and destination_rect is not None
             and source_rect is not None
             and destination_side in {'left', 'right', 'top', 'bottom'}
             and source_side in {'left', 'right', 'top', 'bottom'}
@@ -629,7 +721,14 @@ class ConduitClient:
                     destination_rect=source_rect,
                 )
             )
-        if destination_rect is not None and destination_side in {
+        supplied_position = data.get('position')
+        if (
+            isinstance(supplied_position, list)
+            and len(supplied_position) == 2
+            and all(type(value) is int for value in supplied_position)
+        ):
+            position = tuple(supplied_position)
+        elif destination_rect is not None and destination_side in {
             'left', 'right', 'top', 'bottom'
         }:
             position = edge_entry_point(
@@ -645,6 +744,8 @@ class ConduitClient:
                 ratio,
             )
         self.input_handler.inject_position(*position)
+        self.active_topology_config = dict(data)
+        return True
 
     def on_mouse_move(self, data):
         dx = data.get('dx', 0) * self.speed_scale_x
@@ -691,14 +792,17 @@ class ConduitClient:
                 coordinator = getattr(self, "paste_coordinator", None)
                 if coordinator is not None:
                     coordinator.set_route(None, "client")
-                self.input_handler.release_all_injected_keys()
+                self._release_all_injected_input()
                 message = {
                     'type': 'switch_back',
-                    'ratio': ratio
+                    'ratio': ratio,
                 }
                 if region is not None:
                     message.update(
                         {
+                            'source_machine_id': region.source_machine_id,
+                            'source_display_id': region.source_display_id,
+                            'source_side': region.source_side,
                             'destination_display_id': region.destination_display_id,
                             'destination_side': region.destination_side,
                             'destination_rect': [
@@ -709,6 +813,10 @@ class ConduitClient:
                             ],
                         }
                     )
+                topology = getattr(self, 'active_topology_config', None) or {}
+                version = topology.get('topology_version', topology.get('version'))
+                if type(version) is int:
+                    message['topology_version'] = version
                 self.control_network.send_message(message)
 
     def on_local_copy(self, snapshot):
@@ -736,6 +844,15 @@ class ConduitClient:
         offer = work.get("offer")
         if offer is not None:
             payload["offer"] = offer.to_message()
+            source_sequence = offer.sequence
+        else:
+            source_sequence = self._next_clipboard_source_sequence()
+        payload["source_sequence"] = source_sequence
+        payload["source_id"] = getattr(
+            self,
+            "machine_id",
+            getattr(self, "windows_name", "client"),
+        )
         sent = self.data_network is not None and self.data_network.send_message(payload)
         logger.info(
             "Clipboard snapshot sent (role=client formats=%s bytes=%d delivered=%s)",
@@ -746,12 +863,50 @@ class ConduitClient:
         return sent
 
     def on_remote_copy(self, data):
+        if not isinstance(data, dict):
+            return False
+        revision = data.get("cluster_revision")
+        if type(revision) is not int or revision < 1:
+            logger.info("Unversioned clipboard snapshot discarded (role=client)")
+            return False
+        if revision <= getattr(self, "_last_clipboard_cluster_revision", 0):
+            logger.info("Stale clipboard snapshot discarded (role=client)")
+            return False
+        offer_data = data.get("offer")
+        state = self._get_clipboard_offer_state()
+        source_sequence = data.get("source_sequence")
+        kind = "ordinary"
+        if isinstance(offer_data, dict):
+            source_sequence = offer_data.get("sequence", source_sequence)
+            kind = offer_data.get("kind", kind)
+        if not state.accept_cluster(
+            revision,
+            "server",
+            kind,
+            source_sequence,
+            session_id=self._clipboard_session_id(),
+        ):
+            logger.info("Stale clipboard snapshot discarded (role=client)")
+            return False
         payload = self._accepted_clipboard_payload(data)
         if payload is None:
             logger.info("Stale clipboard snapshot discarded (role=client)")
             return False
+        payload = {
+            key: value
+            for key, value in payload.items()
+            if key in {"type", "version", "formats"}
+        }
         logger.info("Clipboard snapshot received (role=client)")
-        return self.clipboard.inject(payload)
+        injected = self.clipboard.inject(payload)
+        if injected is not False:
+            self._last_clipboard_cluster_revision = revision
+        return injected
+
+    def _next_clipboard_source_sequence(self):
+        sequence = getattr(self, "_clipboard_source_sequence", 0) + 1
+        self._clipboard_source_sequence = sequence
+        return sequence
 
     def _accepted_clipboard_payload(self, data):
         offer_data = data.get("offer") if isinstance(data, dict) else None
@@ -786,6 +941,10 @@ class ConduitClient:
         return self.paste_coordinator.set_route(offer, "client")
 
     def on_local_clipboard_offer(self, kind, sequence):
+        self._clipboard_source_sequence = max(
+            sequence,
+            getattr(self, "_clipboard_source_sequence", 0),
+        )
         state = self._get_clipboard_offer_state()
         if state.session_id is None:
             return False
@@ -795,7 +954,19 @@ class ConduitClient:
 
     def on_remote_clipboard_offer(self, data):
         state = self._get_clipboard_offer_state()
-        accepted = state.accept_remote(data)
+        cluster_revision = (
+            data.get("cluster_revision") if isinstance(data, dict) else None
+        )
+        if type(cluster_revision) is int:
+            accepted = state.accept_cluster(
+                cluster_revision,
+                "server",
+                data.get("kind"),
+                data.get("sequence"),
+                session_id=self._clipboard_session_id(),
+            )
+        else:
+            accepted = state.accept_remote(data)
         if accepted:
             self._apply_clipboard_offer_route()
         return accepted

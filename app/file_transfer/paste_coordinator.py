@@ -58,6 +58,7 @@ class ClipboardOfferState:
         self.session_id = None
         self.local_revision = 0
         self.remote_revision = 0
+        self.cluster_revision = 0
         self.current_offer = None
 
     def start_session(self, session_id):
@@ -66,6 +67,7 @@ class ClipboardOfferState:
         self.session_id = session_id
         self.local_revision = 0
         self.remote_revision = 0
+        self.cluster_revision = 0
         self.current_offer = None
 
     def observe_local(self, kind, sequence):
@@ -115,6 +117,38 @@ class ClipboardOfferState:
         ):
             return False
         return self.accept_remote(message)
+
+    def accept_cluster(self, revision, source, kind, sequence, session_id=None):
+        """Install a Server-authoritative offer at an endpoint.
+
+        ``source`` remains endpoint-relative for paste routing (local or remote),
+        while ``revision`` is the global Server receive-order revision.
+        """
+        if self.session_id is None:
+            if not isinstance(session_id, str) or not session_id:
+                raise RuntimeError("clipboard offer session has not started")
+            self.start_session(session_id)
+        if (
+            type(revision) is not int
+            or revision < 1
+            or source not in ENDPOINTS
+            or kind not in OFFER_KINDS
+            or type(sequence) is not int
+            or sequence < 0
+        ):
+            return False
+        if revision <= self.cluster_revision:
+            return False
+        offer = ClipboardOffer(
+            self.session_id,
+            revision,
+            source,
+            kind,
+            sequence,
+        )
+        self.cluster_revision = revision
+        self.current_offer = offer
+        return True
 
     def should_transfer_to(self, destination):
         offer = self.current_offer

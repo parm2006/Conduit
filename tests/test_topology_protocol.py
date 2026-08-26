@@ -72,9 +72,32 @@ class TopologyProtocolTests(unittest.TestCase):
             "ParthSurface",
         )
 
-    def test_client_connection_stays_unroutable_until_topology_is_applied(self):
+    def test_client_display_change_reuses_discovered_group_and_marks_reason(self):
+        client = ConduitClient.__new__(ConduitClient)
+        client.control_network = RecordingNetwork()
+        client.display_group = None
+        client.display_monitor = type(
+            "Monitor",
+            (),
+            {"update_baseline": lambda self, group: None},
+        )()
+        changed = group()
+
+        sent = client._on_display_group_changed(changed)
+
+        self.assertTrue(sent)
+        self.assertIs(client.display_group, changed)
+        self.assertEqual(
+            client.control_network.messages,
+            [{
+                "type": "display_inventory",
+                "inventory": client.control_network.messages[0]["inventory"],
+                "reason": "display_changed",
+            }],
+        )
+
+    def test_client_connection_stays_unroutable_and_scalar_layout_is_rejected(self):
         server = ConduitServer.__new__(ConduitServer)
-        server._active_edge_side = "right"
         server.control_network = RecordingNetwork()
         server.input_handler = Lifecycle()
         server.clipboard = Lifecycle()
@@ -92,17 +115,9 @@ class TopologyProtocolTests(unittest.TestCase):
             [{"type": "display_inventory_request"}],
         )
 
-        server.activate_client_topology("left")
-
-        self.assertEqual(server.input_handler.starts, 1)
-        self.assertEqual(
-            server.control_network.messages[-1]["type"],
-            "layout_config",
-        )
-        self.assertEqual(
-            server.control_network.messages[-1]["position"],
-            "left",
-        )
+        with self.assertRaises(TypeError):
+            server.activate_client_topology("left")
+        self.assertEqual(server.input_handler.starts, 0)
 
     def test_topology_activation_distributes_real_source_and_destination_displays(self):
         server_group = MachineDisplayGroup(
@@ -166,30 +181,33 @@ class TopologyProtocolTests(unittest.TestCase):
         )
         server = ConduitServer.__new__(ConduitServer)
         server._paste_route_lock = None
-        server._active_edge_side = "right"
-        server.switching_to_client = False
-        server.control_network = RecordingNetwork()
-        server.input_handler = type(
-            "Input",
+        calls = []
+        server.input_router = type(
+            "Router",
             (),
             {
-                "stop": lambda self: None,
-                "start_keyboard_capture": lambda self: None,
+                "topology": type("Topology", (), {"version": 2})(),
+                "handle_edge": lambda self, *args, **kwargs: calls.append(
+                    (args, kwargs)
+                ) or True,
             },
         )()
-        server.on_capture_start = None
+        server.file_paste_service = None
         cancelled = []
         server.on_topology_edit_cancel = lambda: cancelled.append(True)
         server._apply_clipboard_offer_route = lambda: None
 
         server.on_edge_hit("left", 0.5, region)
 
-        message = server.control_network.messages[0]
-        self.assertEqual(message["destination_display_id"], "client-primary")
-        self.assertEqual(message["destination_side"], "right")
-        self.assertEqual(message["destination_rect"], [0, 0, 1920, 1080])
-        self.assertEqual(message["source_display_id"], "server-left")
-        self.assertEqual(message["source_rect"], [-2560, 0, 0, 1440])
+        self.assertEqual(
+            calls,
+            [
+                (
+                    ("server", "server-left", "left", 0.5),
+                    {"topology_version": 2},
+                )
+            ],
+        )
         self.assertEqual(cancelled, [True])
 
     def test_client_enters_the_requested_physical_display_at_the_scaled_ratio(self):
@@ -289,38 +307,43 @@ class TopologyProtocolTests(unittest.TestCase):
         self.assertEqual(message["destination_rect"], [0, 0, 1920, 1080])
 
     def test_server_return_warps_into_the_requested_attached_display(self):
-        positions = []
+        calls = []
         server = ConduitServer.__new__(ConduitServer)
         server._paste_route_lock = None
-        server.switching_to_client = True
-        server.pressed_keys = set()
-        server.forwarded_keys = {}
-        server.control_network = RecordingNetwork()
-        server.input_handler = type(
-            "Input",
+        server.input_router = type(
+            "Router",
             (),
             {
-                "screen_width": 1920,
-                "screen_height": 1080,
-                "stop_keyboard_capture": lambda self: None,
-                "inject_position": lambda self, x, y: positions.append((x, y)),
-                "start_edge_detection": lambda self, *args: None,
+                "handle_edge": lambda self, *args, **kwargs: calls.append(
+                    (args, kwargs)
+                ) or True,
             },
         )()
-        server.on_capture_stop = None
-        server._active_edge_side = "left"
         server._apply_clipboard_offer_route = lambda: None
 
         server.on_switch_back(
             {
+                "session_id": "session-client",
+                "peer_identity": "client",
+                "source_display_id": "client-primary",
+                "source_side": "right",
                 "ratio": 0.5,
-                "destination_display_id": "server-left",
-                "destination_side": "left",
-                "destination_rect": [-2560, 0, 0, 1440],
+                "topology_version": 2,
             }
         )
 
-        self.assertEqual(positions, [(-2559, 720)])
+        self.assertEqual(
+            calls,
+            [
+                (
+                    ("client", "client-primary", "right", 0.5),
+                    {
+                        "session_id": "session-client",
+                        "topology_version": 2,
+                    },
+                )
+            ],
+        )
 
     def test_client_apply_releases_input_before_acknowledging_candidate(self):
         events = []
@@ -463,13 +486,21 @@ class TopologyProtocolTests(unittest.TestCase):
         server.input_handler = Input()
         server.pressed_keys = set()
         server.forwarded_keys = {}
-        server.switching_to_client = False
         server.on_capture_stop = None
         server._topology_ack_lock = threading.Lock()
         server._topology_ack_event = None
         server._topology_ack_version = None
         server._topology_commit_ack_event = None
         server._topology_commit_ack_version = None
+
+        class ClipboardHub:
+            def pause_delivery(self):
+                events.append("clipboard-pause")
+
+            def resume_delivery(self):
+                events.append("clipboard-resume")
+
+        server.clipboard_hub = ClipboardHub()
 
         class Network(RecordingNetwork):
             def send_message(self, message):
@@ -496,9 +527,17 @@ class TopologyProtocolTests(unittest.TestCase):
         )
 
         self.assertTrue(completed.wait(1))
-        self.assertLess(events.index(("configure", 3, "server")), events.index(("persist", 3)))
+        self.assertLess(events.index(("persist", 3)), events.index(("configure", 3, "server")))
         self.assertEqual(server.active_topology, candidate)
         self.assertIn(("complete", True), events)
+        self.assertLess(
+            events.index("clipboard-pause"),
+            events.index("clipboard-resume"),
+        )
+        self.assertLess(
+            events.index("clipboard-resume"),
+            events.index(("complete", True)),
+        )
         self.assertIn(
             {"type": "topology_commit", "version": 3},
             server.control_network.messages,
@@ -552,7 +591,6 @@ class TopologyProtocolTests(unittest.TestCase):
         server.input_handler = Input()
         server.pressed_keys = set()
         server.forwarded_keys = {}
-        server.switching_to_client = False
         server.on_capture_stop = None
         server.active_topology = previous
         server._topology_ack_lock = threading.Lock()
@@ -563,6 +601,15 @@ class TopologyProtocolTests(unittest.TestCase):
         server._install_topology = lambda topology: installs.append(
             topology.version
         )
+
+        class ClipboardHub:
+            def pause_delivery(self):
+                outcomes.append("clipboard-pause")
+
+            def resume_delivery(self):
+                outcomes.append("clipboard-resume")
+
+        server.clipboard_hub = ClipboardHub()
 
         class Network(RecordingNetwork):
             def send_message(self, message):
@@ -582,7 +629,10 @@ class TopologyProtocolTests(unittest.TestCase):
 
         self.assertTrue(completed.wait(1))
         self.assertEqual(installs, [2])
-        self.assertEqual(outcomes, [False])
+        self.assertEqual(
+            outcomes,
+            ["clipboard-pause", "clipboard-resume", False],
+        )
         self.assertIn(
             {"type": "topology_rollback", "version": 3},
             server.control_network.messages,

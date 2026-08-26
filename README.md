@@ -1,25 +1,51 @@
 # Conduit v5.1.1
 
 Conduit is a Windows wireless KVM for sharing a mouse, keyboard, rich
-clipboard, and Explorer file pastes between two PCs on the same local network.
+clipboard, and Explorer file pastes between one Server and up to two Clients
+on the same local network.
 
 ## Features
 
-- Mouse roaming across any configured screen edge, with resolution scaling.
+- Mouse roaming across a validated Server-controlled machine layout, including
+  detected physical monitors and resolution scaling.
 - Keyboard forwarding for modifiers, navigation keys, and numpad keys.
 - Plain text, HTML, RTF, PNG/DIB, and browser clipboard formats.
-- On-demand Explorer file pastes with resumable encrypted staging.
+- One global newest clipboard item, regardless of which connected PC copied it.
+- On-demand Explorer pastes through a Server-relayed, on-paste file relay.
 - TLS identity, interactive pairing approval, and session-bound lane tokens.
 - Synchronized background mode and connection recovery hotkeys.
 - Windows Firewall status, repair, and informed Server-mode setup.
 
 ## Use Conduit
 
-1. Run `Conduit.exe` on both Windows 10 or 11 PCs.
-2. On the host, choose the client screen edge and select **Start Server**.
-3. On the client, enter the host IP, port, and displayed password, then select
-   **Connect**.
-4. Compare and approve the pairing code on both PCs.
+1. Run `Conduit.exe` on the Windows 10 or 11 PCs you want to connect.
+2. On the main PC, choose **Server (Host)**, enter one shared password, and
+   select **Start Server**. Conduit uses its Windows machine name in the
+   layout; network addresses are not shown there.
+3. On each of up to two other PCs, choose **Client**, enter the Server address,
+   the same port, and the same shared password, then select **Connect**.
+4. Compare and approve the pairing code when a physical device connects for
+   the first time. Its detected monitors appear automatically as one fixed
+   group in the Server's 7-by-4 grid.
+5. Drag each Client group so a full side touches another machine group, then
+   select **Apply**. Gaps, overlaps, corners, and partial-side contact are
+   rejected; the previous working layout remains active until Apply succeeds.
+
+The Server owns the roaming cursor and can relay a transition directly from
+one Client to the other. A Client's own local mouse remains local. Physical
+monitors attached to one PC are detected from Windows and stay fixed relative
+to each other; only the whole PC group moves in Conduit's layout.
+
+If a third Client tries to connect, the Server offers to replace one of the
+two current Clients. The temporary candidate closes after 15 seconds if no
+choice is made. A replacement appears in the draft and is not routable until
+the Server user checks its placement and selects Apply.
+
+Any connected PC may update the newest clipboard item. Rapid copies remain
+non-blocking and converge on the most recent item received by the Server.
+Explorer file bytes are requested only when the destination pastes; the Server
+relays that job only between the source and destination and cancels it if an
+involved endpoint disconnects.
 
 The default Server uses TCP ports 28903-28905. Its managed firewall rule applies
 only to the exact Conduit executable, on Private networks, from the local

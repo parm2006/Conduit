@@ -4,7 +4,10 @@ from unittest.mock import patch
 from app.display_topology import Display, MachineDisplayGroup, NativeRect
 from app.file_transfer.toast import TOAST_HEIGHT, TOAST_WIDTH
 from app.topology_toast import (
+    DisplayChangeWarningToast,
     TopologyIdentificationToast,
+    connection_lost_warning_view,
+    display_change_warning_view,
     topology_toast_rect,
     topology_toast_view,
 )
@@ -51,6 +54,42 @@ class TopologyToastTests(unittest.TestCase):
         rect = topology_toast_rect(self._group(), window_size=(360, 104))
 
         self.assertEqual(rect, (-380, 916, -20, 1020))
+
+    def test_display_change_warning_is_normal_sized_and_explains_apply(self):
+        view = display_change_warning_view(self._group())
+
+        self.assertEqual(view.title, "ParthSurface displays changed")
+        self.assertEqual(
+            view.details,
+            "2 displays detected · Apply to rebuild mouse routing",
+        )
+        self.assertEqual(view.color, "#D97706")
+        self.assertEqual(view.hide_after_ms, 5000)
+        self.assertEqual(
+            DisplayChangeWarningToast.WINDOW_SIZE,
+            (TOAST_WIDTH, TOAST_HEIGHT),
+        )
+
+    def test_connection_lost_warning_names_machine_without_network_details(self):
+        view = connection_lost_warning_view("ParthSurface")
+
+        self.assertEqual(view.title, "ParthSurface disconnected")
+        self.assertEqual(
+            view.details,
+            "Removed from the draft · Active routing stays unchanged",
+        )
+        self.assertEqual(view.color, "#D97706")
+        self.assertEqual(view.hide_after_ms, 5000)
+
+    def test_fixed_size_toasts_wrap_monitor_details(self):
+        self.assertLessEqual(
+            TopologyIdentificationToast.DETAILS_WRAP_LENGTH,
+            TOAST_WIDTH - 24,
+        )
+        self.assertEqual(
+            DisplayChangeWarningToast.DETAILS_WRAP_LENGTH,
+            TopologyIdentificationToast.DETAILS_WRAP_LENGTH,
+        )
 
     def test_identification_toast_never_adopts_transient_tk_window_dimensions(self):
         class Widget:

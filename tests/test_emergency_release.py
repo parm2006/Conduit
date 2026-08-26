@@ -1,6 +1,7 @@
 import unittest
 
 from app.client import ConduitClient
+from app.input_handler import InputHandler
 from app.server import ConduitServer
 
 
@@ -23,6 +24,30 @@ class Coordinator:
 
 
 class EmergencyReleaseTests(unittest.TestCase):
+    def test_input_handler_releases_injected_buttons_with_keys(self):
+        events = []
+
+        class Mouse:
+            def press(self, button):
+                events.append(("press", button))
+
+            def release(self, button):
+                events.append(("release", button))
+
+        handler = InputHandler.__new__(InputHandler)
+        handler.mouse = Mouse()
+        handler.keyboard = type(
+            "Keyboard",
+            (),
+            {"press": lambda self, key: None, "release": lambda self, key: None},
+        )()
+        handler.special_key_injector = None
+
+        handler.inject_click("left", True)
+        handler.release_all_injected_input()
+
+        self.assertEqual([event[0] for event in events], ["press", "release"])
+
     def test_server_captured_emergency_hotkey_delegates_to_app_shutdown(self):
         events = []
         server = ConduitServer.__new__(ConduitServer)
@@ -81,64 +106,48 @@ class EmergencyReleaseTests(unittest.TestCase):
         server = ConduitServer.__new__(ConduitServer)
         server.pressed_keys = {"ctrl", "alt", "shift"}
         server.forwarded_keys = {("special", "ctrl"): {"type": "special", "value": "ctrl"}}
-        server.switching_to_client = True
         server.paste_coordinator = Coordinator()
         server.control_network = RecordingNetwork()
         server.data_network = RecordingNetwork()
 
         server.on_key_press({"type": "special", "value": "r"})
 
-        self.assertFalse(server.switching_to_client)
+        self.assertFalse(server._remote_destination_active())
         self.assertEqual(server.pressed_keys, set())
         self.assertTrue(server.control_network.disconnected)
         self.assertTrue(server.data_network.disconnected)
 
-    def test_switch_back_releases_forwarded_control_before_capture_stops(self):
-        events = []
+    def test_switch_back_delegates_stable_session_and_display_identity_to_router(self):
+        calls = []
 
-        class Network(RecordingNetwork):
-            def send_message(self, message):
-                events.append(("message", message))
-                return super().send_message(message)
-
-        class Input:
-            screen_width = 1920
-            screen_height = 1080
-
-            def stop_keyboard_capture(self):
-                events.append(("capture", "stopped"))
-
-            def inject_position(self, x, y):
-                events.append(("position", (x, y)))
-
-            def start_edge_detection(self, edge):
-                events.append(("edge", edge))
+        class Router:
+            def handle_edge(self, *args, **kwargs):
+                calls.append((args, kwargs))
+                return True
 
         server = ConduitServer.__new__(ConduitServer)
-        server.switching_to_client = True
-        server.pressed_keys = {"ctrl"}
-        server.forwarded_keys = {
-            ("special", "ctrl"): {"type": "special", "value": "ctrl"}
-        }
-        server.paste_coordinator = type(
-            "Coordinator",
-            (),
-            {"set_route": lambda self, offer, destination: None},
-        )()
-        server.control_network = Network()
-        server.input_handler = Input()
-        server.on_capture_stop = None
-        server._active_edge_side = "right"
+        server.input_router = Router()
+        server._paste_route_lock = None
+        server._apply_clipboard_offer_route = lambda: None
 
-        server.on_switch_back({"ratio": 0.5})
+        server.on_switch_back({
+            "peer_identity": "client-a",
+            "source_display_id": "display-a",
+            "source_side": "left",
+            "ratio": 0.5,
+            "session_id": "session-a",
+            "topology_version": 4,
+        })
 
-        self.assertEqual(events[0][0:2], ("message", {
-            "type": "key_release",
-            "key": {"type": "special", "value": "ctrl"},
-        }))
-        self.assertEqual(events[1], ("capture", "stopped"))
-        self.assertEqual(server.pressed_keys, set())
-        self.assertEqual(server.forwarded_keys, {})
+        self.assertEqual(
+            calls,
+            [
+                (
+                    ("client-a", "display-a", "left", 0.5),
+                    {"session_id": "session-a", "topology_version": 4},
+                )
+            ],
+        )
 
 
 if __name__ == "__main__":

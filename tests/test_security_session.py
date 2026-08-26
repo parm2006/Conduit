@@ -1,42 +1,65 @@
 import tempfile
 import unittest
 
-from app.session import SessionAuthenticationError, SessionCoordinator
+from app.session import SessionAuthenticationError, SessionRegistry
 from app.trust import PeerTrustStore, PendingPeerTrust
 
 
-class SessionCoordinatorTests(unittest.TestCase):
+class SessionRegistrySecurityTests(unittest.TestCase):
     def test_control_authentication_issues_purpose_bound_one_use_lane_tokens(self):
-        coordinator = SessionCoordinator("correct horse", clock=lambda: 10.0)
+        coordinator = SessionRegistry("correct horse", clock=lambda: 10.0)
 
-        session = coordinator.authenticate_control("correct horse")
+        session = coordinator.authenticate_control(
+            "correct horse",
+            peer_identity="device-a",
+            windows_name="DeviceA",
+        )
 
         self.assertTrue(coordinator.consume_lane(session.data_token, "data", session.session_id))
         with self.assertRaises(SessionAuthenticationError):
             coordinator.consume_lane(session.data_token, "data", session.session_id)
         with self.assertRaises(SessionAuthenticationError):
             coordinator.consume_lane(session.file_token, "data", session.session_id)
-        fresh = coordinator.authenticate_control("correct horse")
+        fresh = coordinator.authenticate_control(
+            "correct horse",
+            peer_identity="device-b",
+            windows_name="DeviceB",
+        )
         self.assertTrue(coordinator.consume_lane(fresh.file_token, "file", fresh.session_id))
 
     def test_wrong_password_and_expired_or_cross_session_tokens_are_rejected(self):
         now = [10.0]
-        coordinator = SessionCoordinator("secret", clock=lambda: now[0], token_ttl=2.0)
+        coordinator = SessionRegistry("secret", clock=lambda: now[0], token_ttl=2.0)
         with self.assertRaises(SessionAuthenticationError):
-            coordinator.authenticate_control("wrong")
-        session = coordinator.authenticate_control("secret")
+            coordinator.authenticate_control(
+                "wrong",
+                peer_identity="device-a",
+                windows_name="DeviceA",
+            )
+        session = coordinator.authenticate_control(
+            "secret",
+            peer_identity="device-a",
+            windows_name="DeviceA",
+        )
         now[0] = 13.0
         with self.assertRaises(SessionAuthenticationError):
             coordinator.consume_lane(session.data_token, "data", session.session_id)
 
-        fresh = coordinator.authenticate_control("secret")
+        fresh = coordinator.authenticate_control(
+            "secret",
+            peer_identity="device-b",
+            windows_name="DeviceB",
+        )
         with self.assertRaises(SessionAuthenticationError):
             coordinator.consume_lane(fresh.data_token, "data", "another-session")
 
     def test_wrong_peer_cannot_consume_the_rightful_peers_token(self):
-        coordinator = SessionCoordinator("secret")
+        coordinator = SessionRegistry("secret")
         session = coordinator.authenticate_control(
-            "secret", peer_address="192.0.2.10"
+            "secret",
+            peer_identity="device-a",
+            windows_name="DeviceA",
+            peer_address="192.0.2.10",
         )
 
         with self.assertRaises(SessionAuthenticationError):

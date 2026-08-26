@@ -1,4 +1,5 @@
 import ctypes
+import threading
 import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -8,6 +9,7 @@ from app.windows_displays import (
     DisplayDiscoveryError,
     NativeDisplayRecord,
     WindowsDisplayDiscovery,
+    DisplayChangeMonitor,
     _Win32DisplayBackend,
     display_group_from_message,
     display_group_to_message,
@@ -168,6 +170,88 @@ class WindowsDisplayDiscoveryTests(unittest.TestCase):
             display_group_from_message(message)
 
         self.assertNotIn("private malformed name", str(caught.exception))
+
+    def test_change_monitor_reports_only_a_new_physical_inventory(self):
+        initial = WindowsDisplayDiscovery(
+            backend=FakeDisplayBackend(
+                records=(NativeDisplayRecord(
+                    "primary", (0, 0, 1920, 1080), (0, 0, 1920, 1040),
+                    96, 0, True, True,
+                ),)
+            )
+        ).discover("machine", "TestPC")
+        changed = WindowsDisplayDiscovery(
+            backend=FakeDisplayBackend(
+                records=(
+                    NativeDisplayRecord(
+                        "primary", (0, 0, 1920, 1080), (0, 0, 1920, 1040),
+                        96, 0, True, True,
+                    ),
+                    NativeDisplayRecord(
+                        "secondary", (1920, 0, 3840, 1080),
+                        (1920, 0, 3840, 1040), 96, 0, False, True,
+                    ),
+                )
+            )
+        ).discover("machine", "TestPC")
+        snapshots = iter((initial, changed, changed))
+        discovery = SimpleNamespace(
+            discover=lambda machine_id, windows_name: next(snapshots, changed)
+        )
+        received = []
+        event = threading.Event()
+        monitor = DisplayChangeMonitor(
+            discovery,
+            "machine",
+            "TestPC",
+            lambda group: received.append(group) or event.set(),
+            interval=0.001,
+        )
+
+        self.assertTrue(monitor.start(initial))
+        self.assertTrue(event.wait(1))
+        monitor.stop()
+
+        self.assertEqual(received, [changed])
+
+    def test_change_monitor_survives_discovery_failure_and_can_stop(self):
+        initial = WindowsDisplayDiscovery(
+            backend=FakeDisplayBackend(
+                records=(NativeDisplayRecord(
+                    "primary", (0, 0, 1920, 1080), (0, 0, 1920, 1040),
+                    96, 0, True, True,
+                ),)
+            )
+        ).discover("machine", "TestPC")
+        calls = []
+
+        def discover(machine_id, windows_name):
+            calls.append(True)
+            if len(calls) == 1:
+                raise DisplayDiscoveryError("display discovery failed")
+            return initial
+
+        monitor = DisplayChangeMonitor(
+            SimpleNamespace(discover=discover),
+            "machine",
+            "TestPC",
+            lambda group: None,
+            interval=0.001,
+        )
+
+        monitor.start(initial)
+        self.assertTrue(_wait_until(lambda: len(calls) >= 2))
+        self.assertTrue(monitor.stop())
+        self.assertFalse(monitor.running)
+
+
+def _wait_until(predicate):
+    event = threading.Event()
+    for _ in range(100):
+        if predicate():
+            return True
+        event.wait(0.005)
+    return bool(predicate())
 
 
 if __name__ == "__main__":

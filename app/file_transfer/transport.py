@@ -8,8 +8,9 @@ import logging
 from app.crypto import load_identity
 from app.ports import DEFAULT_FILE_PORT
 from app.network import _tls_client_context
+from app.machine_identity import windows_machine_id
 from app.safe_errors import error_name
-from app.session import SessionAuthenticationError
+from app.session import SessionAuthenticationError, SessionRegistry
 
 from .protocol import (
     MAX_METADATA_SIZE,
@@ -51,32 +52,66 @@ def send_frame(sock, metadata, payload=b""):
 
 
 def authenticate_server_connection(
-    sock, authenticator, expected_session_id=None, peer_address=None
+    sock,
+    authenticator,
+    expected_session_id=None,
+    peer_address=None,
+    *,
+    metadata=None,
+    payload=None,
+    lane=None,
 ):
-    metadata, payload = read_frame(sock)
+    if metadata is None:
+        metadata, payload = read_frame(sock)
     if payload or metadata.get("type") != "authenticate":
         raise FrameError("file lane must authenticate before sending data")
-    if expected_session_id is not None and metadata.get("session_id") != expected_session_id:
+    session_id = metadata.get("session_id")
+    if expected_session_id is not None and session_id != expected_session_id:
         raise AuthenticationError("file lane belongs to another session")
     if hasattr(authenticator, "consume_lane"):
         try:
-            authenticator.consume_lane(
-                metadata.get("token"),
-                "file",
-                metadata.get("session_id"),
-                peer_address=peer_address,
-            )
+            if isinstance(authenticator, SessionRegistry):
+                authenticator.bind_lane(
+                    metadata.get("token"),
+                    "file",
+                    session_id,
+                    peer_identity=metadata.get("peer_identity"),
+                    peer_address=peer_address,
+                    lane=lane,
+                )
+            else:
+                authenticator.consume_lane(
+                    metadata.get("token"),
+                    "file",
+                    session_id,
+                    peer_address=peer_address,
+                )
         except SessionAuthenticationError as error:
             raise AuthenticationError("file lane authentication failed") from error
     else:
         authenticator.authenticate(metadata.get("token"))
-    send_frame(sock, {"type": "authenticated", "session_id": expected_session_id})
+    send_frame(sock, {"type": "authenticated", "session_id": session_id})
+    return session_id
 
 
-def authenticate_client_connection(sock, expected_fingerprint, token, session_id=None):
+def authenticate_client_connection(
+    sock,
+    expected_fingerprint,
+    token,
+    session_id=None,
+    peer_identity=None,
+):
     certificate = sock.getpeercert(binary_form=True)
     verify_certificate_fingerprint(certificate, expected_fingerprint)
-    send_frame(sock, {"type": "authenticate", "token": token, "session_id": session_id})
+    send_frame(
+        sock,
+        {
+            "type": "authenticate",
+            "token": token,
+            "session_id": session_id,
+            "peer_identity": peer_identity,
+        },
+    )
     metadata, payload = read_frame(sock)
     if (
         payload or metadata.get("type") != "authenticated"
@@ -97,6 +132,18 @@ class _FileLane:
 
     def register_callback(self, event_type, callback):
         self._callbacks.setdefault(event_type, []).append(callback)
+
+    def _trigger_callbacks(self, event_type, metadata, payload=b""):
+        for callback in tuple(self._callbacks.get(event_type, ())):
+            try:
+                callback(metadata, payload)
+            except Exception as error:
+                logger.error(
+                    "File-lane callback failed for event %s; "
+                    "connection remains available (%s)",
+                    event_type,
+                    error_name(error),
+                )
 
     def send(self, metadata, payload=b""):
         with self._state_lock:
@@ -127,15 +174,7 @@ class _FileLane:
                     if self.sock is not sock or self._generation != generation:
                         return
                 metadata, payload = read_frame(sock)
-                for callback in self._callbacks.get(metadata.get("type"), ()):
-                    try:
-                        callback(metadata, payload)
-                    except Exception as error:
-                        logger.error(
-                            "File-lane callback failed for event %s; "
-                            "connection remains available (%s)",
-                            metadata.get("type"), error_name(error),
-                        )
+                self._trigger_callbacks(metadata.get("type"), metadata, payload)
         except (ConnectionError, OSError, FrameError):
             pass
         finally:
@@ -148,8 +187,7 @@ class _FileLane:
                 return False
             self.sock = None
         self._close(sock)
-        for callback in self._callbacks.get("disconnected", ()):
-            callback({"type": "disconnected"}, b"")
+        self._trigger_callbacks("disconnected", {"type": "disconnected"})
         return True
 
     def close(self):
@@ -173,6 +211,10 @@ class _FileLane:
 
 
 class FileLaneClient(_FileLane):
+    def __init__(self, peer_identity=None):
+        super().__init__()
+        self.peer_identity = peer_identity or windows_machine_id()
+
     def connect(self, host, port, expected_fingerprint, token, session_id=None, timeout=3):
         logger.info("[file-lane] Client connecting to %s:%d (session %s)...", host, port, session_id[:8] if session_id else None)
         raw_sock = socket.create_connection((host, port), timeout=timeout)
@@ -183,7 +225,11 @@ class FileLaneClient(_FileLane):
             secure_sock = context.wrap_socket(raw_sock, server_hostname=host)
             logger.info("[file-lane] TLS wrap successful; authenticating token...")
             authenticate_client_connection(
-                secure_sock, expected_fingerprint, token, session_id=session_id
+                secure_sock,
+                expected_fingerprint,
+                token,
+                session_id=session_id,
+                peer_identity=self.peer_identity,
             )
             logger.info("[file-lane] Client authenticated successfully")
         except Exception as error:
@@ -195,14 +241,41 @@ class FileLaneClient(_FileLane):
             raise
         secure_sock.settimeout(None)
         generation = self._attach(secure_sock)
-        for callback in self._callbacks.get("connected", ()):
-            callback({"type": "connected", "session_id": session_id}, b"")
+        self._trigger_callbacks(
+            "connected",
+            {"type": "connected", "session_id": session_id},
+        )
         threading.Thread(
             target=self._receive_loop, args=(secure_sock, generation), daemon=True
         ).start()
 
 
-class FileLaneServer(_FileLane):
+class _FileServerConnection(_FileLane):
+    def __init__(self, owner, session_id, peer_identity, address):
+        super().__init__()
+        self.owner = owner
+        self.session_id = session_id
+        self.peer_identity = peer_identity
+        self.address = address
+
+    def _trigger_callbacks(self, event_type, metadata, payload=b""):
+        enriched = dict(metadata)
+        if self.session_id is not None:
+            enriched["session_id"] = self.session_id
+        if self.session_id is not None and self.peer_identity is not None:
+            enriched["peer_identity"] = self.peer_identity
+        self.owner._trigger_callbacks(event_type, enriched, payload)
+
+    def _close_generation(self, sock, generation):
+        closed = super()._close_generation(sock, generation)
+        if closed:
+            self.owner._connection_closed(self)
+        return closed
+
+
+class FileLaneServer:
+    _close = staticmethod(_FileLane._close)
+
     def __init__(
         self,
         cert_file=None,
@@ -216,7 +289,6 @@ class FileLaneServer(_FileLane):
         auth_timeout=10.0,
         coordinator=None,
     ):
-        super().__init__()
         self.host = host
         self.port = port
         self._server_sock = None
@@ -225,10 +297,12 @@ class FileLaneServer(_FileLane):
         self._candidate_slots = threading.BoundedSemaphore(8)
         self._candidate_lock = threading.Lock()
         self._candidate_sockets = set()
-        self._authenticator = None
-        self._expected_session_id = None
+        self._offers = {}
         self.coordinator = coordinator
         self._auth_lock = threading.Lock()
+        self._callbacks = {}
+        self.connections = {}
+        self._connections_lock = threading.RLock()
         self.handshake_timeout = float(handshake_timeout)
         self.auth_timeout = float(auth_timeout)
         if identity is None and (cert_file is None or key_file is None):
@@ -245,6 +319,44 @@ class FileLaneServer(_FileLane):
             password=key_password,
         )
 
+    @property
+    def sock(self):
+        with self._connections_lock:
+            if len(self.connections) != 1:
+                return None
+            return next(iter(self.connections.values())).sock
+
+    def register_callback(self, event_type, callback):
+        self._callbacks.setdefault(event_type, []).append(callback)
+
+    def _trigger_callbacks(self, event_type, metadata, payload=b""):
+        for callback in tuple(self._callbacks.get(event_type, ())):
+            try:
+                callback(metadata, payload)
+            except Exception as error:
+                logger.error(
+                    "File-lane callback failed for event %s; "
+                    "connection remains available (%s)",
+                    event_type,
+                    error_name(error),
+                )
+
+    def connection(self, session_id):
+        with self._connections_lock:
+            return self.connections.get(session_id)
+
+    def send(self, metadata, payload=b"", session_id=None):
+        with self._connections_lock:
+            if session_id is None:
+                if len(self.connections) != 1:
+                    raise ConnectionError("file destination session is required")
+                connection = next(iter(self.connections.values()))
+            else:
+                connection = self.connections.get(session_id)
+        if connection is None:
+            raise ConnectionError("file lane is not connected")
+        return connection.send(metadata, payload)
+
     def issue_session(self):
         token = secrets.token_urlsafe(32)
         self.offer_session(token)
@@ -252,21 +364,33 @@ class FileLaneServer(_FileLane):
 
     def offer_session(self, token, session_id=None):
         with self._auth_lock:
-            self._authenticator = (
+            authenticator = (
                 self.coordinator if self.coordinator is not None
                 else SessionAuthenticator(token)
             )
-            self._expected_session_id = session_id
+            self._offers[session_id] = authenticator
             logger.info("[file-lane] Offsetting/Offered file-lane session %s", session_id[:8] if session_id else None)
 
-    def revoke_session(self):
+    def revoke_session(self, session_id=None):
         with self._auth_lock:
-            self._authenticator = None
-            self._expected_session_id = None
+            if session_id is None:
+                self._offers.clear()
+            else:
+                self._offers.pop(session_id, None)
 
     def close(self):
         self.revoke_session()
-        return super().close()
+        with self._connections_lock:
+            connections = tuple(self.connections.values())
+        closed = False
+        for connection in connections:
+            closed = connection.close() or closed
+        return closed
+
+    def _connection_closed(self, connection):
+        with self._connections_lock:
+            if self.connections.get(connection.session_id) is connection:
+                self.connections.pop(connection.session_id, None)
 
     def start(self):
         try:
@@ -325,40 +449,59 @@ class FileLaneServer(_FileLane):
                 self._candidate_sockets.discard(raw_sock)
                 self._candidate_sockets.add(secure_sock)
             secure_sock.settimeout(self.auth_timeout)
+            metadata, payload = read_frame(secure_sock)
+            session_id = metadata.get("session_id")
             with self._auth_lock:
                 if (
                     not self._running
                     or server_generation != self._server_generation
                 ):
                     raise AuthenticationError("file server stopped during authentication")
-                if self._authenticator is None:
+                if session_id not in self._offers:
                     raise AuthenticationError("no file-lane session was offered")
-                authenticator = self._authenticator
-                expected_session_id = self._expected_session_id
-            authenticate_server_connection(
+                authenticator = self._offers[session_id]
+            connection = _FileServerConnection(
+                self,
+                session_id,
+                metadata.get("peer_identity"),
+                address,
+            )
+            authenticated_session_id = authenticate_server_connection(
                 secure_sock,
                 authenticator,
-                expected_session_id=expected_session_id,
+                expected_session_id=session_id,
                 peer_address=address[0],
+                metadata=metadata,
+                payload=payload,
+                lane=connection,
             )
             with self._auth_lock:
                 if (
                     not self._running
                     or server_generation != self._server_generation
-                    or self._authenticator is not authenticator
-                    or self._expected_session_id != expected_session_id
+                    or self._offers.get(session_id) is not authenticator
                 ):
                     raise AuthenticationError("file session changed during authentication")
-                self._authenticator = None
-                session_id, self._expected_session_id = self._expected_session_id, None
+                self._offers.pop(session_id, None)
                 secure_sock.settimeout(None)
-                generation = self._attach(secure_sock)
+                generation = connection._attach(secure_sock)
+                with self._connections_lock:
+                    previous = self.connections.get(authenticated_session_id)
+                    self.connections[authenticated_session_id] = connection
+                if previous is not None:
+                    previous.close()
             with self._candidate_lock:
                 self._candidate_sockets.discard(secure_sock)
             logger.info("[file-lane] Server authenticated candidate from %s successfully", address)
-            for callback in self._callbacks.get("connected", ()):
-                callback({"type": "connected", "session_id": session_id}, b"")
-            self._receive_loop(secure_sock, generation)
+            connection._trigger_callbacks(
+                "connected",
+                {"type": "connected", "session_id": authenticated_session_id},
+            )
+            threading.Thread(
+                target=connection._receive_loop,
+                args=(secure_sock, generation),
+                daemon=True,
+            ).start()
         except Exception as error:
             logger.error("[file-lane] Candidate from %s failed authentication (%s: %s)", address, type(error).__name__, error, exc_info=True)
             if secure_sock is not None:
@@ -375,8 +518,7 @@ class FileLaneServer(_FileLane):
         with self._auth_lock:
             self._running = False
             self._server_generation += 1
-            self._authenticator = None
-            self._expected_session_id = None
+            self._offers.clear()
         with self._candidate_lock:
             candidates = tuple(self._candidate_sockets)
             self._candidate_sockets.clear()

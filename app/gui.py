@@ -23,12 +23,17 @@ from app.firewall_onboarding import (
 )
 from app.display_topology import DraftTopology, PlacedMachine
 from app.topology_editor import CLIENT_COLORS, TopologyEditor
-from app.topology_toast import TopologyIdentificationToast
+from app.topology_toast import (
+    DisplayChangeWarningToast,
+    TopologyIdentificationToast,
+)
 from app.windows_displays import (
+    DisplayChangeMonitor,
     WindowsDisplayDiscovery,
     display_group_from_message,
 )
 from app.machine_identity import windows_machine_id
+from app.session import CandidateDecision, PENDING_CLIENT_COLOR
 
 logger = logging.getLogger(__name__)
 
@@ -392,6 +397,8 @@ class ConduitGUI(ctk.CTk):
             self,
             on_disconnect=self.disconnect_client,
         )
+        self.display_warning_toast = DisplayChangeWarningToast(self)
+        self._server_display_monitor = None
         self.pairing_approval = PairingApprovalController(
             self,
             on_status=lambda message: self._set_status(message, "orange"),
@@ -780,6 +787,7 @@ class ConduitGUI(ctk.CTk):
 
     def _start_server_after_firewall(self, port, password):
         if self.server:
+            self._stop_server_display_monitor()
             self.server.stop()
             
         if not self.overlay:
@@ -804,6 +812,13 @@ class ConduitGUI(ctk.CTk):
         self.server.control_network.register_callback('reload_connection', self._on_remote_reload_connection)
         self.server.control_network.register_callback('shutdown_app', self._on_remote_app_shutdown)
         self.server.control_network.register_callback(
+            'candidate_pending',
+            lambda data, source=self.server: self._on_server_candidate_pending(
+                source,
+                data,
+            ),
+        )
+        self.server.control_network.register_callback(
             'display_inventory',
             lambda data, source=self.server: self._on_server_display_inventory(
                 source,
@@ -815,6 +830,13 @@ class ConduitGUI(ctk.CTk):
         self.server.set_screen_size(screen_width, screen_height)
         
         if self.server.start():
+            activate_topology = getattr(
+                self.server,
+                'activate_client_topology',
+                None,
+            )
+            if activate_topology is not None:
+                activate_topology(self.topology_editor.state.active)
             save_role_safely(self.preferences, "server")
             try:
                 self.preferences.save_server_port(port)
@@ -844,6 +866,7 @@ class ConduitGUI(ctk.CTk):
             )
             self.server_start_btn.pack_forget()
             self.server_stop_btn.pack(pady=10)
+            self._start_server_display_monitor(self.server)
         else:
             self._set_status(
                 "Status: Could not start server\n"
@@ -890,6 +913,17 @@ class ConduitGUI(ctk.CTk):
             lambda data, source=client: self._on_topology_identify(source, data),
         )
         client.control_network.register_callback(
+            'candidate_pending',
+            lambda data, source=client: self._on_candidate_pending_toast(
+                source,
+                data,
+            ),
+        )
+        client.control_network.register_callback(
+            'candidate_closed',
+            lambda data, source=client: self._hide_topology_toast(source),
+        )
+        client.control_network.register_callback(
             'topology_applied',
             lambda data, source=client: self._hide_topology_toast(source),
         )
@@ -927,10 +961,75 @@ class ConduitGUI(ctk.CTk):
             self.client_connect_btn.pack_forget()
             self.client_disconnect_btn.pack(pady=10)
         else:
+            toast = self.__dict__.get("topology_toast")
+            if toast is not None:
+                toast.hide()
             self._set_status(f"Status: Connection failed\n{error_msg}", "red")
+
+    def _start_server_display_monitor(self, source):
+        self._stop_server_display_monitor()
+        editor = self.__dict__.get("topology_editor")
+        if editor is None:
+            return False
+        server_id = editor.state.draft.server_id
+        initial_group = next(
+            placed.group
+            for placed in editor.state.draft.machines
+            if placed.group.machine_id == server_id
+        )
+        monitor = DisplayChangeMonitor(
+            WindowsDisplayDiscovery(),
+            server_id,
+            socket.gethostname(),
+            lambda group: self.after(
+                0,
+                lambda: self._apply_local_display_change(source, group),
+            ),
+        )
+        self._server_display_monitor = monitor
+        try:
+            monitor.start(initial_group)
+        except Exception as error:
+            self._server_display_monitor = None
+            logger.error(
+                "Could not start Server display monitor (%s)",
+                error_name(error),
+            )
+            return False
+        return True
+
+    def _stop_server_display_monitor(self):
+        monitor = self.__dict__.get("_server_display_monitor")
+        self._server_display_monitor = None
+        if monitor is not None:
+            monitor.stop()
+
+    def _apply_local_display_change(self, source, group):
+        if self.server is not source:
+            return False
+        refreshed = self.topology_editor.refresh_machine(group)
+        if refreshed:
+            self._show_display_change_warning(group)
+        return refreshed
+
+    def _show_display_change_warning(self, group):
+        toast = self.__dict__.get("display_warning_toast")
+        if toast is not None:
+            toast.show(group)
+        self._set_status(
+            f"Status: {group.windows_name} displays changed. "
+            "Press Apply to rebuild mouse routing.",
+            "orange",
+        )
+
+    def _show_client_disconnect_warning(self, windows_name):
+        toast = self.__dict__.get("display_warning_toast")
+        if toast is not None:
+            toast.show_connection_lost(windows_name)
 
     def stop_server(self):
         self._is_reloading = False
+        self._stop_server_display_monitor()
         if self.server:
             if getattr(self.server, 'control_connected', False) and getattr(self.server, 'control_network', None):
                 try:
@@ -994,6 +1093,18 @@ class ConduitGUI(ctk.CTk):
         except Exception as error:
             logger.error("Rejected Client display inventory (%s)", error_name(error))
             return
+        session_id = data.get("session_id")
+        registry = getattr(source, "session_registry", None)
+        session = registry.get(session_id) if registry is not None and session_id else None
+        if session_id is not None and session is None:
+            logger.warning("Ignored display inventory from a closed Client session")
+            return
+        if session is not None and group.machine_id != session.peer_identity:
+            logger.warning("Rejected display inventory whose machine identity did not match its session")
+            return
+        if session is not None:
+            session.display_inventory = group
+        display_changed = data.get("reason") == "display_changed"
 
         def add_to_draft():
             if self.server is not source:
@@ -1004,8 +1115,22 @@ class ConduitGUI(ctk.CTk):
                     "orange",
                 )
                 return
+            if session is not None:
+                self.topology_editor.set_client_color(
+                    group.machine_id,
+                    session.color,
+                )
+                placement = session.draft_placement
+                if placement is not None:
+                    self.topology_editor.state.move_machine(
+                        group.machine_id,
+                        placement[0],
+                        placement[1],
+                    )
+                    self.topology_editor._render()
             if (
-                self.topology_editor.state.active.version == 0
+                session is None
+                and self.topology_editor.state.active.version == 0
                 and len(self.topology_editor.state.active.machines) == 1
             ):
                 legacy_positions = {
@@ -1018,18 +1143,31 @@ class ConduitGUI(ctk.CTk):
                 self.topology_editor.state.move_machine(group.machine_id, x, y)
                 self.topology_editor._render()
             server = self.server
-            if server is not None and server.control_connected:
-                color = self.topology_editor.state.client_color(group.machine_id)
-                server.control_network.send_message(
-                    {
-                        "type": "topology_identify",
-                        "color": color,
-                        "connection_state": "connected",
-                    }
+            if (
+                not display_changed
+                and server is not None
+                and server.control_connected
+            ):
+                color = (
+                    session.color
+                    if session is not None
+                    else self.topology_editor.state.client_color(group.machine_id)
                 )
-            if self.__dict__.get("_pending_topology_rescan") is source:
-                self._pending_topology_rescan = None
-                self.topology_editor.apply_current_draft()
+                message = {
+                    "type": "topology_identify",
+                    "color": color,
+                    "connection_state": "connected",
+                }
+                if session_id is None:
+                    server.control_network.send_message(message)
+                else:
+                    server.control_network.send_message(
+                        message,
+                        session_id=session_id,
+                    )
+            if display_changed:
+                self._show_display_change_warning(group)
+            self._record_topology_rescan_inventory(source, session_id)
 
         self.after(0, add_to_draft)
 
@@ -1044,6 +1182,154 @@ class ConduitGUI(ctk.CTk):
             )
 
         self.after(0, show)
+
+    def _on_candidate_pending_toast(self, source, data):
+        def show():
+            if self.client is not source:
+                return
+            if source.display_group is None:
+                try:
+                    source.display_group = source.display_discovery.discover(
+                        source.machine_id,
+                        source.windows_name,
+                    )
+                except Exception as error:
+                    logger.error(
+                        "Could not identify pending Client displays (%s)",
+                        error_name(error),
+                    )
+                    return
+            self.topology_toast.show(
+                source.display_group,
+                data.get("color", PENDING_CLIENT_COLOR),
+                "waiting for Server",
+            )
+
+        self.after(0, show)
+
+    def _on_server_candidate_pending(self, source, data):
+        if self.server is not source:
+            return
+        self.after(
+            0,
+            lambda: self._show_replacement_prompt(source, data),
+        )
+
+    def _show_replacement_prompt(self, source, data):
+        if self.server is not source:
+            return
+        candidate_id = data.get("candidate_id") or data.get("session_id")
+        pending = source.session_registry.pending_candidate()
+        if pending is None or pending.session_id != candidate_id:
+            return
+        previous = self.__dict__.get("_replacement_dialog")
+        if previous is not None:
+            try:
+                previous.destroy()
+            except Exception:
+                pass
+        dialog = ctk.CTkToplevel(self)
+        self._replacement_dialog = dialog
+        dialog.title("Two-Client Limit")
+        dialog.geometry("360x260")
+        dialog.resizable(False, False)
+        dialog.transient(self)
+        ctk.CTkLabel(
+            dialog,
+            text=(
+                f"{pending.label} wants to connect.\n"
+                "Conduit supports two Clients. Choose one to replace.\n"
+                "This request closes automatically in 15 seconds."
+            ),
+            wraplength=320,
+            justify="left",
+        ).pack(fill="x", padx=20, pady=(20, 12))
+
+        def choose(decision, replace_session_id=None):
+            try:
+                self._resolve_replacement_candidate(
+                    source,
+                    candidate_id,
+                    decision,
+                    replace_session_id=replace_session_id,
+                )
+            except (KeyError, RuntimeError, ValueError):
+                pass
+            finally:
+                if self.__dict__.get("_replacement_dialog") is dialog:
+                    self._replacement_dialog = None
+                try:
+                    dialog.destroy()
+                except Exception:
+                    pass
+
+        for session in source.session_registry.active_sessions():
+            ctk.CTkButton(
+                dialog,
+                text=f"Replace {session.label}",
+                command=lambda session_id=session.session_id: choose(
+                    CandidateDecision.REPLACE,
+                    session_id,
+                ),
+            ).pack(fill="x", padx=34, pady=4)
+        ctk.CTkButton(
+            dialog,
+            text="Reject",
+            fg_color="#374151",
+            command=lambda: choose(CandidateDecision.REJECT),
+        ).pack(fill="x", padx=34, pady=4)
+        dialog.protocol(
+            "WM_DELETE_WINDOW",
+            lambda: choose(CandidateDecision.REJECT),
+        )
+        dialog.after(
+            15000,
+            lambda: choose(CandidateDecision.REJECT),
+        )
+
+    def _resolve_replacement_candidate(
+        self,
+        source,
+        candidate_id,
+        decision,
+        *,
+        replace_session_id=None,
+    ):
+        if self.server is not source:
+            return None
+        registry = source.session_registry
+        pending = registry.pending_candidate()
+        if pending is None or pending.session_id != candidate_id:
+            return None
+        placement = None
+        replaced_machine_id = None
+        if CandidateDecision(decision) is CandidateDecision.REPLACE:
+            target = registry.get(replace_session_id)
+            if target is None:
+                raise KeyError(replace_session_id)
+            router = getattr(source, 'input_router', None)
+            if router is not None:
+                router.destination_lost(target.session_id)
+            replaced_machine_id = target.peer_identity
+            placement = next(
+                (
+                    (placed.x, placed.y)
+                    for placed in self.topology_editor.state.draft.machines
+                    if placed.group.machine_id == replaced_machine_id
+                ),
+                None,
+            )
+        resolution = registry.resolve_candidate(
+            decision,
+            replace_session_id=replace_session_id,
+        )
+        if resolution.outcome.value == "admitted":
+            promoted = registry.get(resolution.session_id)
+            if promoted is not None:
+                promoted.draft_placement = placement
+            if replaced_machine_id is not None:
+                self.topology_editor.remove_client(replaced_machine_id)
+        return resolution
 
     def _hide_topology_toast(self, source):
         if self.client is not source:
@@ -1065,14 +1351,29 @@ class ConduitGUI(ctk.CTk):
             )
             return False
         self.topology_editor.refresh_machine(server_group)
+        monitor = self.__dict__.get("_server_display_monitor")
+        if monitor is not None:
+            monitor.update_baseline(server_group)
 
         server = self.server
         if server is None or not server.control_connected:
             return True
-        self._pending_topology_rescan = server
-        sent = server.control_network.send_message({
-            "type": "display_inventory_request",
-        })
+        sessions = tuple(server.session_registry.ready_sessions())
+        if not sessions:
+            return True
+        pending = {
+            "source": server,
+            "waiting": frozenset(session.session_id for session in sessions),
+            "received": set(),
+        }
+        self._pending_topology_rescan = pending
+        sent = all(
+            server.control_network.send_message(
+                {"type": "display_inventory_request"},
+                session_id=session.session_id,
+            )
+            for session in sessions
+        )
         if not sent:
             self._pending_topology_rescan = None
             self._set_status(
@@ -1081,11 +1382,24 @@ class ConduitGUI(ctk.CTk):
             )
             return False
         self._set_status("Status: Rescanning displays...", "orange")
-        self.after(3000, lambda: self._expire_topology_rescan(server))
+        self.after(3000, lambda: self._expire_topology_rescan(pending))
         return False
 
-    def _expire_topology_rescan(self, source):
-        if self.__dict__.get("_pending_topology_rescan") is not source:
+    def _record_topology_rescan_inventory(self, source, session_id):
+        pending = self.__dict__.get("_pending_topology_rescan")
+        if not isinstance(pending, dict) or pending.get("source") is not source:
+            return False
+        if session_id not in pending["waiting"]:
+            return False
+        pending["received"].add(session_id)
+        if pending["received"] != set(pending["waiting"]):
+            return False
+        self._pending_topology_rescan = None
+        self.topology_editor.apply_current_draft()
+        return True
+
+    def _expire_topology_rescan(self, pending):
+        if self.__dict__.get("_pending_topology_rescan") is not pending:
             return
         self._pending_topology_rescan = None
         self._set_status(
@@ -1151,28 +1465,78 @@ class ConduitGUI(ctk.CTk):
             )
             return
         self.topology_editor.state.commit(candidate)
+        applied_machine_ids = {
+            placed.group.machine_id for placed in candidate.machines
+        }
+        for session in source.session_registry.active_sessions():
+            if (
+                session.peer_identity in applied_machine_ids
+                and session.replacement_color is not None
+                and source.session_registry.activate_replacement(
+                    session.session_id
+                )
+            ):
+                self.topology_editor.set_client_color(
+                    session.peer_identity,
+                    session.color,
+                )
         self.topology_editor._render()
-        mapping = next(
-            mapping
-            for mapping in candidate.edge_mappings
-            if mapping.source_machine_id == candidate.server_id
-            and mapping.destination_machine_id != candidate.server_id
-        )
         if self.server is not None and self.server.control_connected:
-            self.server.control_network.send_message({'type': 'topology_applied'})
+            self._notify_ready_clients(
+                self.server,
+                {'type': 'topology_applied'},
+            )
         self._set_status("Status: Machine layout applied", "green")
 
     def _on_topology_cancel(self):
         self._pending_topology_rescan = None
         server = self.server
         if server is not None and server.control_connected:
-            server.control_network.send_message({'type': 'topology_cancelled'})
+            self._notify_ready_clients(
+                server,
+                {'type': 'topology_cancelled'},
+            )
         self._set_status("Status: Layout changes cancelled", "gray")
+
+    @staticmethod
+    def _notify_ready_clients(server, message):
+        registry = getattr(server, "session_registry", None)
+        if registry is None:
+            return server.control_network.send_message(message)
+        sessions = tuple(registry.ready_sessions())
+        results = tuple(
+            bool(server.control_network.send_message(
+                message,
+                session_id=session.session_id,
+            ))
+            for session in sessions
+        )
+        return all(results)
         
     def _on_server_client_disconnected(self, data):
         editor = self.__dict__.get("topology_editor")
         if editor is not None:
-            self.after(0, editor.remove_clients_from_draft)
+            machine_id = data.get("peer_identity")
+            windows_name = data.get("windows_name")
+            if machine_id and not windows_name:
+                windows_name = next(
+                    (
+                        placed.group.windows_name
+                        for placed in editor.state.draft.machines
+                        if placed.group.machine_id == machine_id
+                    ),
+                    None,
+                )
+
+            def remove_disconnected_client():
+                if machine_id:
+                    editor.remove_client(machine_id)
+                else:
+                    editor.remove_clients_from_draft()
+                if windows_name:
+                    self._show_client_disconnect_warning(windows_name)
+
+            self.after(0, remove_disconnected_client)
         source = self.server
         if source:
             port = self.server_port_entry.get()
@@ -1226,7 +1590,13 @@ class ConduitGUI(ctk.CTk):
         msg = {'type': 'set_daemon_mode', 'hidden': hidden}
         if self.server and getattr(self.server, 'control_connected', False) and getattr(self.server, 'control_network', None):
             try:
-                self.server.control_network.send_message(msg)
+                if isinstance(self.server, ConduitServer):
+                    self.server.broadcast_cluster_command(
+                        'set_daemon_mode',
+                        {'hidden': hidden},
+                    )
+                else:
+                    self.server.control_network.send_message(msg)
             except Exception as error:
                 logger.debug("Could not send daemon mode sync from server: %s", error_name(error))
         elif self.client and getattr(self.client, 'control_connected', False) and getattr(self.client, 'control_network', None):
@@ -1239,6 +1609,11 @@ class ConduitGUI(ctk.CTk):
         """Handle daemon mode sync message from remote peer."""
         hidden = data.get('hidden', False)
         self.set_daemon_mode(hidden)
+        if self.server and data.get("peer_identity"):
+            self.server.broadcast_cluster_command(
+                "set_daemon_mode",
+                {"hidden": hidden},
+            )
 
     def ensure_visible(self):
         """Ensure the GUI window is restored to visible state (unless connection reload is in progress)."""
@@ -1266,7 +1641,9 @@ class ConduitGUI(ctk.CTk):
 
     def _on_remote_app_shutdown(self, data):
         logger.warning("Authenticated peer requested Conduit shutdown.")
-        self._coordinate_app_shutdown(notify_peer=False)
+        self._coordinate_app_shutdown(
+            notify_peer=bool(self.server and data.get("peer_identity"))
+        )
 
     def _coordinate_app_shutdown(self, notify_peer):
         lock = self.__dict__.get("_shutdown_lock")
@@ -1296,7 +1673,10 @@ class ConduitGUI(ctk.CTk):
                 endpoint = self.client
             if endpoint is not None:
                 try:
-                    endpoint.control_network.send_message({"type": "shutdown_app"})
+                    if isinstance(endpoint, ConduitServer):
+                        endpoint.broadcast_cluster_command("shutdown_app")
+                    else:
+                        endpoint.control_network.send_message({"type": "shutdown_app"})
                 except Exception as error:
                     logger.debug(
                         "Could not notify peer of application shutdown (%s)",
@@ -1313,12 +1693,18 @@ class ConduitGUI(ctk.CTk):
         if self.server:
             self.server._reload_connection()
         elif self.client:
-            self.reconnect_client()
+            requester = getattr(self.client, "request_cluster_reload", None)
+            if requester is None:
+                self.reconnect_client()
+            else:
+                requester()
 
     def _on_remote_reload_connection(self, data):
         logger.info("[GUI] Remote peer triggered connection reload. Maintaining current window visibility.")
         self._is_reloading = True
         self.after(3000, lambda: setattr(self, '_is_reloading', False))
+        if self.server and data.get("peer_identity"):
+            self.server._reload_connection()
 
     def _on_disconnect_notice(self, data):
         reason = data.get('reason', '')
@@ -1379,6 +1765,7 @@ class ConduitGUI(ctk.CTk):
                 pass
         if self.overlay:
             self.hide_overlay()
+        self._stop_server_display_monitor()
         if self.server:
             self.server.stop()
         if self.client:

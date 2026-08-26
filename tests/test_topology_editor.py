@@ -185,6 +185,36 @@ class TopologyEditorStateTests(unittest.TestCase):
             ("server",),
         )
 
+    def test_disconnecting_one_client_removes_only_its_draft_group(self):
+        self.assertTrue(hasattr(self.state, "remove_client"))
+        first = machine("client-a", "ParthSurface")
+        second = machine("client-b", "TravelPC")
+        self.state.add_client(first)
+        self.state.add_client(second)
+        active_before = self.state.active
+
+        removed = self.state.remove_client("client-a")
+
+        self.assertEqual(removed.group.machine_id, "client-a")
+        self.assertEqual(self.state.active, active_before)
+        self.assertEqual(
+            {placed.group.machine_id for placed in self.state.draft.machines},
+            {"server", "client-b"},
+        )
+
+    def test_registry_color_can_override_automatic_editor_color(self):
+        self.assertTrue(hasattr(self.state, "set_client_color"))
+        client = machine("client", "ParthSurface")
+        self.state.add_client(client)
+
+        self.assertTrue(self.state.set_client_color("client", CLIENT_COLORS[2]))
+
+        client_cell = next(
+            cell for cell in self.state.cell_views()
+            if cell.machine_id == "client"
+        )
+        self.assertEqual(client_cell.color, CLIENT_COLORS[2])
+
     def test_client_inventory_cannot_replace_the_fixed_server_identity(self):
         spoofed = machine("server", "SpoofedClient")
 

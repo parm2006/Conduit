@@ -188,6 +188,17 @@ class EdgeMapping:
 
 
 @dataclass(frozen=True)
+class ResolvedEdge:
+    mapping: EdgeMapping
+    source_rect: NativeRect
+    destination_rect: NativeRect
+    destination_position: tuple[int, int]
+    scale_x: float
+    scale_y: float
+    destination_dpi_percent: int
+
+
+@dataclass(frozen=True)
 class ValidatedTopology:
     server_id: str
     machines: tuple[PlacedMachine, ...]
@@ -249,6 +260,61 @@ class ActiveTopology:
             ):
                 return mapping
         raise KeyError((machine_id, display_id, side))
+
+    def machine(self, machine_id):
+        for placed in self.machines:
+            if placed.group.machine_id == machine_id:
+                return placed
+        raise KeyError(machine_id)
+
+    def display(self, machine_id, display_id):
+        return self.machine(machine_id).group.display(display_id)
+
+    def primary_display(self, machine_id):
+        return next(
+            display
+            for display in self.machine(machine_id).group.displays
+            if display.enabled and display.primary
+        )
+
+    def server_primary_center(self):
+        primary = self.primary_display(self.server_id)
+        return (
+            primary.display_id,
+            (
+                primary.rect.left + (primary.rect.right - primary.rect.left) // 2,
+                primary.rect.top + (primary.rect.bottom - primary.rect.top) // 2,
+            ),
+        )
+
+    def resolve_edge(self, machine_id, display_id, side, ratio):
+        mapping = self.edge_for(machine_id, display_id, side)
+        source = self.display(machine_id, display_id)
+        destination = self.display(
+            mapping.destination_machine_id,
+            mapping.destination_display_id,
+        )
+        server_primary = self.primary_display(self.server_id)
+        server_width = server_primary.rect.right - server_primary.rect.left
+        server_height = server_primary.rect.bottom - server_primary.rect.top
+        destination_width = destination.rect.right - destination.rect.left
+        destination_height = destination.rect.bottom - destination.rect.top
+        return ResolvedEdge(
+            mapping=mapping,
+            source_rect=source.rect,
+            destination_rect=destination.rect,
+            destination_position=edge_entry_point(
+                destination.rect,
+                mapping.destination_side,
+                ratio,
+            ),
+            # Conduit is per-monitor DPI aware, so pynput coordinates are native
+            # pixels. Resolution ratios therefore preserve the existing cursor
+            # speed contract; DPI remains explicit metadata for the destination.
+            scale_x=destination_width / server_width,
+            scale_y=destination_height / server_height,
+            destination_dpi_percent=destination.dpi_percent,
+        )
 
 
 @dataclass(frozen=True)

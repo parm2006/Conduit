@@ -1,5 +1,6 @@
 import threading
 import unittest
+from types import SimpleNamespace
 
 from app.clipboard_formats import ClipboardEntry, ClipboardSnapshot
 from app.client import ConduitClient
@@ -147,7 +148,6 @@ class FileAvailabilityRoutingTests(unittest.TestCase):
 
     def test_server_ordinary_payload_queue_preserves_explicit_local_offer(self):
         server = ConduitServer.__new__(ConduitServer)
-        server.switching_to_client = False
         server.control_network = SessionNetwork()
         server.paste_coordinator = PasteCoordinator(lambda: None)
         server.clipboard_sender = RecordingClipboardSender()
@@ -187,7 +187,7 @@ class FileAvailabilityRoutingTests(unittest.TestCase):
 
     def test_server_routes_received_client_offer_against_client_destination(self):
         server = ConduitServer.__new__(ConduitServer)
-        server.switching_to_client = True
+        server.input_router = SimpleNamespace(active_session_id="session-one")
         server.control_network = SessionNetwork()
         server.paste_coordinator = PasteCoordinator(lambda: None)
 
@@ -213,7 +213,13 @@ class FileAvailabilityRoutingTests(unittest.TestCase):
     def test_server_screen_transition_recomputes_route_from_same_offer(self):
         events = []
         server = ConduitServer.__new__(ConduitServer)
-        server.switching_to_client = False
+        server.input_router = SimpleNamespace(
+            active_session_id=None,
+            forward_key_press=lambda key: server.control_network.send_message({
+                "type": "key_press",
+                "key": key,
+            }),
+        )
         server.control_network = SessionNetwork()
         server.input_handler = RecordingInputHandler(events)
         server._active_edge_side = "right"
@@ -223,7 +229,8 @@ class FileAvailabilityRoutingTests(unittest.TestCase):
         offer = state.observe_local("files", 20)
         server.paste_coordinator.set_route(offer, "server")
 
-        server.on_edge_hit("right", 0.5)
+        server.input_router.active_session_id = "session-one"
+        server._apply_clipboard_offer_route()
 
         self.assertEqual(server.paste_coordinator.current_offer, offer)
         self.assertEqual(server.paste_coordinator.destination, "client")
@@ -257,7 +264,7 @@ class FileAvailabilityRoutingTests(unittest.TestCase):
     def test_server_return_recomputes_route_from_same_client_offer(self):
         events = []
         server = ConduitServer.__new__(ConduitServer)
-        server.switching_to_client = True
+        server.input_router = SimpleNamespace(active_session_id="session-one")
         server.control_network = SessionNetwork()
         server.input_handler = RecordingInputHandler(events)
         server._active_edge_side = "right"
@@ -276,7 +283,8 @@ class FileAvailabilityRoutingTests(unittest.TestCase):
             }
         )
 
-        server.on_switch_back({"ratio": 0.5})
+        server.input_router.active_session_id = None
+        server._apply_clipboard_offer_route()
 
         self.assertIsNotNone(server.paste_coordinator.current_offer)
         self.assertEqual(server.paste_coordinator.current_offer.source, "client")
@@ -285,7 +293,13 @@ class FileAvailabilityRoutingTests(unittest.TestCase):
 
     def test_client_file_copy_supersedes_server_file_on_physical_server_hotkey_path(self):
         server = ConduitServer.__new__(ConduitServer)
-        server.switching_to_client = False
+        server.input_router = SimpleNamespace(
+            active_session_id=None,
+            forward_key_press=lambda key: server.control_network.send_message({
+                "type": "key_press",
+                "key": key,
+            }),
+        )
         server.control_network = SessionNetwork()
         server.pressed_keys = set()
         server.forwarded_keys = {}
@@ -294,7 +308,7 @@ class FileAvailabilityRoutingTests(unittest.TestCase):
             server._request_remote_file_paste
         )
         self.assertTrue(server.on_local_clipboard_offer("files", 10))
-        server.switching_to_client = True
+        server.input_router.active_session_id = "session-one"
         server._apply_clipboard_offer_route()
         self.assertTrue(server.paste_coordinator.transfer_required)
 
@@ -423,7 +437,7 @@ class FileAvailabilityRoutingTests(unittest.TestCase):
 
     def test_server_hotkey_refreshes_unpolled_local_copy_before_routing(self):
         server = ConduitServer.__new__(ConduitServer)
-        server.switching_to_client = False
+        server.input_router = SimpleNamespace(active_session_id=None)
         server.control_network = SessionNetwork()
         server.paste_coordinator = PasteCoordinator(lambda: None)
         server.on_remote_clipboard_offer(
@@ -454,7 +468,7 @@ class FileAvailabilityRoutingTests(unittest.TestCase):
     def test_server_hotkey_suppresses_paste_when_clipboard_refresh_is_unknown(self):
         requested = []
         server = ConduitServer.__new__(ConduitServer)
-        server.switching_to_client = False
+        server.input_router = SimpleNamespace(active_session_id=None)
         server.control_network = SessionNetwork()
         server.paste_coordinator = PasteCoordinator(
             lambda: requested.append("paste")
@@ -514,7 +528,7 @@ class FileAvailabilityRoutingTests(unittest.TestCase):
         server = ConduitServer.__new__(ConduitServer)
         server.input_handler = RecordingInputHandler(events)
         server.file_paste_service = PasteServiceState(active=True)
-        server.switching_to_client = False
+        server.input_router = SimpleNamespace(active_session_id=None)
         server._active_edge_side = "right"
         server.paste_coordinator = RecordingCoordinator()
         server.control_network = RecordingNetwork()
@@ -522,7 +536,7 @@ class FileAvailabilityRoutingTests(unittest.TestCase):
 
         server.on_edge_hit("right", 0.5)
 
-        self.assertFalse(server.switching_to_client)
+        self.assertFalse(server._remote_destination_active())
         self.assertEqual(server.control_network.messages, [])
         self.assertEqual(events, [])
 
@@ -546,7 +560,7 @@ class FileAvailabilityRoutingTests(unittest.TestCase):
         server = ConduitServer.__new__(ConduitServer)
         server.file_paste_service = service
         server.input_handler = RecordingInputHandler(events)
-        server.switching_to_client = False
+        server.input_router = SimpleNamespace(active_session_id=None)
         server._active_edge_side = "right"
         server.paste_coordinator = RecordingCoordinator()
         server.control_network = RecordingNetwork()
@@ -567,7 +581,7 @@ class FileAvailabilityRoutingTests(unittest.TestCase):
         service.finish_request.set()
         paste.join(1)
         crossing.join(1)
-        self.assertFalse(server.switching_to_client)
+        self.assertFalse(server._remote_destination_active())
         self.assertEqual(server.control_network.messages, [])
 
     def test_client_edge_cannot_race_paste_destination_latching(self):

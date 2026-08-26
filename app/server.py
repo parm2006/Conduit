@@ -4,7 +4,7 @@ import threading
 from pathlib import Path
 from app.network import NetworkServer
 from app.crypto import load_identity
-from app.session import SessionCoordinator
+from app.session import SessionRegistry
 from app.file_transfer.transport import FileLaneServer
 from app.file_transfer.paste_coordinator import ClipboardOfferState, PasteCoordinator
 from app.file_transfer.hotkey import WindowsPasteHotkeyMonitor
@@ -15,57 +15,101 @@ from app.file_transfer.selection import snapshot_selection
 from app.file_transfer.sender import TransferSender
 from app.file_transfer.controller import TransferController
 from app.file_transfer.cancellation import TransferCancellation
+from app.file_transfer.cluster_router import (
+    ClusterCommandBroadcaster,
+    ClusterFileRouter,
+    ServerClusterFileLane,
+)
 from app.input_handler import InputHandler
 from app.clipboard_handler import ClipboardHandler
-from app.clipboard_formats import encode_clipboard_message
+from app.clipboard_formats import decode_clipboard_message, encode_clipboard_message
+from app.clipboard_hub import ClipboardHub
 from app.latest_wins_sender import LatestWinsSender
 from app.safe_errors import error_name
 from app.global_hotkey import GlobalHotkeyMonitor
 from app.ports import DEFAULT_BASE_PORT
-from app.display_topology import NativeRect, edge_entry_point
+from app.input_router import InputRouter
+from app.machine_identity import windows_machine_id
 
 logger = logging.getLogger(__name__)
 
 
-def _message_rect(values):
-    if not isinstance(values, list) or len(values) != 4:
-        return None
-    if any(type(value) is not int for value in values):
-        return None
-    left, top, right, bottom = values
-    if right <= left or bottom <= top:
-        return None
-    return NativeRect(left, top, right, bottom)
+class _ServerInputEffects:
+    def __init__(self, server):
+        self.server = server
+
+    def release_local_input(self):
+        self.server.pressed_keys.clear()
+
+    def begin_remote_capture(self, session_id):
+        self.server.input_handler.stop()
+        self.server.input_handler.start_keyboard_capture()
+        if self.server.on_capture_start:
+            self.server.on_capture_start()
+
+    def restore_local(self, position):
+        self.server.input_handler.stop_keyboard_capture()
+        if self.server.on_capture_stop:
+            self.server.on_capture_stop()
+        self.server.input_handler.inject_position(*position)
+        self.server.input_handler.start_edge_detection()
+
+
+class _ServerClusterControl:
+    def __init__(self, server):
+        self.server = server
+
+    def send_message(self, message):
+        return self.server._handle_cluster_file_control(
+            self.server.server_machine_id,
+            message,
+        )
+
 
 class ConduitServer:
     def __init__(self, password, port=DEFAULT_BASE_PORT, on_capture_start=None, on_capture_stop=None, on_transfer_status=None, on_app_shutdown=None, on_topology_edit_cancel=None):
-        self._active_edge_side = None
         self.on_capture_start = on_capture_start
         self.on_capture_stop = on_capture_stop
         self.on_app_shutdown = on_app_shutdown
         self.on_topology_edit_cancel = on_topology_edit_cancel
         
         self.identity = load_identity()
-        self.session_coordinator = SessionCoordinator(password)
+        self.session_registry = SessionRegistry(password)
         self.control_network = NetworkServer(
             password, '0.0.0.0', port, role='control',
-            coordinator=self.session_coordinator, identity=self.identity,
+            coordinator=self.session_registry, identity=self.identity,
         )
         self.data_network = NetworkServer(
             password, '0.0.0.0', port + 1, role='data',
-            coordinator=self.session_coordinator, identity=self.identity,
+            coordinator=self.session_registry, identity=self.identity,
         )
         self.file_network = FileLaneServer(
             host='0.0.0.0', port=port + 2, identity=self.identity,
-            coordinator=self.session_coordinator,
+            coordinator=self.session_registry,
+        )
+        self.server_machine_id = windows_machine_id()
+        self.clipboard_hub = ClipboardHub(self.server_machine_id)
+        self.cluster_file_router = ClusterFileRouter(
+            self.server_machine_id,
+            latest_offer=lambda: self.clipboard_hub.latest_item,
+            endpoint_available=self._cluster_endpoint_available,
+            send_control=self._send_cluster_file_control,
+            send_file=self._send_cluster_file_frame,
+        )
+        self.cluster_file_lane = ServerClusterFileLane(
+            self.server_machine_id,
+            self.file_network,
+            self.cluster_file_router,
         )
         self.transfer_controller = TransferController()
         if on_transfer_status:
             self.transfer_controller.subscribe(on_transfer_status)
         self.file_receiver = TransferReceiver(Path(os.environ.get('LOCALAPPDATA', Path.home())) / 'Conduit' / 'transfers' / 'server', controller=self.transfer_controller)
-        self.file_receiver.attach(self.file_network)
+        self.file_receiver.attach(self.cluster_file_lane)
         self.transfer_cancellation = TransferCancellation(
-            self.file_network, self.transfer_controller, self.file_receiver
+            self.cluster_file_lane,
+            self.transfer_controller,
+            self.file_receiver,
         )
         self.file_publisher = VirtualPastePublisher(
             on_clipboard_change_begin=(
@@ -86,21 +130,31 @@ class ConduitServer:
         self.data_connected = False
         self._client_ready = False
         self._disconnecting = False
+        self._disconnecting_sessions = set()
+        self._ready_session_ids = set()
+        self._clipboard_endpoint_ids = {}
+        self._clipboard_sessions_by_endpoint = {}
         self._client_state_lock = threading.RLock()
         self._topology_ack_lock = threading.Lock()
         self._topology_ack_event = None
         self._topology_ack_version = None
         self._topology_commit_ack_event = None
         self._topology_commit_ack_version = None
+        self._topology_transaction = None
+        self._active_topology_session_ids = set()
         
         # Setup control network callbacks
         self.control_network.register_callback('connected', lambda d: self._on_socket_connected('control', d))
-        self.control_network.register_callback('disconnected', lambda d: self._on_socket_disconnected('control'))
+        self.control_network.register_callback('disconnected', lambda d: self._on_socket_disconnected('control', d))
         self.control_network.register_callback('switch_back', self.on_switch_back)
         self.control_network.register_callback('topology_ack', self.on_topology_ack)
         self.control_network.register_callback(
             'topology_commit_ack',
             self.on_topology_commit_ack,
+        )
+        self.control_network.register_callback(
+            'topology_rollback_ack',
+            self.on_topology_rollback_ack,
         )
         self.control_network.register_callback(
             'clipboard_offer', self.on_remote_clipboard_offer
@@ -109,13 +163,20 @@ class ConduitServer:
         self.control_network.register_callback('file_manifest_response', self.on_file_manifest_response)
         self.control_network.register_callback('file_manifest_failed', self.on_file_manifest_failed)
         self.control_network.register_callback('file_manifest_ack', self.on_file_manifest_ack)
+        self.control_network.register_callback(
+            'reload_connection_request',
+            lambda data: self._reload_connection(),
+        )
         
         # Setup data network callbacks
         self.data_network.register_callback('connected', lambda d: self._on_socket_connected('data', d))
-        self.data_network.register_callback('disconnected', lambda d: self._on_socket_disconnected('data'))
+        self.data_network.register_callback('disconnected', lambda d: self._on_socket_disconnected('data', d))
         self.data_network.register_callback('clipboard_sync', self.on_remote_copy)
         self.file_network.register_callback(
-            'disconnected', lambda metadata, payload: self._on_socket_disconnected('file')
+            'connected', lambda metadata, payload: self._on_socket_connected('file', metadata)
+        )
+        self.file_network.register_callback(
+            'disconnected', lambda metadata, payload: self._on_socket_disconnected('file', metadata)
         )
         
         # Setup input callbacks
@@ -131,6 +192,10 @@ class ConduitServer:
             on_clipboard_change=self.on_local_copy,
             on_clipboard_offer=self.on_local_clipboard_offer,
         )
+        self.clipboard_hub.register_endpoint(
+            self.server_machine_id,
+            self._deliver_clipboard_to_server,
+        )
         self.paste_coordinator = PasteCoordinator(self._request_remote_file_paste)
         self.paste_coordinator.before_paste = (
             self._refresh_active_destination_offer
@@ -138,14 +203,17 @@ class ConduitServer:
         self.hotkey_monitor = WindowsPasteHotkeyMonitor(self.paste_coordinator)
         self.clipboard_offer_state = ClipboardOfferState("server")
         self.file_paste_service = FilePasteService(
-            self.control_network, self.file_receiver, self.file_publisher,
-            TransferSender(self.file_network, controller=self.transfer_controller),
+            _ServerClusterControl(self),
+            self.file_receiver,
+            self.file_publisher,
+            TransferSender(
+                self.cluster_file_lane,
+                controller=self.transfer_controller,
+            ),
             lambda: snapshot_selection(self.clipboard.read_file_selection()),
         )
         self.clipboard_sender = LatestWinsSender(self._send_clipboard_snapshot)
-        self.switching_to_client = False
         self.pressed_keys = set()
-        self.forwarded_keys = {}
 
     def cancel_transfer(self, job_id):
         return self.transfer_cancellation.request(job_id)
@@ -171,114 +239,157 @@ class ConduitServer:
         return False
 
     def stop(self):
+        self._abort_topology_transaction(shutdown=True)
         self.global_hotkey_monitor.stop()
+        self.cluster_file_router.stop()
+        self.session_registry.close()
         self.control_network.stop()
         self.data_network.stop()
         self.file_network.stop()
         self.input_handler.stop()
         self.clipboard.stop()
         self.clipboard_sender.stop()
+        self.clipboard_hub.stop()
         self.hotkey_monitor.stop()
 
     def _on_socket_connected(self, sock_type, data=None):
-        with self._client_state_lock:
-            if sock_type == 'control':
-                self.control_connected = True
-            elif sock_type == 'data':
-                self.data_connected = True
-            if not (
-                self.control_connected and self.data_connected
-                and not self._client_ready
-            ):
-                return
-            if self.control_network.session_id != self.data_network.session_id:
-                mismatched = True
-            else:
-                mismatched = False
-                self._client_ready = True
-        if mismatched:
-            logger.warning("Rejecting lanes from different sessions")
-            self.data_network.disconnect()
-        else:
-            self.on_client_connected()
+        session_id = (data or {}).get('session_id')
+        if session_id is None:
+            return False
+        session = self.session_registry.get(session_id)
+        if session is None:
+            return False
+        if sock_type == 'data' and session.data_lane is not None and session.file_lane is None:
+            self._offer_file_lane(session_id)
+        return self._refresh_session_readiness(session_id)
 
-    def _on_socket_disconnected(self, sock_type):
+    def _refresh_session_readiness(self, session_id):
+        session = self.session_registry.get(session_id)
+        became_ready = False
         with self._client_state_lock:
-            if sock_type == 'control':
-                self.control_connected = False
-            elif sock_type == 'data':
-                self.data_connected = False
-            if self._disconnecting:
-                return
-            self._disconnecting = True
-            was_ready = self._client_ready
-            self._client_ready = False
+            self.control_connected = bool(self.session_registry.active_sessions())
+            self.data_connected = any(
+                item.data_lane is not None
+                for item in self.session_registry.active_sessions()
+            )
+            if (
+                session is not None
+                and session.ready
+                and session_id not in self._ready_session_ids
+            ):
+                self._ready_session_ids.add(session_id)
+                became_ready = True
+            self._client_ready = bool(self.session_registry.ready_sessions())
+        if became_ready:
+            self.on_client_connected(session_id)
+        return became_ready
+
+    def _on_socket_disconnected(self, sock_type, data=None):
+        session_id = (data or {}).get('session_id')
+        if session_id is None:
+            return False
+        with self._client_state_lock:
+            if session_id in self._disconnecting_sessions:
+                return False
+            session = self.session_registry.get(session_id)
+            if session is None:
+                return False
+            self._disconnecting_sessions.add(session_id)
+            was_ready = session.ready or session_id in self._ready_session_ids
         try:
-            self.session_coordinator.close()
-            self.file_network.revoke_session()
-            self.control_network.disconnect()
-            self.data_network.disconnect()
+            self.file_network.revoke_session(session_id)
+            self.session_registry.close(session_id)
+            with self._client_state_lock:
+                self._ready_session_ids.discard(session_id)
             if was_ready:
-                self.on_client_disconnected()
+                self.on_client_disconnected(session_id)
+            self._refresh_session_readiness(session_id)
+            return True
         finally:
             with self._client_state_lock:
-                self._disconnecting = False
+                self._disconnecting_sessions.discard(session_id)
 
-    def on_client_connected(self):
+    def on_client_connected(self, session_id=None):
         logger.info(
-            "Client connected on all lanes; waiting for topology Apply before input routing."
+            "Client session %s connected on all lanes; waiting for topology Apply before input routing.",
+            str(session_id)[:8] if session_id else "legacy",
         )
-        self.control_network.send_message({'type': 'display_inventory_request'})
-        self.clipboard.start()
-        self.hotkey_monitor.start()
+        message = {'type': 'display_inventory_request'}
+        if session_id is None:
+            self.control_network.send_message(message)
+        else:
+            self.control_network.send_message(message, session_id=session_id)
+        if len(getattr(self, '_ready_session_ids', ())) <= 1:
+            self.clipboard.start()
+            self.hotkey_monitor.start()
+        self._register_clipboard_endpoint(session_id)
         self.pressed_keys.clear()
-        self._offer_file_lane()
 
     def activate_client_topology(self, topology):
-        if isinstance(topology, str):
-            position = topology
-            message = {
-                'type': 'layout_config',
-                'position': position,
-                'server_width': self.input_handler.screen_width,
-                'server_height': self.input_handler.screen_height,
-            }
-            self._active_edge_side = position
-            self.control_network.send_message(message)
-            self.input_handler.start_edge_detection(position)
-            return
-
+        if not hasattr(topology, 'version') or not hasattr(topology, 'edge_mappings'):
+            raise TypeError("active topology is required")
         self._install_topology(topology)
         message = self._topology_layout_message(topology, 'layout_config')
         if message is not None:
             self.control_network.send_message(message)
 
     def _install_topology(self, topology):
+        previous_router = getattr(self, 'input_router', None)
+        if previous_router is not None:
+            previous_router.pause("topology changed")
         self.active_topology = topology
         self.input_handler.configure_topology_edges(topology, topology.server_id)
-        message = self._topology_layout_message(topology, 'layout_config')
-        if message is None:
-            return
-        self._active_edge_side = message['position']
+        self.input_router = InputRouter(
+            topology,
+            session_for_machine=self._session_for_machine,
+            input_effects=_ServerInputEffects(self),
+        )
         if getattr(self, 'control_connected', True):
             self.input_handler.start_edge_detection()
+
+    def _session_for_machine(self, machine_id):
+        authorized_session_ids = getattr(
+            self,
+            "_active_topology_session_ids",
+            None,
+        )
+        return next(
+            (
+                session
+                for session in self.session_registry.active_sessions()
+                if session.ready
+                and session.peer_identity == machine_id
+                and (
+                    authorized_session_ids is None
+                    or session.session_id in authorized_session_ids
+                )
+            ),
+            None,
+        )
 
     def _restore_topology(self, topology):
         if topology is not None:
             self._install_topology(topology)
             return
         self.active_topology = None
-        self._active_edge_side = None
+        self.input_router = None
         self.input_handler.stop()
         self.input_handler.clear_topology_edges()
 
-    def _topology_layout_message(self, topology, message_type):
-        mappings = tuple(
-            mapping
-            for mapping in topology.edge_mappings
-            if mapping.source_machine_id == topology.server_id
-            and mapping.destination_machine_id != topology.server_id
-        )
+    def _topology_layout_message(self, topology, message_type, machine_id=None):
+        if machine_id is None:
+            mappings = tuple(
+                mapping
+                for mapping in topology.edge_mappings
+                if mapping.source_machine_id == topology.server_id
+                and mapping.destination_machine_id != topology.server_id
+            )
+        else:
+            mappings = tuple(
+                mapping
+                for mapping in topology.edge_mappings
+                if mapping.destination_machine_id == machine_id
+            )
         if not mappings:
             return None
         machines = {
@@ -286,21 +397,24 @@ class ConduitServer:
             for placed in topology.machines
         }
         mapping = mappings[0]
-        server_display = machines[topology.server_id].display(mapping.source_display_id)
+        source_display = machines[mapping.source_machine_id].display(
+            mapping.source_display_id
+        )
         client_display = machines[mapping.destination_machine_id].display(
             mapping.destination_display_id
         )
         return {
             'type': message_type,
+            'topology_version': topology.version,
             'position': mapping.source_side,
             'server_width': self.input_handler.screen_width,
             'server_height': self.input_handler.screen_height,
             'server_display_id': mapping.source_display_id,
             'server_rect': [
-                server_display.rect.left,
-                server_display.rect.top,
-                server_display.rect.right,
-                server_display.rect.bottom,
+                source_display.rect.left,
+                source_display.rect.top,
+                source_display.rect.right,
+                source_display.rect.bottom,
             ],
             'client_display_id': mapping.destination_display_id,
             'client_rect': [
@@ -319,10 +433,20 @@ class ConduitServer:
         on_complete,
         timeout=3.0,
     ):
+        with self._topology_ack_lock:
+            if getattr(self, "_topology_transaction", None) is not None:
+                return False
         previous = getattr(self, 'active_topology', None)
+        previous_session_ids = set(
+            getattr(self, "_active_topology_session_ids", ())
+        )
+        clipboard_hub = getattr(self, 'clipboard_hub', None)
         self._release_forwarded_keys()
-        self.switching_to_client = False
-        self.input_handler.release_all_injected_keys()
+        release = (
+            getattr(self.input_handler, 'release_all_injected_input', None)
+            or self.input_handler.release_all_injected_keys
+        )
+        release()
         self.input_handler.stop()
         if self.on_capture_stop:
             self.on_capture_stop()
@@ -340,227 +464,350 @@ class ConduitServer:
             (primary.rect.left + primary.rect.right) // 2,
             (primary.rect.top + primary.rect.bottom) // 2,
         )
-        event = threading.Event()
+        if clipboard_hub is not None:
+            clipboard_hub.pause_delivery()
+        file_router = getattr(self, "cluster_file_router", None)
+        if file_router is not None:
+            file_router.pause()
+        candidate_machine_ids = {
+            placed.group.machine_id for placed in topology.machines
+        }
+        candidate_client_ids = candidate_machine_ids - {topology.server_id}
+        registry = getattr(self, "session_registry", None)
+        sessions = tuple(
+            () if registry is None else registry.ready_sessions()
+        )
+        participants = {
+            session.session_id: session.peer_identity for session in sessions
+        }
+        legacy_message = None
+        if registry is None:
+            legacy_message = self._topology_layout_message(
+                topology, 'topology_apply'
+            )
+            if legacy_message is not None:
+                participants = {"legacy": "legacy"}
+        condition = threading.Condition(self._topology_ack_lock)
+        transaction = {
+            "version": topology.version,
+            "participants": frozenset(participants),
+            "prepare": set(),
+            "commit": set(),
+            "rollback": set(),
+            "disconnected": set(),
+            "failed": (
+                registry is not None
+                and {session.peer_identity for session in sessions}
+                != candidate_client_ids
+            ),
+            "shutdown": False,
+            "condition": condition,
+        }
         with self._topology_ack_lock:
-            self._topology_ack_event = event
-            self._topology_ack_version = topology.version
-        message = self._topology_layout_message(topology, 'topology_apply')
-        if message is None:
-            with self._topology_ack_lock:
-                self._topology_ack_event = None
-                self._topology_ack_version = None
-            try:
-                persisted = bool(on_persist(topology))
-            except Exception:
-                persisted = False
-            if persisted:
-                try:
-                    self._install_topology(topology)
-                except Exception as error:
-                    logger.error(
-                        "Could not install topology (%s)",
-                        error_name(error),
-                    )
-                    persisted = False
-                    self._restore_topology(previous)
-            on_complete(persisted)
-            return
-        message['version'] = topology.version
-        sent = self.control_network.send_message(message)
+            self._topology_transaction = transaction
+
+        sent_participants = set()
+        for session_id, machine_id in participants.items():
+            message = (
+                legacy_message
+                if session_id == "legacy"
+                else self._topology_layout_message(
+                    topology,
+                    'topology_apply',
+                    machine_id,
+                )
+            )
+            if message is None:
+                transaction["failed"] = True
+                continue
+            message = dict(message)
+            message['version'] = topology.version
+            sent = (
+                self.control_network.send_message(message)
+                if session_id == "legacy"
+                else self.control_network.send_message(
+                    message,
+                    session_id=session_id,
+                )
+            )
+            if sent:
+                sent_participants.add(session_id)
+            else:
+                transaction["failed"] = True
 
         def finish():
-            acknowledged = bool(sent and event.wait(timeout))
-            with self._topology_ack_lock:
-                self._topology_ack_event = None
-                self._topology_ack_version = None
-            committed = False
-            commit_event = threading.Event()
-            if acknowledged:
-                with self._topology_ack_lock:
-                    self._topology_commit_ack_event = commit_event
-                    self._topology_commit_ack_version = topology.version
-                commit_sent = self.control_network.send_message({
-                    'type': 'topology_commit',
-                    'version': topology.version,
-                })
-                committed = bool(commit_sent and commit_event.wait(timeout))
-                with self._topology_ack_lock:
-                    self._topology_commit_ack_event = None
-                    self._topology_commit_ack_version = None
+            expected = transaction["participants"]
+            with condition:
+                prepared = condition.wait_for(
+                    lambda: transaction["failed"]
+                    or transaction["prepare"] == expected,
+                    timeout,
+                ) and not transaction["failed"]
+            committed = bool(prepared)
+            if committed:
+                for session_id in expected:
+                    message = {'type': 'topology_commit', 'version': topology.version}
+                    sent = (
+                        self.control_network.send_message(message)
+                        if session_id == "legacy"
+                        else self.control_network.send_message(
+                            message, session_id=session_id
+                        )
+                    )
+                    if not sent:
+                        committed = False
+                if committed:
+                    with condition:
+                        committed = condition.wait_for(
+                            lambda: transaction["failed"]
+                            or transaction["commit"] == expected,
+                            timeout,
+                        ) and not transaction["failed"]
+            with condition:
+                if transaction["failed"]:
+                    committed = False
             persisted = False
+            candidate_persisted = False
             if committed:
                 try:
-                    self._install_topology(topology)
+                    persisted = bool(on_persist(topology))
+                    candidate_persisted = persisted
                 except Exception as error:
                     logger.error(
-                        "Could not install acknowledged topology (%s)",
+                        "Could not persist acknowledged topology (%s)",
                         error_name(error),
                     )
-                else:
+                with condition:
+                    if transaction["failed"]:
+                        persisted = False
+                if persisted:
                     try:
-                        persisted = bool(on_persist(topology))
+                        self._active_topology_session_ids = {
+                            session_id
+                            for session_id in expected
+                            if session_id != "legacy"
+                        }
+                        self._install_topology(topology)
                     except Exception as error:
                         logger.error(
-                            "Could not persist acknowledged topology (%s)",
+                            "Could not install acknowledged topology (%s)",
                             error_name(error),
                         )
-            if not persisted:
-                self.control_network.send_message({
-                    'type': 'topology_rollback',
-                    'version': topology.version,
-                })
+                        persisted = False
+                        self._active_topology_session_ids = previous_session_ids
+            if not persisted and candidate_persisted:
+                try:
+                    if not bool(on_persist(previous)):
+                        logger.error(
+                            "Could not restore previous persisted topology"
+                        )
+                except Exception as error:
+                    logger.error(
+                        "Could not restore previous persisted topology (%s)",
+                        error_name(error),
+                    )
+            shutdown = transaction["shutdown"]
+            if not persisted and not shutdown:
+                for session_id in sent_participants:
+                    message = {'type': 'topology_rollback', 'version': topology.version}
+                    if session_id == "legacy":
+                        self.control_network.send_message(message)
+                    else:
+                        self.control_network.send_message(
+                            message, session_id=session_id
+                        )
+                with condition:
+                    condition.wait_for(
+                        lambda: transaction["rollback"] >= sent_participants,
+                        timeout,
+                    )
+                    inconsistent = sent_participants - transaction["rollback"]
+                for session_id in inconsistent:
+                    if session_id != "legacy":
+                        self.control_network.disconnect(session_id=session_id)
+                self._active_topology_session_ids = (
+                    previous_session_ids
+                    - inconsistent
+                    - transaction["disconnected"]
+                )
                 self._restore_topology(previous)
-            else:
-                self.control_network.send_message({
-                    'type': 'topology_finalize',
-                    'version': topology.version,
-                })
+            elif persisted:
+                for session_id in expected:
+                    message = {'type': 'topology_finalize', 'version': topology.version}
+                    if session_id == "legacy":
+                        self.control_network.send_message(message)
+                    else:
+                        self.control_network.send_message(
+                            message, session_id=session_id
+                        )
+            if not shutdown:
+                if file_router is not None:
+                    file_router.resume()
+                if clipboard_hub is not None:
+                    clipboard_hub.resume_delivery()
+            with self._topology_ack_lock:
+                if self._topology_transaction is transaction:
+                    self._topology_transaction = None
             on_complete(persisted)
 
-        threading.Thread(target=finish, daemon=True).start()
+        if participants:
+            threading.Thread(target=finish, daemon=True).start()
+        else:
+            finish()
+        return True
 
     def on_topology_ack(self, data):
-        version = data.get('version')
-        with self._topology_ack_lock:
-            if version != self._topology_ack_version:
-                return False
-            event = self._topology_ack_event
-            if event is None:
-                return False
-            event.set()
-            return True
+        return self._record_topology_ack("prepare", data)
 
     def on_topology_commit_ack(self, data):
-        version = data.get('version')
+        return self._record_topology_ack("commit", data)
+
+    def on_topology_rollback_ack(self, data):
+        return self._record_topology_ack("rollback", data)
+
+    def _record_topology_ack(self, phase, data):
         with self._topology_ack_lock:
-            if version != self._topology_commit_ack_version:
+            transaction = getattr(self, "_topology_transaction", None)
+            if transaction is None or data.get("version") != transaction["version"]:
                 return False
-            event = self._topology_commit_ack_event
-            if event is None:
+            session_id = data.get("session_id") or "legacy"
+            if session_id not in transaction["participants"]:
                 return False
-            event.set()
+            transaction[phase].add(session_id)
+            transaction["condition"].notify_all()
             return True
 
-    def _offer_file_lane(self):
-        offer = self.control_network.session_offer
-        if offer is None or offer.session_id != self.data_network.session_id:
-            raise RuntimeError("file lane cannot be offered before session binding")
-        self.file_network.offer_session(offer.file_token, offer.session_id)
-        self.control_network.send_message({
-            'type': 'file_lane_offer',
-            'port': self.file_network.port,
-            'session_id': offer.session_id,
-        })
+    def _abort_topology_transaction(self, session_id=None, shutdown=False):
+        lock = getattr(self, "_topology_ack_lock", None)
+        if lock is None:
+            return False
+        with lock:
+            transaction = getattr(self, "_topology_transaction", None)
+            if transaction is None:
+                return False
+            if (
+                session_id is not None
+                and session_id not in transaction["participants"]
+            ):
+                return False
+            if session_id is not None:
+                transaction["disconnected"].add(session_id)
+            transaction["failed"] = True
+            transaction["shutdown"] = bool(
+                transaction["shutdown"] or shutdown
+            )
+            transaction["condition"].notify_all()
+            return True
 
-    def on_client_disconnected(self):
-        logger.info("Client disconnected, stopping edge detection and wiping clipboard.")
-        self.switching_to_client = False
+    def _offer_file_lane(self, session_id):
+        session = self.session_registry.get(session_id)
+        if session is None or session.data_lane is None:
+            raise RuntimeError("file lane cannot be offered before session binding")
+        self.file_network.offer_session(None, session_id)
+        return self.control_network.send_message(
+            {
+                'type': 'file_lane_offer',
+                'port': self.file_network.port,
+                'session_id': session_id,
+            },
+            session_id=session_id,
+        )
+
+    def on_client_disconnected(self, session_id=None):
+        logger.info("Client session %s disconnected.", str(session_id)[:8] if session_id else "legacy")
+        self._abort_topology_transaction(session_id=session_id)
+        if session_id is not None:
+            getattr(self, "_active_topology_session_ids", set()).discard(
+                session_id
+            )
+        endpoint_ids = getattr(self, '_clipboard_endpoint_ids', {})
+        endpoint_id = endpoint_ids.pop(session_id, None)
+        sessions_by_endpoint = getattr(
+            self,
+            '_clipboard_sessions_by_endpoint',
+            {},
+        )
+        current_session_id = sessions_by_endpoint.get(endpoint_id)
+        cluster_file_router = getattr(self, 'cluster_file_router', None)
+        if cluster_file_router is not None and endpoint_id is not None:
+            cluster_file_router.endpoint_disconnected(endpoint_id)
+        clipboard_hub = getattr(self, 'clipboard_hub', None)
+        if current_session_id == session_id:
+            sessions_by_endpoint.pop(endpoint_id, None)
+        if (
+            clipboard_hub is not None
+            and endpoint_id is not None
+            and current_session_id == session_id
+        ):
+            clipboard_hub.disconnect_endpoint(endpoint_id)
+        router = getattr(self, 'input_router', None)
+        if router is not None and session_id is not None:
+            router.destination_lost(session_id)
+        if session_id is not None and self.session_registry.ready_sessions():
+            return
+        logger.info("No ready Clients remain; stopping edge detection and wiping clipboard.")
         self.pressed_keys.clear()
-        self.forwarded_keys.clear()
         if self.on_capture_stop:
             self.on_capture_stop()
         self.input_handler.stop()
         self.clipboard.stop()
-        self.file_network.close()
+        if session_id is None:
+            self.file_network.close()
         self.paste_coordinator.reset()
         self.hotkey_monitor.stop()
 
     def on_edge_hit(self, direction, ratio, region=None):
         with self._get_paste_route_lock():
-            if region is not None or direction == self._active_edge_side:
-                paste_service = getattr(self, "file_paste_service", None)
-                if (
-                    paste_service is not None
-                    and paste_service.destination_paste_active
-                ):
-                    logger.info(
-                        "Ignoring screen edge while the local paste destination is active."
-                    )
-                    return
-                if self.switching_to_client:
-                    return
-                self.switching_to_client = True
-                self.active_edge_region = region
-                cancel_edit = getattr(self, 'on_topology_edit_cancel', None)
-                if cancel_edit is not None:
-                    cancel_edit()
+            paste_service = getattr(self, "file_paste_service", None)
+            if (
+                paste_service is not None
+                and paste_service.destination_paste_active
+            ):
+                logger.info(
+                    "Ignoring screen edge while the local paste destination is active."
+                )
+                return False
+            router = getattr(self, 'input_router', None)
+            if router is None or region is None:
+                return False
+            cancel_edit = getattr(self, 'on_topology_edit_cancel', None)
+            if cancel_edit is not None:
+                cancel_edit()
+            switched = router.handle_edge(
+                region.source_machine_id,
+                region.source_display_id,
+                region.source_side,
+                ratio,
+                topology_version=router.topology.version,
+            )
+            if switched:
                 self._apply_clipboard_offer_route()
-
-                logger.info(f"Hit {direction} edge. Switching to client.")
-                message = {
-                    'type': 'switch',
-                    'direction': direction,
-                    'ratio': ratio
-                }
-                if region is not None:
-                    message.update(
-                        {
-                            'source_display_id': region.source_display_id,
-                            'source_side': region.source_side,
-                            'source_rect': [
-                                region.source_rect.left,
-                                region.source_rect.top,
-                                region.source_rect.right,
-                                region.source_rect.bottom,
-                            ],
-                            'destination_display_id': region.destination_display_id,
-                            'destination_side': region.destination_side,
-                            'destination_rect': [
-                                region.destination_rect.left,
-                                region.destination_rect.top,
-                                region.destination_rect.right,
-                                region.destination_rect.bottom,
-                            ],
-                        }
-                    )
-                self.control_network.send_message(message)
-                self.input_handler.stop() # Stop edge detection
-                self.input_handler.start_keyboard_capture()
-                if self.on_capture_start:
-                    self.on_capture_start()
+            return switched
 
     def on_switch_back(self, data):
         with self._get_paste_route_lock():
             return self._on_switch_back_locked(data)
 
     def _on_switch_back_locked(self, data):
-        # Client hit its return edge
-        logger.info("Client signaled switch back.")
-        self._release_forwarded_keys()
-        self.switching_to_client = False
-        self._apply_clipboard_offer_route()
-        ratio = data.get('ratio', 0.5)
-        self.input_handler.stop_keyboard_capture()
-        if self.on_capture_stop:
-            self.on_capture_stop()
-
-        destination_rect = _message_rect(data.get('destination_rect'))
-        destination_side = data.get('destination_side')
-        if destination_rect is not None and destination_side in {
-            'left', 'right', 'top', 'bottom'
-        }:
-            self.input_handler.inject_position(
-                *edge_entry_point(destination_rect, destination_side, ratio)
-            )
-        else:
-            # Legacy peers still return through the scalar primary-screen edge.
-            w = self.input_handler.screen_width
-            h = self.input_handler.screen_height
-            if self._active_edge_side == 'right':
-                self.input_handler.inject_position(w - 2, int(h * ratio))
-            elif self._active_edge_side == 'left':
-                self.input_handler.inject_position(2, int(h * ratio))
-            elif self._active_edge_side == 'top':
-                self.input_handler.inject_position(int(w * ratio), 2)
-            elif self._active_edge_side == 'bottom':
-                self.input_handler.inject_position(int(w * ratio), h - 2)
-
-        if hasattr(self.input_handler, 'topology_edge_regions'):
-            self.input_handler.start_edge_detection()
-        else:
-            self.input_handler.start_edge_detection(self._active_edge_side)
+        router = getattr(self, 'input_router', None)
+        if router is None:
+            return False
+        switched = router.handle_edge(
+            data.get('peer_identity'),
+            data.get('source_display_id'),
+            data.get('source_side'),
+            data.get('ratio', 0.5),
+            session_id=data.get('session_id'),
+            topology_version=data.get('topology_version'),
+        )
+        if switched:
+            self._apply_clipboard_offer_route()
+        return switched
 
     def on_mouse_move(self, dx, dy):
+        router = getattr(self, 'input_router', None)
+        if router is not None:
+            return router.forward_mouse_move(dx, dy)
         self.control_network.send_message({
             'type': 'mouse_move',
             'dx': dx,
@@ -568,6 +815,9 @@ class ConduitServer:
         })
 
     def on_mouse_click(self, button, pressed):
+        router = getattr(self, 'input_router', None)
+        if router is not None:
+            return router.forward_button(button, pressed)
         self.control_network.send_message({
             'type': 'mouse_click',
             'button': button,
@@ -575,6 +825,9 @@ class ConduitServer:
         })
 
     def on_mouse_scroll(self, dx, dy):
+        router = getattr(self, 'input_router', None)
+        if router is not None:
+            return router.forward_scroll(dx, dy)
         self.control_network.send_message({
             'type': 'mouse_scroll',
             'dx': dx,
@@ -605,7 +858,9 @@ class ConduitServer:
             self._reload_connection()
             return
 
-        self.forwarded_keys[self._key_identity(key_data)] = dict(key_data)
+        router = getattr(self, 'input_router', None)
+        if router is not None:
+            return router.forward_key_press(key_data)
         self.control_network.send_message({
             'type': 'key_press',
             'key': key_data
@@ -616,42 +871,32 @@ class ConduitServer:
         if val and self.paste_coordinator.on_key_release(val):
             self.pressed_keys.discard(val)
             return
-        self.forwarded_keys.pop(self._key_identity(key_data), None)
         if val in self.pressed_keys:
             self.pressed_keys.discard(val)
-            
+        router = getattr(self, 'input_router', None)
+        if router is not None:
+            return router.forward_key_release(key_data)
         self.control_network.send_message({
             'type': 'key_release',
             'key': key_data
         })
 
-    @staticmethod
-    def _key_identity(key_data):
-        return (
-            key_data.get('type'),
-            key_data.get('value'),
-            key_data.get('vk'),
-            key_data.get('scan'),
-            key_data.get('extended'),
-        )
-
     def _release_forwarded_keys(self):
-        forwarded = getattr(self, 'forwarded_keys', None)
-        if forwarded is None:
-            payloads = [
-                {'type': 'special', 'value': key}
-                for key in sorted(self.pressed_keys - {'esc', 'escape'})
-            ]
-        else:
-            payloads = list(forwarded.values())
+        router = getattr(self, 'input_router', None)
+        if router is not None:
+            router.pause("input release")
+            self.pressed_keys.clear()
+            return
+        payloads = [
+            {'type': 'special', 'value': key}
+            for key in sorted(self.pressed_keys - {'esc', 'escape'})
+        ]
         for key_data in payloads:
             self.control_network.send_message({
                 'type': 'key_release',
                 'key': key_data,
             })
         self.pressed_keys.clear()
-        if forwarded is not None:
-            forwarded.clear()
 
     def set_screen_size(self, w, h):
         self._screen_width = w
@@ -674,13 +919,15 @@ class ConduitServer:
         self._release_forwarded_keys()
 
     def _emergency_exit_locked(self):
-        mouse_loc = "REMOTE CLIENT SCREEN" if getattr(self, "switching_to_client", False) else "LOCAL HOST SCREEN"
+        router = getattr(self, 'input_router', None)
+        mouse_loc = (
+            "REMOTE CLIENT SCREEN"
+            if router is not None and router.active_session_id is not None
+            else "LOCAL HOST SCREEN"
+        )
         logger.warning("[HOTKEY DIAGNOSTIC] Ctrl+Alt+Shift+Escape triggered on Server! Cursor location: %s. Forcefully disconnecting client and returning control.", mouse_loc)
         self._release_forwarded_keys()
-        self.switching_to_client = False
         self.pressed_keys.clear()
-        if hasattr(self, 'forwarded_keys'):
-            self.forwarded_keys.clear()
         if getattr(self, 'on_capture_stop', None):
             try:
                 self.on_capture_stop()
@@ -711,9 +958,9 @@ class ConduitServer:
                 self.data_network.disconnect()
             except Exception:
                 pass
-        if getattr(self, 'session_coordinator', None):
+        if getattr(self, 'session_registry', None):
             try:
-                self.session_coordinator.close()
+                self.session_registry.close()
             except Exception:
                 pass
         if getattr(self, 'file_network', None):
@@ -723,20 +970,66 @@ class ConduitServer:
                 pass
 
     def _reload_connection(self):
-        mouse_loc = "REMOTE CLIENT SCREEN" if getattr(self, "switching_to_client", False) else "LOCAL HOST SCREEN"
+        router = getattr(self, 'input_router', None)
+        mouse_loc = (
+            "REMOTE CLIENT SCREEN"
+            if router is not None and router.active_session_id is not None
+            else "LOCAL HOST SCREEN"
+        )
         logger.warning("[HOTKEY DIAGNOSTIC] Ctrl+Alt+Shift+R triggered on Server! Cursor location: %s. Soft-resetting active connection and restoring local control.", mouse_loc)
-        if getattr(self, 'control_network', None) and getattr(self.control_network, 'connected', False):
-            try:
-                self.control_network.send_message({'type': 'reload_connection'})
-            except Exception as error:
-                logger.debug("Could not send reload_connection message: %s", error_name(error))
-        self._on_emergency_exit()
+        return self.broadcast_cluster_command(
+            "reload_connection",
+            local_cleanup=lambda _command: self._on_emergency_exit(),
+        )
+
+    def broadcast_cluster_command(
+        self,
+        command_type,
+        payload=None,
+        local_cleanup=None,
+    ):
+        registry = getattr(self, "session_registry", None)
+        if registry is None:
+            self.prepare_app_shutdown()
+            message = dict(payload or {})
+            message["type"] = command_type
+            sent = self.control_network.send_message(message)
+            if local_cleanup is not None:
+                local_cleanup(message)
+            return sent
+        def finish(command):
+            if local_cleanup is not None:
+                local_cleanup(command)
+            elif command_type == "set_daemon_mode":
+                router = getattr(self, "input_router", None)
+                if router is not None:
+                    router.resume()
+
+        broadcaster = ClusterCommandBroadcaster(
+            ready_sessions=registry.ready_sessions,
+            send=lambda session_id, message: self.control_network.send_message(
+                message,
+                session_id=session_id,
+            ),
+            release_input=self.prepare_app_shutdown,
+            local_cleanup=finish,
+        )
+        return broadcaster.broadcast(command_type, payload)
 
     def on_local_copy(self, snapshot):
         work = {"snapshot": snapshot}
+        pending_sequence = getattr(
+            self,
+            "_pending_local_ordinary_sequence",
+            None,
+        )
+        if pending_sequence is not None:
+            work["source_sequence"] = pending_sequence
+            self._pending_local_ordinary_sequence = None
         state = getattr(self, "clipboard_offer_state", None)
         if (
-            state is not None
+            not hasattr(self, "session_registry")
+            and state is not None
             and state.current_offer is not None
             and state.current_offer.source == "server"
             and state.current_offer.kind == "ordinary"
@@ -753,13 +1046,30 @@ class ConduitServer:
 
     def _send_clipboard_snapshot(self, work):
         snapshot = work["snapshot"]
-        payload = encode_clipboard_message(snapshot)
         offer = work.get("offer")
-        if offer is not None:
-            payload["offer"] = offer.to_message()
-        sent = self.data_network.send_message(payload)
+        source_sequence = work.get("source_sequence")
+        if source_sequence is None and offer is not None:
+            source_sequence = offer.sequence
+        if source_sequence is None:
+            source_sequence = self._next_local_clipboard_sequence()
+        item = self._get_clipboard_hub().accept_ordinary(
+            self.server_machine_id,
+            source_sequence,
+            snapshot,
+        )
+        sent = item is not None
+        if item is not None:
+            state = self._get_clipboard_offer_state()
+            state.accept_cluster(
+                item.revision,
+                "server",
+                item.kind,
+                item.source_sequence,
+                session_id="cluster",
+            )
+            self._apply_clipboard_offer_route()
         logger.info(
-            "Clipboard snapshot sent (role=server formats=%s bytes=%d delivered=%s)",
+            "Clipboard snapshot accepted (role=server formats=%s bytes=%d accepted=%s)",
             ",".join(entry.kind for entry in snapshot.entries),
             sum(len(entry.data) for entry in snapshot.entries),
             sent,
@@ -767,12 +1077,143 @@ class ConduitServer:
         return sent
 
     def on_remote_copy(self, data):
-        payload = self._accepted_clipboard_payload(data)
-        if payload is None:
+        if not isinstance(data, dict):
+            return False
+        session_id = data.get("session_id")
+        peer_identity = data.get("peer_identity")
+        session = self.session_registry.get(session_id)
+        if (
+            session is None
+            or not session.ready
+            or session.peer_identity != peer_identity
+        ):
+            logger.info("Unbound clipboard snapshot discarded (role=server)")
+            return False
+        payload = self._clipboard_wire_payload(data)
+        try:
+            snapshot = decode_clipboard_message(payload)
+        except Exception as error:
+            logger.warning(
+                "Remote clipboard snapshot rejected (%s)",
+                error_name(error),
+            )
+            return False
+        source_sequence = data.get("source_sequence")
+        if type(source_sequence) is not int:
+            offer = data.get("offer")
+            source_sequence = (
+                offer.get("sequence") if isinstance(offer, dict) else None
+            )
+        item = self._get_clipboard_hub().accept_ordinary(
+            peer_identity,
+            source_sequence,
+            snapshot,
+            source_domain=session_id,
+        )
+        if item is None:
             logger.info("Stale clipboard snapshot discarded (role=server)")
             return False
-        logger.info("Clipboard snapshot received (role=server)")
+        logger.info(
+            "Clipboard snapshot received (role=server source=%s revision=%d)",
+            peer_identity,
+            item.revision,
+        )
+        return True
+
+    @staticmethod
+    def _clipboard_wire_payload(data):
+        return {
+            key: value
+            for key, value in data.items()
+            if key in {"type", "version", "formats"}
+        }
+
+    def _get_clipboard_hub(self):
+        hub = getattr(self, "clipboard_hub", None)
+        if hub is not None:
+            return hub
+        self.server_machine_id = getattr(
+            self,
+            "server_machine_id",
+            "server",
+        )
+        hub = ClipboardHub(self.server_machine_id)
+        self.clipboard_hub = hub
+        hub.register_endpoint(
+            self.server_machine_id,
+            self._deliver_clipboard_to_server,
+        )
+        return hub
+
+    def _next_local_clipboard_sequence(self):
+        sequence = getattr(self, "_local_clipboard_sequence", 0) + 1
+        self._local_clipboard_sequence = sequence
+        return sequence
+
+    def _register_clipboard_endpoint(self, session_id):
+        registry = getattr(self, "session_registry", None)
+        session = None if registry is None else registry.get(session_id)
+        if session is None or not session.ready:
+            return False
+        endpoint_ids = getattr(self, "_clipboard_endpoint_ids", None)
+        if endpoint_ids is None:
+            endpoint_ids = {}
+            self._clipboard_endpoint_ids = endpoint_ids
+        endpoint_ids[session_id] = session.peer_identity
+        sessions_by_endpoint = getattr(
+            self,
+            "_clipboard_sessions_by_endpoint",
+            None,
+        )
+        if sessions_by_endpoint is None:
+            sessions_by_endpoint = {}
+            self._clipboard_sessions_by_endpoint = sessions_by_endpoint
+        sessions_by_endpoint[session.peer_identity] = session_id
+        return self._get_clipboard_hub().register_endpoint(
+            session.peer_identity,
+            lambda item: self._deliver_clipboard_to_client(session_id, item),
+            source_domain=session_id,
+        )
+
+    def _deliver_clipboard_to_server(self, item):
+        state = self._get_clipboard_offer_state()
+        state.accept_cluster(
+            item.revision,
+            "client",
+            item.kind,
+            item.source_sequence,
+            session_id="cluster",
+        )
+        self._apply_clipboard_offer_route()
+        if item.kind != "ordinary" or item.snapshot is None:
+            return True
+        payload = encode_clipboard_message(item.snapshot)
         return self.clipboard.inject(payload)
+
+    def _deliver_clipboard_to_client(self, session_id, item):
+        offer = {
+            "type": "clipboard_offer",
+            "session_id": session_id,
+            "revision": item.revision,
+            "source": "server",
+            "kind": item.kind,
+            "sequence": item.source_sequence,
+            "cluster_revision": item.revision,
+            "source_id": item.source_id,
+        }
+        if item.kind != "ordinary" or item.snapshot is None:
+            return self.control_network.send_message(
+                offer,
+                session_id=session_id,
+            )
+        payload = encode_clipboard_message(item.snapshot)
+        payload.update({
+            "cluster_revision": item.revision,
+            "source_id": item.source_id,
+            "source_sequence": item.source_sequence,
+            "offer": offer,
+        })
+        return self.data_network.send_message(payload, session_id=session_id)
 
     def _accepted_clipboard_payload(self, data):
         offer_data = data.get("offer") if isinstance(data, dict) else None
@@ -787,6 +1228,8 @@ class ConduitServer:
         return payload
 
     def _clipboard_session_id(self):
+        if getattr(self, "clipboard_hub", None) is not None:
+            return "cluster"
         network = getattr(self, "control_network", None)
         return getattr(network, "session_id", None)
 
@@ -802,13 +1245,16 @@ class ConduitServer:
 
     def _apply_clipboard_offer_route(self):
         state = self._get_clipboard_offer_state()
+        coordinator = getattr(self, "paste_coordinator", None)
+        if coordinator is None:
+            return False
         destination = (
-            "client" if getattr(self, "switching_to_client", False) else "server"
+            "client" if self._remote_destination_active() else "server"
         )
-        return self.paste_coordinator.set_route(state.current_offer, destination)
+        return coordinator.set_route(state.current_offer, destination)
 
     def _refresh_active_destination_offer(self):
-        if getattr(self, "switching_to_client", False):
+        if self._remote_destination_active():
             return None
         clipboard = getattr(self, "clipboard", None)
         refresh = getattr(clipboard, "refresh_offer", None)
@@ -824,14 +1270,63 @@ class ConduitServer:
         return kind
 
     def on_local_clipboard_offer(self, kind, sequence):
-        state = self._get_clipboard_offer_state()
-        if state.session_id is None:
-            return False
-        offer = state.observe_local(kind, sequence)
-        self._apply_clipboard_offer_route()
-        return self.control_network.send_message(offer.to_message())
+        self._local_clipboard_sequence = max(
+            sequence,
+            getattr(self, "_local_clipboard_sequence", 0),
+        )
+        if not hasattr(self, "session_registry"):
+            state = self._get_clipboard_offer_state()
+            if state.session_id is None:
+                return False
+            offer = state.observe_local(kind, sequence)
+            self._apply_clipboard_offer_route()
+            return self.control_network.send_message(offer.to_message())
+        if kind == "files":
+            item = self._get_clipboard_hub().accept_offer(
+                self.server_machine_id,
+                sequence,
+                kind,
+            )
+            if item is not None:
+                state = self._get_clipboard_offer_state()
+                state.accept_cluster(
+                    item.revision,
+                    "server",
+                    kind,
+                    sequence,
+                    session_id="cluster",
+                )
+                self._apply_clipboard_offer_route()
+            return item is not None
+        else:
+            self._pending_local_ordinary_sequence = sequence
+            return True
 
     def on_remote_clipboard_offer(self, data):
+        if isinstance(data, dict) and data.get("kind") == "files":
+            session_id = data.get("session_id")
+            peer_identity = data.get("peer_identity")
+            registry = getattr(self, "session_registry", None)
+            if registry is None:
+                state = self._get_clipboard_offer_state()
+                accepted = state.accept_remote(data)
+                if accepted:
+                    self._apply_clipboard_offer_route()
+                return accepted
+            session = registry.get(session_id)
+            if (
+                session is None
+                or not session.ready
+                or session.peer_identity != peer_identity
+            ):
+                return False
+            item = self._get_clipboard_hub().accept_offer(
+                peer_identity,
+                data.get("sequence"),
+                "files",
+                source_domain=session_id,
+            )
+            return item is not None
         state = self._get_clipboard_offer_state()
         accepted = state.accept_remote(data)
         if accepted:
@@ -840,23 +1335,127 @@ class ConduitServer:
 
     def _request_remote_file_paste(self):
         with self._get_paste_route_lock():
-            destination_is_client = bool(
-                getattr(self, 'switching_to_client', False)
+            router = getattr(self, 'input_router', None)
+            active_session_id = (
+                None if router is None else router.active_session_id
             )
-            if destination_is_client:
-                return self.control_network.send_message({
-                    'type': 'file_paste_intent'
-                })
+            if active_session_id is not None:
+                return self.control_network.send_message(
+                    {'type': 'file_paste_intent'},
+                    session_id=active_session_id,
+                )
             return self.file_paste_service.request_paste()
 
+    def _remote_destination_active(self):
+        router = getattr(self, 'input_router', None)
+        return router is not None and router.active_session_id is not None
+
     def on_file_manifest_request(self, data):
-        self.file_paste_service.on_manifest_request(data)
+        router = getattr(self, "cluster_file_router", None)
+        if router is None:
+            return self.file_paste_service.on_manifest_request(data)
+        return self._handle_cluster_file_control(
+            data.get("peer_identity"),
+            data,
+        )
 
     def on_file_manifest_response(self, data):
-        self.file_paste_service.on_manifest_response(data)
+        router = getattr(self, "cluster_file_router", None)
+        if router is None:
+            return self.file_paste_service.on_manifest_response(data)
+        return self._handle_cluster_file_control(
+            data.get("peer_identity"),
+            data,
+        )
 
     def on_file_manifest_failed(self, data):
-        self.file_paste_service.on_manifest_failed(data)
+        router = getattr(self, "cluster_file_router", None)
+        if router is None:
+            return self.file_paste_service.on_manifest_failed(data)
+        return self._handle_cluster_file_control(
+            data.get("peer_identity"),
+            data,
+        )
 
     def on_file_manifest_ack(self, data):
-        self.file_paste_service.on_manifest_ack(data)
+        router = getattr(self, "cluster_file_router", None)
+        if router is None:
+            return self.file_paste_service.on_manifest_ack(data)
+        return self._handle_cluster_file_control(
+            data.get("peer_identity"),
+            data,
+        )
+
+    def _cluster_endpoint_available(self, endpoint_id):
+        if endpoint_id == self.server_machine_id:
+            return True
+        return self._session_for_machine(endpoint_id) is not None
+
+    def _send_cluster_file_control(self, endpoint_id, message):
+        if endpoint_id == self.server_machine_id:
+            return self._dispatch_local_file_control(message)
+        session = self._session_for_machine(endpoint_id)
+        if session is None:
+            return False
+        return self.control_network.send_message(
+            message,
+            session_id=session.session_id,
+        )
+
+    def _send_cluster_file_frame(self, endpoint_id, metadata, payload=b""):
+        if endpoint_id == self.server_machine_id:
+            return self.cluster_file_lane.deliver_local(metadata, payload)
+        session = self._session_for_machine(endpoint_id)
+        if session is None:
+            return False
+        try:
+            return self.file_network.send(
+                metadata,
+                payload,
+                session_id=session.session_id,
+            )
+        except (ConnectionError, OSError):
+            return False
+
+    def _dispatch_local_file_control(self, message):
+        handlers = {
+            "file_manifest_request": self.file_paste_service.on_manifest_request,
+            "file_manifest_response": self.file_paste_service.on_manifest_response,
+            "file_manifest_failed": self.file_paste_service.on_manifest_failed,
+            "file_manifest_ack": self.file_paste_service.on_manifest_ack,
+        }
+        handler = handlers.get(message.get("type"))
+        return False if handler is None else handler(message)
+
+    def _handle_cluster_file_control(self, origin_id, message):
+        if not isinstance(message, dict) or not isinstance(origin_id, str):
+            return False
+        if origin_id != self.server_machine_id:
+            session_id = message.get("session_id")
+            session = self.session_registry.get(session_id)
+            if (
+                session is None
+                or not session.ready
+                or session.peer_identity != origin_id
+            ):
+                return False
+        message_type = message.get("type")
+        if message_type == "file_manifest_request":
+            job = self.cluster_file_router.request_paste(
+                origin_id,
+                message.get("request_id"),
+            )
+            if job is not None:
+                return True
+            return self._send_cluster_file_control(origin_id, {
+                "type": "file_manifest_failed",
+                "request_id": message.get("request_id"),
+                "error": "FileRouteUnavailable",
+            })
+        if message_type == "file_manifest_response":
+            return self.cluster_file_router.on_manifest_response(origin_id, message)
+        if message_type == "file_manifest_failed":
+            return self.cluster_file_router.on_manifest_failed(origin_id, message)
+        if message_type == "file_manifest_ack":
+            return self.cluster_file_router.on_manifest_ack(origin_id, message)
+        return False
