@@ -12,8 +12,10 @@ This effort expands Conduit into one fixed Server hub with at most two simultane
 | [005](005-land-global-clipboard.md) | Synchronize one global newest clipboard item | L | 003, 004 | DONE |
 | [006](006-land-file-relay-and-cluster-commands.md) | Relay file jobs and cluster commands through the Server | L | 003–005 | DONE |
 | [007](007-land-atomic-apply.md) | Activate topology through one atomic cluster Apply | L | 002–006 | DONE |
-| [008](008-prove-system-and-release.md) | Prove the three-PC system and release contracts | L | 002–007 | IN PROGRESS |
+| [008](008-prove-system-and-release.md) | Prove the three-PC system and release contracts | L | 002–007, 010–011 | BLOCKED (disconnect recovery and DPI grid repair) |
 | [009](009-add-emergency-cursor-return-shortcut.md) | Add Ctrl+Space, Space emergency cursor return | S | 008 | TODO |
+| [010](010-stop-routing-and-reset-topology.md) | Stop routing on Client loss and rebuild topology through Reset | L | 007 | IN PROGRESS |
+| [011](011-fix-dpi-grid-rendering.md) | Keep the seven-by-four topology grid fitted at every Windows DPI | M | 010 | TODO |
 
 Status values: TODO | IN PROGRESS | DONE | BLOCKED (one-line reason) | SUPERSEDED (one-line pointer).
 
@@ -26,9 +28,13 @@ Status values: TODO | IN PROGRESS | DONE | BLOCKED (one-line reason) | SUPERSEDE
 - **002–006 → 007:** atomic Apply composes already-tested topology, input, clipboard, file, and session pause/cleanup interfaces.
 - **002–007 → 008:** system, package, firewall, and physical acceptance begins only after feature behavior is complete and green.
 - **008 → 009:** finish the current physical reliability gate before adding a convenience shortcut to the same input-routing path.
+- **007 → 010:** disconnect recovery must preserve the atomic Apply transaction while adding a persistent safety latch and authoritative Reset.
+- **010 → 011:** both repairs touch the compact editor; land the state/lifecycle repair before changing its drawing geometry.
+- **010 + 011 → 008:** repeat physical acceptance only after disconnect recovery and high-DPI rendering are green.
 
 ## Reconciliation log
 
+- **2026-08-26:** Physical testing exposed two release blockers: a lost bridge Client leaves the active input graph routable, and disconnect/Cancel can raise `KeyError` after color state diverges from draft cells, blanking the editor. Added Plans 010–011 from the accepted [disconnect/Reset design](../../superpowers/specs/2026-08-26-disconnect-routing-reset-design.md); Plan 008 is blocked until both land. Next: 010.
 - **2026-08-24:** Accepted the seven-slice structure at `3d76acb`; wrote Plans 002–008 for final review. Next executable plan: 002.
 - **2026-08-25:** Implemented Plan 002 on `multimonitor`; 620 tests, compileall, and `diff --check` pass. Physical two-PC validation remains before marking DONE.
 - **2026-08-25:** Completed Plan 002 physical acceptance. The user confirmed repeated Client connections, fixed-size topology toasts, Client and Server extended-monitor discovery, grouped topology cells, cross-monitor pointer movement, clipboard/file behavior, and reconnect placement. The fresh landing gate passes with 622 tests, compileall, and `diff --check`. Plan 003 is now active.
