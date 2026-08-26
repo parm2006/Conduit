@@ -16,7 +16,7 @@ phases.
    ```
 
    Expected hash:
-   `DC38D2689EC4736BFD98D6AEA1164E3D8A2CAE99F2D1E6A58DA4F4F2AA6B63A6`
+   `0A10EC0D598CC4368DCA16C0D308EBBB8CE464826721B45A06F495D807379BCA`
 4. Use `ParthPC` as the Server. Use the same password and base port on both
    Clients. Keep the Server network classified as Private in Windows.
 5. Write down each PC's Windows machine name. Conduit should show those names,

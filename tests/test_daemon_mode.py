@@ -9,6 +9,7 @@ class MockConduitGUI(ConduitGUI):
         self._window_state = "normal"
         self._is_reloading = False
         self.server = MagicMock()
+        self.server.session_registry = None
         self.client = MagicMock()
         self.server_stop_btn = MagicMock()
         self.server_start_btn = MagicMock()
@@ -172,6 +173,7 @@ class DaemonModeTests(unittest.TestCase):
         server_mock = MagicMock()
         server_mock.control_connected = True
         server_mock.control_network = MagicMock()
+        server_mock.session_registry = None
         self.gui.server = server_mock
 
         self.gui.stop_server()

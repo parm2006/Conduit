@@ -16,6 +16,67 @@ class Client:
 
 
 class GuiConnectionLifecycleTests(unittest.TestCase):
+    @staticmethod
+    def _client_gui(client):
+        hidden = []
+        warnings = []
+        gui = ConduitGUI.__new__(ConduitGUI)
+        gui.client = client
+        gui._is_reloading = False
+        gui.topology_toast = SimpleNamespace(
+            hide=lambda: hidden.append("topology")
+        )
+        gui.display_warning_toast = SimpleNamespace(
+            hide=lambda: hidden.append("warning")
+        )
+        gui.client_disconnect_btn = SimpleNamespace(pack_forget=lambda: None)
+        gui.client_connect_btn = SimpleNamespace(
+            pack=lambda **kwargs: None,
+            configure=lambda **kwargs: None,
+        )
+        gui._set_status = lambda *args, **kwargs: None
+        gui.ensure_visible = lambda: None
+        gui.after = lambda delay, callback: callback()
+        gui._show_client_disconnect_warning = warnings.append
+        return gui, hidden, warnings
+
+    def test_client_disconnect_button_clears_connection_toasts_silently(self):
+        client = Client()
+        client.control_connected = False
+        gui, hidden, warnings = self._client_gui(client)
+
+        gui.disconnect_client()
+
+        self.assertEqual(client.disconnects, 1)
+        self.assertEqual(set(hidden), {"topology", "warning"})
+        self.assertEqual(warnings, [])
+
+    def test_server_stop_notice_clears_client_toasts_without_warning(self):
+        client = Client()
+        client.control_connected = False
+        gui, hidden, warnings = self._client_gui(client)
+
+        gui._on_disconnect_notice(
+            {"reason": "server_stopping", "session_id": "session-a"}
+        )
+        gui._finish_client_disconnect(
+            client,
+            {"session_id": "session-a"},
+        )
+
+        self.assertEqual(set(hidden), {"topology", "warning"})
+        self.assertEqual(warnings, [])
+
+    def test_unannounced_server_drop_replaces_persistent_toast_with_temporary_warning(self):
+        client = Client()
+        client.control_connected = False
+        gui, hidden, warnings = self._client_gui(client)
+
+        gui._finish_client_disconnect(client, {"session_id": "session-a"})
+
+        self.assertEqual(hidden, ["topology", "warning"])
+        self.assertEqual(warnings, ["Server"])
+
     def test_late_inventory_from_stopped_server_cannot_repopulate_editor(self):
         scheduled = []
         gui = ConduitGUI.__new__(ConduitGUI)
@@ -304,6 +365,36 @@ class GuiConnectionLifecycleTests(unittest.TestCase):
 
         self.assertEqual(removed, ["device-a"])
         self.assertEqual(warnings, ["ParthSurface"])
+
+    def test_intentional_client_disconnect_removes_draft_without_warning(self):
+        removed = []
+        warnings = []
+        gui = ConduitGUI.__new__(ConduitGUI)
+        gui.server = object()
+        gui.topology_editor = SimpleNamespace(
+            remove_client=lambda machine_id: removed.append(machine_id),
+            remove_clients_from_draft=lambda: removed.append("all"),
+            state=SimpleNamespace(draft=SimpleNamespace(machines=())),
+        )
+        gui.after = lambda delay, callback: callback()
+        gui.ensure_visible = lambda: None
+        gui.server_port_entry = SimpleNamespace(get=lambda: "28903")
+        gui._set_status = lambda *args, **kwargs: None
+        gui._show_client_disconnect_warning = warnings.append
+
+        gui._on_disconnect_notice(
+            {"reason": "client_disconnecting", "session_id": "session-a"}
+        )
+        gui._on_server_client_disconnected(
+            {
+                "peer_identity": "device-a",
+                "windows_name": "ParthSurface",
+                "session_id": "session-a",
+            }
+        )
+
+        self.assertEqual(removed, ["device-a"])
+        self.assertEqual(warnings, [])
 
     def test_replacement_choice_preserves_freed_draft_placement_for_candidate(self):
         self.assertTrue(hasattr(ConduitGUI, "_resolve_replacement_candidate"))

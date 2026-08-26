@@ -392,6 +392,9 @@ class ConduitGUI(ctk.CTk):
         self._shutdown_lock = threading.Lock()
         self._shutdown_started = False
         self._close_started = False
+        self._intentional_disconnect_session_ids = set()
+        self._expected_server_stop = False
+        self._server_stopping = False
         self.transfer_toast = TransferToast(self, self._cancel_transfer)
         self.topology_toast = TopologyIdentificationToast(
             self,
@@ -1041,19 +1044,54 @@ class ConduitGUI(ctk.CTk):
         if toast is not None:
             toast.show_connection_lost(windows_name)
 
+    def _hide_connection_toasts(self):
+        topology_toast = self.__dict__.get("topology_toast")
+        if topology_toast is not None:
+            topology_toast.hide()
+        warning_toast = self.__dict__.get("display_warning_toast")
+        if warning_toast is not None:
+            warning_toast.hide()
+
+    def _intentional_disconnect_ids(self):
+        session_ids = self.__dict__.get(
+            "_intentional_disconnect_session_ids"
+        )
+        if session_ids is None:
+            session_ids = set()
+            self._intentional_disconnect_session_ids = session_ids
+        return session_ids
+
     def stop_server(self):
         self._is_reloading = False
         self._stop_server_display_monitor()
+        self._hide_connection_toasts()
         if self.server:
-            if getattr(self.server, 'control_connected', False) and getattr(self.server, 'control_network', None):
-                try:
-                    self.server.control_network.send_message({'type': 'disconnect_notice', 'reason': 'server_stopping'})
-                    import time
-                    time.sleep(0.05)
-                except Exception:
-                    pass
-            self.server.stop()
-            self.server = None
+            server = self.server
+            registry = getattr(server, "session_registry", None)
+            if registry is not None:
+                self._intentional_disconnect_ids().update(
+                    session.session_id
+                    for session in registry.active_sessions()
+                )
+            self._server_stopping = True
+            try:
+                if getattr(server, 'control_connected', False) and getattr(server, 'control_network', None):
+                    try:
+                        self._notify_ready_clients(
+                            server,
+                            {
+                                'type': 'disconnect_notice',
+                                'reason': 'server_stopping',
+                            },
+                        )
+                        import time
+                        time.sleep(0.05)
+                    except Exception:
+                        pass
+                server.stop()
+                self.server = None
+            finally:
+                self._server_stopping = False
         self.server_stop_btn.pack_forget()
         self.server_start_btn.pack(pady=10)
         self._set_status("Status: Server stopped", "gray")
@@ -1064,6 +1102,7 @@ class ConduitGUI(ctk.CTk):
             return
         if target_client is None:
             self._is_reloading = False
+        self._hide_connection_toasts()
         client = self.client if target_client is None else target_client
         if self.client is client:
             self.client = None
@@ -1528,6 +1567,16 @@ class ConduitGUI(ctk.CTk):
         return all(results)
         
     def _on_server_client_disconnected(self, data):
+        session_id = data.get("session_id")
+        intentional_disconnect = bool(
+            self.__dict__.get("_server_stopping", False)
+            or (
+                session_id is not None
+                and session_id in self._intentional_disconnect_ids()
+            )
+        )
+        if session_id is not None:
+            self._intentional_disconnect_ids().discard(session_id)
         editor = self.__dict__.get("topology_editor")
         if editor is not None:
             machine_id = data.get("peer_identity")
@@ -1547,7 +1596,7 @@ class ConduitGUI(ctk.CTk):
                     editor.remove_client(machine_id)
                 else:
                     editor.remove_clients_from_draft()
-                if windows_name:
+                if windows_name and not intentional_disconnect:
                     self._show_client_disconnect_warning(windows_name)
 
             self.after(0, remove_disconnected_client)
@@ -1725,6 +1774,18 @@ class ConduitGUI(ctk.CTk):
         if reason == 'reload_connection' or self.__dict__.get('_is_reloading', False):
             logger.info("[GUI] Pre-disconnect notice received during connection reload. Maintaining window visibility.")
             return
+        if reason in {'server_stopping', 'client_disconnecting'}:
+            session_id = data.get("session_id")
+            if session_id is not None:
+                self._intentional_disconnect_ids().add(session_id)
+            if reason == 'server_stopping':
+                self._expected_server_stop = True
+            logger.info(
+                "[GUI] Intentional peer shutdown notice received (%s). "
+                "Clearing connection toasts.",
+                reason,
+            )
+            self.after(0, self._hide_connection_toasts)
         logger.info("[GUI] Pre-disconnect notice received from peer. Restoring window visibility.")
         self.ensure_visible()
 
@@ -1749,11 +1810,29 @@ class ConduitGUI(ctk.CTk):
             )
 
     def _on_client_disconnected_event(self, source, data):
-        self.after(0, lambda: self._finish_client_disconnect(source))
+        self.after(
+            0,
+            lambda: self._finish_client_disconnect(source, data),
+        )
 
-    def _finish_client_disconnect(self, source):
-        if self.client is source:
-            self.disconnect_client(target_client=source)
+    def _finish_client_disconnect(self, source, data=None):
+        if self.client is not source:
+            return
+        data = data or {}
+        session_id = data.get("session_id")
+        intentional_disconnect = bool(
+            self.__dict__.get("_expected_server_stop", False)
+            or (
+                session_id is not None
+                and session_id in self._intentional_disconnect_ids()
+            )
+        )
+        self._expected_server_stop = False
+        if session_id is not None:
+            self._intentional_disconnect_ids().discard(session_id)
+        self.disconnect_client(target_client=source)
+        if not intentional_disconnect:
+            self._show_client_disconnect_warning("Server")
         self.ensure_visible()
 
     def _on_transfer_status(self, status):
