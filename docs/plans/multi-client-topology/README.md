@@ -13,6 +13,7 @@ This effort expands Conduit into one fixed Server hub with at most two simultane
 | [006](006-land-file-relay-and-cluster-commands.md) | Relay file jobs and cluster commands through the Server | L | 003–005 | DONE |
 | [007](007-land-atomic-apply.md) | Activate topology through one atomic cluster Apply | L | 002–006 | DONE |
 | [008](008-prove-system-and-release.md) | Prove the three-PC system and release contracts | L | 002–007 | IN PROGRESS |
+| [009](009-add-emergency-cursor-return-shortcut.md) | Add Ctrl+Space, Space emergency cursor return | S | 008 | TODO |
 
 Status values: TODO | IN PROGRESS | DONE | BLOCKED (one-line reason) | SUPERSEDED (one-line pointer).
 
@@ -24,6 +25,7 @@ Status values: TODO | IN PROGRESS | DONE | BLOCKED (one-line reason) | SUPERSEDE
 - **003–005 → 006:** file jobs need session-owned file lanes, stable destination identity, and global offer revisions.
 - **002–006 → 007:** atomic Apply composes already-tested topology, input, clipboard, file, and session pause/cleanup interfaces.
 - **002–007 → 008:** system, package, firewall, and physical acceptance begins only after feature behavior is complete and green.
+- **008 → 009:** finish the current physical reliability gate before adding a convenience shortcut to the same input-routing path.
 
 ## Reconciliation log
 
@@ -37,6 +39,7 @@ Status values: TODO | IN PROGRESS | DONE | BLOCKED (one-line reason) | SUPERSEDE
 - **2026-08-25:** Completed Plan 007 locally on `multimonitor`. Apply now snapshots the exact ready Client set, targets per-session candidate layouts, requires exact-version prepare and commit acknowledgements from every participant, persists before Server installation, and rolls acknowledged participants back on timeout, disconnect, send, persistence, or install failure. Input is released and centered before clipboard delivery and file scheduling pause; shutdown never reopens paused services. Missing rollback acknowledgements disconnect only inconsistent sessions. Reconnected sessions remain unroutable until a fresh successful Apply, two-Client display rescans wait for both inventories, and Apply/Cancel notices target both Client-primary identification toasts. The focused gate passes with 97 tests, the full suite with 703 tests, and compileall plus `diff --check` are clean. Plan 008 is now active.
 - **2026-08-25:** Completed Plan 008's automated and development-package gates locally. A real-TLS system seam binds two full three-lane Client bundles, performs atomic Apply, global clipboard ordering, Client-to-Client file-frame relay, cluster command fan-out, and third-candidate timeout. The unchanged three-listener/firewall boundary, diagnostics, documentation, packaging discovery, restricted helper, NSIS installer, and packaged startup smoke pass. The build ran 708 total tests; the final focused gate runs 105 tests. `VALIDATION.md` records sanitized evidence and makes clear the dirty-checkout artifacts are development-only. Plan 008 remains IN PROGRESS solely for the one-Server/two-physical-Client acceptance matrix.
 - **2026-08-26:** Closed the final pre-physical gaps with automatic one-second display-inventory monitoring, session-scoped clipboard sequence domains, distinct Server disconnect/display warnings, bounded toast copy, and clarified physical test messages. Physical display changes update only the draft and leave active routing untouched until Apply; retired sessions cannot overwrite a reconnect's clipboard sequence domain. The real-TLS clipboard system test waits on observed Server receipt and endpoint delivery instead of assuming cross-socket scheduling order and passed 20 repeated runs. Two independent functionality/messaging audits found no remaining high-confidence blocker. The rebuilt development package passes 717 tests and a four-second packaged startup/display-monitor smoke. Plan 008 remains IN PROGRESS only for physical acceptance.
+- **2026-08-26:** Queued Plan 009 as a deferred, Server-authoritative Ctrl+Space, Space recovery shortcut. It starts only after Plan 008 closes and does not change the current physical-test build.
 
 ## Considered and rejected
 
