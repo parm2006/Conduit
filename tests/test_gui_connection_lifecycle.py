@@ -1,5 +1,6 @@
 import unittest
 from types import SimpleNamespace
+from unittest.mock import patch
 
 from app.gui import ConduitGUI
 from app.display_topology import Display, MachineDisplayGroup, NativeRect
@@ -325,6 +326,90 @@ class GuiConnectionLifecycleTests(unittest.TestCase):
         self.assertEqual(warnings, [group])
         self.assertIs(gui.topology_editor.state.active, active)
 
+    def test_reset_rebuilds_server_anchor_when_editor_draft_is_empty(self):
+        reconciled = []
+        rendered = []
+        server_group = MachineDisplayGroup(
+            "server",
+            "ParthPC",
+            (
+                Display(
+                    "primary",
+                    NativeRect(0, 0, 1920, 1080),
+                    100,
+                    0,
+                    True,
+                ),
+            ),
+        )
+        state = SimpleNamespace(
+            draft=SimpleNamespace(server_id="server", machines=()),
+            reconcile_draft=lambda server, clients, placements=None: reconciled.append(
+                (server, tuple(clients), dict(placements or {}))
+            )
+            or True,
+        )
+        gui = ConduitGUI.__new__(ConduitGUI)
+        gui.topology_editor = SimpleNamespace(
+            state=state,
+            _render=lambda: rendered.append(True),
+        )
+        gui.server = SimpleNamespace(control_connected=False)
+        gui._server_display_monitor = None
+        gui._set_status = lambda *args, **kwargs: None
+
+        with patch("app.gui.WindowsDisplayDiscovery") as discovery:
+            discovery.return_value.discover.return_value = server_group
+            completed = gui._begin_topology_rescan()
+
+        self.assertTrue(completed)
+        self.assertEqual(reconciled, [(server_group, (), {})])
+        self.assertEqual(rendered, [True])
+
+    def test_completed_reset_inventory_reconciles_before_applying(self):
+        events = []
+        source = object()
+        server_group = MachineDisplayGroup(
+            "server",
+            "ParthPC",
+            (Display("server-display", NativeRect(0, 0, 1920, 1080), 100, 0, True),),
+        )
+        client_group = MachineDisplayGroup(
+            "client",
+            "ParthSurface",
+            (Display("client-display", NativeRect(0, 0, 1920, 1080), 100, 0, True),),
+        )
+        gui = ConduitGUI.__new__(ConduitGUI)
+        gui._pending_topology_rescan = {
+            "source": source,
+            "waiting": frozenset(("session-a",)),
+            "received": set(),
+            "server_group": server_group,
+            "inventories": {},
+            "placements": {"client": (-1, 0)},
+        }
+        gui.topology_editor = SimpleNamespace(
+            state=SimpleNamespace(
+                reconcile_draft=lambda server, clients, placements=None: events.append(
+                    ("reconcile", server, tuple(clients), dict(placements or {}))
+                )
+            ),
+            _render=lambda: events.append("render"),
+            apply_current_draft=lambda: events.append("apply"),
+        )
+
+        handled = gui._record_topology_rescan_inventory(
+            source,
+            "session-a",
+            client_group,
+        )
+
+        self.assertTrue(handled)
+        self.assertEqual(events[-2:], ["render", "apply"])
+        self.assertEqual(events[0][0], "reconcile")
+        self.assertEqual(events[0][2], (client_group,))
+        self.assertEqual(events[0][3], {"client": (-1, 0)})
+
     def test_server_disconnect_removes_only_that_client_from_the_draft(self):
         removed = []
         warnings = []
@@ -365,6 +450,89 @@ class GuiConnectionLifecycleTests(unittest.TestCase):
 
         self.assertEqual(removed, ["device-a"])
         self.assertEqual(warnings, ["ParthSurface"])
+
+    def test_server_disconnect_status_requires_reset_before_mouse_routing(self):
+        statuses = []
+        gui = ConduitGUI.__new__(ConduitGUI)
+        gui.server = object()
+        gui.topology_editor = SimpleNamespace(
+            remove_client=lambda machine_id: None,
+            remove_clients_from_draft=lambda: None,
+            state=SimpleNamespace(draft=SimpleNamespace(machines=())),
+        )
+        gui.after = lambda delay, callback: callback()
+        gui.ensure_visible = lambda: None
+        gui.server_port_entry = SimpleNamespace(get=lambda: "28903")
+        gui._set_status = lambda message, color: statuses.append((message, color))
+        gui._show_client_disconnect_warning = lambda name: None
+
+        gui._on_server_client_disconnected(
+            {
+                "peer_identity": "device-a",
+                "windows_name": "ParthSurface",
+                "session_id": "session-a",
+            }
+        )
+
+        self.assertTrue(any("Reset" in message for message, _color in statuses))
+        self.assertTrue(any(color == "orange" for _message, color in statuses))
+
+    def test_disconnect_rebuilds_missing_server_anchor_immediately(self):
+        reconciled = []
+        server_group = MachineDisplayGroup(
+            "server",
+            "ParthPC",
+            (Display("primary", NativeRect(0, 0, 1920, 1080), 100, 0, True),),
+        )
+        active = SimpleNamespace(
+            server_id="server",
+            machines=(SimpleNamespace(group=server_group),),
+        )
+        state = SimpleNamespace(
+            active=active,
+            draft=SimpleNamespace(server_id="server", machines=()),
+            reconcile_draft=lambda server, clients, placements=None: reconciled.append(
+                (server, tuple(clients))
+            ),
+        )
+        server = SimpleNamespace(
+            session_registry=SimpleNamespace(ready_sessions=lambda: ()),
+        )
+        gui = ConduitGUI.__new__(ConduitGUI)
+        gui.server = server
+        gui.topology_editor = SimpleNamespace(
+            state=state,
+            remove_client=lambda machine_id: None,
+            remove_clients_from_draft=lambda: None,
+            _render=lambda: None,
+        )
+        gui.after = lambda delay, callback: callback()
+        gui.ensure_visible = lambda: None
+        gui._set_status = lambda *args: None
+        gui._show_client_disconnect_warning = lambda name: None
+
+        with patch("app.gui.WindowsDisplayDiscovery") as discovery:
+            discovery.return_value.discover.return_value = server_group
+            gui._on_server_client_disconnected(
+                {
+                    "peer_identity": "client",
+                    "windows_name": "ParthSurface",
+                    "session_id": "session-a",
+                }
+            )
+
+        self.assertEqual(reconciled, [(server_group, ())])
+
+    def test_returning_to_server_tab_renders_current_topology(self):
+        rendered = []
+        gui = ConduitGUI.__new__(ConduitGUI)
+        gui.tabview = SimpleNamespace(get=lambda: "Server (Host)")
+        gui.topology_editor = SimpleNamespace(_render=lambda: rendered.append(True))
+        gui.after = lambda delay, callback: callback()
+
+        gui._on_tab_changed()
+
+        self.assertEqual(rendered, [True])
 
     def test_intentional_client_disconnect_removes_draft_without_warning(self):
         removed = []

@@ -110,6 +110,7 @@ class ConduitClient:
         self.control_network.register_callback('topology_commit', self.on_topology_commit)
         self.control_network.register_callback('topology_rollback', self.on_topology_rollback)
         self.control_network.register_callback('topology_finalize', self.on_topology_finalize)
+        self.control_network.register_callback('topology_suspend', self.on_topology_suspend)
         self.control_network.register_callback(
             'display_inventory_request',
             lambda data: self.send_display_inventory(),
@@ -594,6 +595,19 @@ class ConduitClient:
             self.control_network.send_message(
                 {'type': 'topology_ack', 'version': version}
             )
+
+    def on_topology_suspend(self, data):
+        self._release_all_injected_input()
+        self.is_active = False
+        if hasattr(self.input_handler, 'set_client_topology_edges'):
+            self.input_handler.set_client_topology_edges(())
+        elif hasattr(self.input_handler, 'set_client_topology_edge'):
+            self.input_handler.set_client_topology_edge(None)
+        logger.info(
+            "Input routing suspended by Server (%s)",
+            data.get('reason', 'topology unavailable'),
+        )
+        return True
 
     def on_topology_commit(self, data):
         pending = self.pending_topology

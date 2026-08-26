@@ -80,6 +80,7 @@ routing can resume.
 - `tests/test_topology_protocol.py`
 - `tests/test_gui_connection_lifecycle.py`
 - `tests/test_topology_editor.py`
+- `tests/test_topology_reconnect.py`
 - `docs/plans/multi-client-topology/010-stop-routing-and-reset-topology.md`
 - `docs/plans/multi-client-topology/README.md`
 
@@ -198,6 +199,8 @@ blocked only on Plan 011 and subsequent physical acceptance.
   the only resume path.
 - GUI lifecycle tests for foregrounding, status, Stop/Start reconstruction,
   renamed Reset control, and intentional versus unexpected disconnect text.
+- Reconnect/rescan tests use the authoritative reconciliation contract instead
+  of the superseded refresh-in-place test double.
 - Existing router, topology, clipboard, file, and real-TLS system tests remain
   green.
 
@@ -230,4 +233,3 @@ The suspension latch is a safety boundary. Future topology, background-mode,
 reload, and reconnect code must not resume input independently; only successful
 authoritative Reset may clear it. Keep protocol suspension idempotent because
 multiple lane teardown callbacks are expected for one Client loss.
-

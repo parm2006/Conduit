@@ -13,6 +13,59 @@ INVALID_COLOR = "#EF4444"
 
 
 @dataclass(frozen=True)
+class TopologyGridGeometry:
+    width: int
+    height: int
+    columns: int = 7
+    rows: int = 4
+
+    def __post_init__(self):
+        if self.width <= 0 or self.height <= 0:
+            raise ValueError("Grid dimensions must be positive")
+
+    @staticmethod
+    def _boundary(index, extent, count):
+        return (index * extent + count // 2) // count
+
+    @property
+    def x_boundaries(self):
+        return tuple(
+            self._boundary(index, self.width, self.columns)
+            for index in range(self.columns + 1)
+        )
+
+    @property
+    def y_boundaries(self):
+        return tuple(
+            self._boundary(index, self.height, self.rows)
+            for index in range(self.rows + 1)
+        )
+
+    @property
+    def origin_column(self):
+        return self.columns // 2
+
+    @property
+    def origin_row(self):
+        return self.rows // 2
+
+    def cell_bounds(self, logical_x, logical_y):
+        column = self.origin_column + logical_x
+        row = self.origin_row + logical_y
+        return (
+            self._boundary(column, self.width, self.columns),
+            self._boundary(row, self.height, self.rows),
+            self._boundary(column + 1, self.width, self.columns),
+            self._boundary(row + 1, self.height, self.rows),
+        )
+
+    def event_grid(self, x, y):
+        column = (int(x) * self.columns) // self.width
+        row = (int(y) * self.rows) // self.height
+        return column - self.origin_column, row - self.origin_row
+
+
+@dataclass(frozen=True)
 class TopologyCellView:
     machine_id: str
     display_id: str
@@ -141,12 +194,48 @@ class TopologyEditorState:
 
     def cancel(self):
         self.draft = DraftTopology(self.active.server_id, self.active.machines)
+        self._ensure_draft_colors()
         self.invalid_machine_ids = ()
 
     def commit(self, active):
         self.active = active
         self.draft = DraftTopology(active.server_id, active.machines)
+        self._ensure_draft_colors()
         self.invalid_machine_ids = ()
+
+    def reconcile_draft(self, server_group, client_groups, placements=None):
+        """Replace the draft from authoritative inventories without changing active."""
+        if server_group.machine_id != self.active.server_id:
+            raise ValueError("Server inventory identity does not match topology")
+        placements = dict(placements or {})
+        known_positions = {
+            placed.group.machine_id: (placed.x, placed.y)
+            for placed in self.active.machines
+        }
+        known_positions.update({
+            placed.group.machine_id: (placed.x, placed.y)
+            for placed in self.draft.machines
+        })
+        known_positions.update(placements)
+        draft = DraftTopology(
+            server_group.machine_id,
+            (PlacedMachine(server_group, 0, 0),),
+        )
+        for group in client_groups:
+            if group.machine_id == server_group.machine_id:
+                continue
+            position = known_positions.get(group.machine_id)
+            if position is None:
+                placed = draft.find_auto_placement(group)
+                if placed is None:
+                    continue
+            else:
+                placed = PlacedMachine(group, position[0], position[1])
+            draft = DraftTopology(draft.server_id, draft.machines + (placed,))
+        self.draft = draft
+        self._ensure_draft_colors()
+        self.invalid_machine_ids = ()
+        return True
 
     def remove_clients_from_draft(self):
         self.draft = DraftTopology(
@@ -180,7 +269,6 @@ class TopologyEditorState:
                 if placed.group.machine_id != machine_id
             ),
         )
-        self._client_colors.pop(machine_id, None)
         self.invalid_machine_ids = ()
         return removed
 
@@ -200,6 +288,7 @@ class TopologyEditorState:
         return self._client_colors[machine_id]
 
     def cell_views(self):
+        self._ensure_draft_colors()
         views = []
         for placed in self.draft.machines:
             group = placed.group
@@ -228,10 +317,26 @@ class TopologyEditorState:
     def _assign_client_color(self, machine_id):
         if machine_id in self._client_colors:
             return
-        used = set(self._client_colors.values())
+        visible_ids = {
+            placed.group.machine_id
+            for placed in self.draft.machines
+            if placed.group.machine_id != self.draft.server_id
+        }
+        used = {
+            color
+            for cached_id, color in self._client_colors.items()
+            if cached_id in visible_ids
+        }
         self._client_colors[machine_id] = next(
-            color for color in CLIENT_COLORS if color not in used
+            (color for color in CLIENT_COLORS if color not in used),
+            CLIENT_COLORS[-1],
         )
+
+    def _ensure_draft_colors(self):
+        for placed in self.draft.machines:
+            machine_id = placed.group.machine_id
+            if machine_id != self.draft.server_id:
+                self._assign_client_color(machine_id)
 
 
 class TopologyEditor(ctk.CTkFrame):
@@ -268,12 +373,13 @@ class TopologyEditor(ctk.CTkFrame):
             background="#0B111B",
             highlightthickness=0,
         )
-        self.canvas.place(x=0, y=0)
+        self.canvas.place(x=0, y=0, relwidth=1.0, relheight=1.0)
+        self.canvas.bind("<Configure>", self._on_canvas_configure)
         self.canvas.bind("<B1-Motion>", self._drag_motion)
         self.canvas.bind("<ButtonRelease-1>", self._drag_end)
         self.apply_button = ctk.CTkButton(
             self,
-            text="Apply",
+            text="Reset",
             width=62,
             height=26,
             command=self._apply,
@@ -318,37 +424,49 @@ class TopologyEditor(ctk.CTkFrame):
         self._cancel()
 
     def _grid_origin(self):
+        geometry = self._canvas_geometry()
         return (
-            (self.GRID_WIDTH // CELL_SIZE // 2) * CELL_SIZE,
-            (self.GRID_HEIGHT // CELL_SIZE // 2) * CELL_SIZE,
+            geometry.x_boundaries[geometry.origin_column],
+            geometry.y_boundaries[geometry.origin_row],
         )
+
+    def _canvas_geometry(self):
+        width = int(self.canvas.winfo_width())
+        height = int(self.canvas.winfo_height())
+        if width <= 1:
+            width = self.GRID_WIDTH
+        if height <= 1:
+            height = self.GRID_HEIGHT
+        return TopologyGridGeometry(width, height)
+
+    def _on_canvas_configure(self, _event):
+        self._render()
 
     def _render(self):
         self.canvas.delete("all")
-        for x in range(0, self.GRID_WIDTH + 1, CELL_SIZE):
-            self.canvas.create_line(x, 0, x, self.GRID_HEIGHT, fill="#243041")
-        for y in range(0, self.GRID_HEIGHT + 1, CELL_SIZE):
-            self.canvas.create_line(0, y, self.GRID_WIDTH, y, fill="#243041")
-        origin_x, origin_y = self._grid_origin()
+        geometry = self._canvas_geometry()
+        for x in geometry.x_boundaries:
+            self.canvas.create_line(x, 0, x, geometry.height, fill="#243041")
+        for y in geometry.y_boundaries:
+            self.canvas.create_line(0, y, geometry.width, y, fill="#243041")
         for cell in self.state.cell_views():
-            left = origin_x + cell.x * CELL_SIZE
-            top = origin_y + cell.y * CELL_SIZE
+            left, top, right, bottom = geometry.cell_bounds(cell.x, cell.y)
             tag = f"machine:{cell.machine_id}"
             outline = INVALID_COLOR if cell.invalid else "#D7DEE8"
             width = 3 if cell.invalid else 1
             rectangle = self.canvas.create_rectangle(
                 left + 1,
                 top + 1,
-                left + CELL_SIZE - 1,
-                top + CELL_SIZE - 1,
+                right - 1,
+                bottom - 1,
                 fill=cell.color,
                 outline=outline,
                 width=width,
                 tags=(tag, "machine-cell"),
             )
             label = self.canvas.create_text(
-                left + CELL_SIZE / 2,
-                top + CELL_SIZE / 2,
+                (left + right) / 2,
+                (top + bottom) / 2,
                 text=cell.letter,
                 fill="white",
                 font=("Segoe UI", 13, "bold"),
@@ -364,8 +482,10 @@ class TopologyEditor(ctk.CTkFrame):
                             machine_id,
                         ),
                     )
-        self.apply_button.lift()
-        self.cancel_button.lift()
+        if hasattr(self, "apply_button"):
+            self.apply_button.lift()
+        if hasattr(self, "cancel_button"):
+            self.cancel_button.lift()
 
     def _drag_start(self, event, machine_id):
         placed = next(
@@ -393,11 +513,7 @@ class TopologyEditor(ctk.CTkFrame):
         self._drag = None
 
     def _event_grid(self, event):
-        origin_x, origin_y = self._grid_origin()
-        return (
-            round((event.x - origin_x) / CELL_SIZE),
-            round((event.y - origin_y) / CELL_SIZE),
-        )
+        return self._canvas_geometry().event_grid(event.x, event.y)
 
     def _apply(self):
         if self.on_rescan is not None and self.on_rescan() is False:

@@ -52,6 +52,93 @@ class Lifecycle:
 
 
 class TopologyProtocolTests(unittest.TestCase):
+    def test_client_topology_suspend_releases_input_and_disables_edges(self):
+        events = []
+        client = ConduitClient.__new__(ConduitClient)
+        client.is_active = True
+        client.pending_topology = {"version": 5}
+        client.committed_topology = (5, {"version": 4})
+        client.input_handler = type(
+            "Input",
+            (),
+            {
+                "release_all_injected_input": lambda self: events.append("release"),
+                "set_client_topology_edges": lambda self, edges: events.append(
+                    ("edges", tuple(edges))
+                ),
+            },
+        )()
+
+        client.on_topology_suspend({"reason": "client_disconnected"})
+
+        self.assertEqual(events, ["release", ("edges", ())])
+        self.assertFalse(client.is_active)
+        self.assertEqual(client.pending_topology, {"version": 5})
+        self.assertEqual(client.committed_topology, (5, {"version": 4}))
+
+    def test_ready_client_loss_pauses_entire_cluster_input_graph(self):
+        events = []
+        server = ConduitServer.__new__(ConduitServer)
+        server._topology_ack_lock = threading.Lock()
+        server._topology_transaction = None
+        server._active_topology_session_ids = {"lost", "survivor"}
+        server._clipboard_endpoint_ids = {}
+        server._clipboard_sessions_by_endpoint = {}
+        server.input_router = type(
+            "Router",
+            (),
+            {"pause": lambda self, reason: events.append(("pause", reason)) or True},
+        )()
+        server.input_handler = type(
+            "Input",
+            (),
+            {"stop": lambda self: events.append("input-stop")},
+        )()
+        server.pressed_keys = {"ctrl"}
+        server.on_capture_stop = lambda: events.append("capture-stop")
+        survivor = type(
+            "Session",
+            (),
+            {
+                "session_id": "survivor",
+                "peer_identity": "survivor-machine",
+                "ready": True,
+            },
+        )()
+        server.session_registry = type(
+            "Registry",
+            (),
+            {"ready_sessions": lambda self: (survivor,)},
+        )()
+        server.control_network = type(
+            "Network",
+            (),
+            {
+                "send_message": lambda self, message, session_id=None: events.append(
+                    ("send", session_id, dict(message))
+                )
+                or True,
+            },
+        )()
+        server.cluster_file_router = None
+        server.clipboard_hub = None
+
+        server.on_client_disconnected("lost")
+
+        self.assertTrue(server.routing_suspended)
+        self.assertIn(("pause", "client disconnected"), events)
+        self.assertIn("input-stop", events)
+        self.assertIn("capture-stop", events)
+        self.assertIn(
+            (
+                "send",
+                "survivor",
+                {"type": "topology_suspend", "reason": "client_disconnected"},
+            ),
+            events,
+        )
+        self.assertEqual(server.pressed_keys, set())
+
     def test_ready_client_sends_its_real_display_inventory(self):
         client = ConduitClient.__new__(ConduitClient)
         client.control_network = RecordingNetwork()

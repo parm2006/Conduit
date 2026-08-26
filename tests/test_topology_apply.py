@@ -283,6 +283,48 @@ class AtomicTopologyApplyTests(unittest.TestCase):
         self.assertEqual(outcomes, [False])
         self.assertEqual(server.active_topology, previous)
 
+    def test_failed_reset_keeps_disconnect_suspension_latched(self):
+        events = []
+        completed = threading.Event()
+        server = self._server(events)
+        server.routing_suspended = True
+        previous = _topology(6)
+        server.active_topology = previous
+        server._install_topology = lambda topology: events.append(
+            ("install", topology.version, server.routing_suspended)
+        )
+
+        server.apply_topology_candidate(
+            _topology(7),
+            on_persist=lambda topology: False,
+            on_complete=lambda success: completed.set(),
+            timeout=0.02,
+        )
+
+        self.assertTrue(completed.wait(1))
+        self.assertTrue(server.routing_suspended)
+        self.assertIn(("install", 6, True), events)
+
+    def test_successful_reset_clears_disconnect_suspension_before_install(self):
+        events = []
+        completed = threading.Event()
+        server = self._server(events)
+        server.routing_suspended = True
+        server._install_topology = lambda topology: events.append(
+            ("install", topology.version, server.routing_suspended)
+        )
+
+        server.apply_topology_candidate(
+            _topology(7),
+            on_persist=lambda topology: True,
+            on_complete=lambda success: completed.set(),
+            timeout=0.02,
+        )
+
+        self.assertTrue(completed.wait(1))
+        self.assertFalse(server.routing_suspended)
+        self.assertIn(("install", 7, False), events)
+
     def test_reentrant_apply_is_rejected_while_first_transaction_waits(self):
         events = []
         completed = threading.Event()
@@ -338,6 +380,29 @@ class AtomicTopologyApplyTests(unittest.TestCase):
             server._active_topology_session_ids,
             {"session-1"},
         )
+
+    def test_ready_participant_set_is_rechecked_before_install(self):
+        events = []
+        completed = threading.Event()
+        outcomes = []
+        server = self._server(events)
+        previous = _topology(6)
+        server.active_topology = previous
+
+        def persist(_topology):
+            server.session_registry.sessions = server.session_registry.sessions[:1]
+            return True
+
+        server.apply_topology_candidate(
+            _topology(7),
+            on_persist=persist,
+            on_complete=lambda success: outcomes.append(success) or completed.set(),
+            timeout=0.02,
+        )
+
+        self.assertTrue(completed.wait(1))
+        self.assertEqual(outcomes, [False])
+        self.assertEqual(server.active_topology, previous)
 
     def test_stale_and_unknown_acknowledgements_are_ignored(self):
         events = []

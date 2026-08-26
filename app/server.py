@@ -142,6 +142,7 @@ class ConduitServer:
         self._topology_commit_ack_version = None
         self._topology_transaction = None
         self._active_topology_session_ids = set()
+        self.routing_suspended = False
         
         # Setup control network callbacks
         self.control_network.register_callback('connected', lambda d: self._on_socket_connected('control', d))
@@ -344,7 +345,10 @@ class ConduitServer:
             session_for_machine=self._session_for_machine,
             input_effects=_ServerInputEffects(self),
         )
-        if getattr(self, 'control_connected', True):
+        if getattr(self, 'routing_suspended', False):
+            self.input_router.pause("topology reset required")
+            self.input_handler.stop()
+        elif getattr(self, 'control_connected', True):
             self.input_handler.start_edge_detection()
 
     def _session_for_machine(self, machine_id):
@@ -437,6 +441,7 @@ class ConduitServer:
             if getattr(self, "_topology_transaction", None) is not None:
                 return False
         previous = getattr(self, 'active_topology', None)
+        suspended_before = getattr(self, 'routing_suspended', False)
         previous_session_ids = set(
             getattr(self, "_active_topology_session_ids", ())
         )
@@ -578,6 +583,13 @@ class ConduitServer:
                         error_name(error),
                     )
                 with condition:
+                    if registry is not None:
+                        ready_session_ids = {
+                            session.session_id
+                            for session in registry.ready_sessions()
+                        }
+                        if ready_session_ids != expected:
+                            transaction["failed"] = True
                     if transaction["failed"]:
                         persisted = False
                 if persisted:
@@ -587,6 +599,7 @@ class ConduitServer:
                             for session_id in expected
                             if session_id != "legacy"
                         }
+                        self.routing_suspended = False
                         self._install_topology(topology)
                     except Exception as error:
                         logger.error(
@@ -594,6 +607,7 @@ class ConduitServer:
                             error_name(error),
                         )
                         persisted = False
+                        self.routing_suspended = suspended_before
                         self._active_topology_session_ids = previous_session_ids
             if not persisted and candidate_persisted:
                 try:
@@ -740,9 +754,7 @@ class ConduitServer:
             and current_session_id == session_id
         ):
             clipboard_hub.disconnect_endpoint(endpoint_id)
-        router = getattr(self, 'input_router', None)
-        if router is not None and session_id is not None:
-            router.destination_lost(session_id)
+        self.suspend_input_routing("client disconnected")
         if session_id is not None and self.session_registry.ready_sessions():
             return
         logger.info("No ready Clients remain; stopping edge detection and wiping clipboard.")
@@ -755,6 +767,29 @@ class ConduitServer:
             self.file_network.close()
         self.paste_coordinator.reset()
         self.hotkey_monitor.stop()
+
+    def suspend_input_routing(self, reason="topology reset required"):
+        """Idempotently stop cluster input while leaving other ready lanes alive."""
+        was_suspended = getattr(self, 'routing_suspended', False)
+        self.routing_suspended = True
+        router = getattr(self, 'input_router', None)
+        if router is not None:
+            router.pause(reason)
+        self.pressed_keys.clear()
+        self.input_handler.stop()
+        if self.on_capture_stop:
+            self.on_capture_stop()
+        registry = getattr(self, 'session_registry', None)
+        sessions = () if registry is None else tuple(registry.ready_sessions())
+        network = getattr(self, 'control_network', None)
+        if network is not None:
+            message = {'type': 'topology_suspend', 'reason': 'client_disconnected'}
+            if registry is None:
+                network.send_message(message)
+            else:
+                for session in sessions:
+                    network.send_message(message, session_id=session.session_id)
+        return not was_suspended
 
     def on_edge_hit(self, direction, ratio, region=None):
         with self._get_paste_route_lock():
@@ -1015,7 +1050,9 @@ class ConduitServer:
                 local_cleanup(command)
             elif command_type == "set_daemon_mode":
                 router = getattr(self, "input_router", None)
-                if router is not None:
+                if router is not None and not getattr(
+                    self, "routing_suspended", False
+                ):
                     router.resume()
 
         broadcaster = ClusterCommandBroadcaster(

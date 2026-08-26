@@ -1,5 +1,7 @@
 import unittest
 
+import app.topology_editor as topology_editor_module
+
 from app.display_topology import (
     Display,
     DraftTopology,
@@ -202,6 +204,62 @@ class TopologyEditorStateTests(unittest.TestCase):
             {"server", "client-b"},
         )
 
+    def test_cancel_after_active_client_disconnect_keeps_editor_renderable(self):
+        client = machine("client", "ParthSurface")
+        self.state.add_client(client)
+        self.assertTrue(self.state.apply().is_valid)
+
+        self.state.remove_client("client")
+        self.state.cancel()
+
+        cells = self.state.cell_views()
+        client_cell = next(cell for cell in cells if cell.machine_id == "client")
+        self.assertIn(client_cell.color, CLIENT_COLORS)
+
+    def test_authoritative_reconcile_restores_server_and_preserves_survivor(self):
+        first = machine("client-a", "ParthSurface")
+        second = machine("client-b", "TravelPC")
+        self.state.add_client(first)
+        self.state.add_client(second)
+        self.state.move_machine("client-b", -1, 0)
+        refreshed_server = machine("server", "ParthPC")
+        refreshed_second = machine("client-b", "TravelPC")
+        self.state.draft = DraftTopology("server", ())
+
+        self.state.reconcile_draft(
+            refreshed_server,
+            (refreshed_second,),
+            placements={"client-b": (-1, 0)},
+        )
+
+        placed = {
+            item.group.machine_id: item
+            for item in self.state.draft.machines
+        }
+        self.assertEqual(set(placed), {"server", "client-b"})
+        self.assertEqual((placed["server"].x, placed["server"].y), (0, 0))
+        self.assertEqual((placed["client-b"].x, placed["client-b"].y), (-1, 0))
+        self.assertIs(placed["server"].group, refreshed_server)
+        self.assertIs(placed["client-b"].group, refreshed_second)
+
+    def test_reconcile_can_replace_both_cached_clients_without_running_out_of_colors(self):
+        self.state.add_client(machine("old-a", "OldA"))
+        self.state.add_client(machine("old-b", "OldB"))
+        self.state.apply()
+
+        self.state.reconcile_draft(
+            self.server,
+            (machine("new-a", "NewA"), machine("new-b", "NewB")),
+        )
+
+        colors = {
+            cell.machine_id: cell.color
+            for cell in self.state.cell_views()
+            if cell.machine_id != "server"
+        }
+        self.assertEqual(set(colors), {"new-a", "new-b"})
+        self.assertEqual(len(set(colors.values())), 2)
+
     def test_registry_color_can_override_automatic_editor_color(self):
         self.assertTrue(hasattr(self.state, "set_client_color"))
         client = machine("client", "ParthSurface")
@@ -228,6 +286,67 @@ class TopologyEditorApplyFlowTests(unittest.TestCase):
     def test_editor_canvas_is_exactly_seven_cells_by_four_cells(self):
         self.assertEqual(TopologyEditor.GRID_WIDTH, CELL_SIZE * 7)
         self.assertEqual(TopologyEditor.GRID_HEIGHT, CELL_SIZE * 4)
+
+    def test_grid_geometry_fills_scaled_canvas_at_common_windows_dpi_sizes(self):
+        geometry_type = getattr(
+            topology_editor_module,
+            "TopologyGridGeometry",
+            None,
+        )
+        self.assertIsNotNone(geometry_type)
+
+        for width, height in ((280, 160), (350, 200), (420, 240), (560, 320)):
+            with self.subTest(size=(width, height)):
+                geometry = geometry_type(width, height)
+                self.assertEqual(len(geometry.x_boundaries), 8)
+                self.assertEqual(len(geometry.y_boundaries), 5)
+                self.assertEqual(geometry.x_boundaries[0], 0)
+                self.assertEqual(geometry.x_boundaries[-1], width)
+                self.assertEqual(geometry.y_boundaries[0], 0)
+                self.assertEqual(geometry.y_boundaries[-1], height)
+                self.assertLessEqual(
+                    max(
+                        right - left
+                        for left, right in zip(
+                            geometry.x_boundaries,
+                            geometry.x_boundaries[1:],
+                        )
+                    )
+                    - min(
+                        right - left
+                        for left, right in zip(
+                            geometry.x_boundaries,
+                            geometry.x_boundaries[1:],
+                        )
+                    ),
+                    1,
+                )
+
+    def test_scaled_grid_hit_testing_round_trips_every_visible_cell(self):
+        geometry_type = getattr(
+            topology_editor_module,
+            "TopologyGridGeometry",
+            None,
+        )
+        self.assertIsNotNone(geometry_type)
+
+        for width, height in ((280, 160), (350, 200), (420, 240), (560, 320)):
+            geometry = geometry_type(width, height)
+            for logical_y in range(-2, 2):
+                for logical_x in range(-3, 4):
+                    with self.subTest(
+                        size=(width, height),
+                        cell=(logical_x, logical_y),
+                    ):
+                        left, top, right, bottom = geometry.cell_bounds(
+                            logical_x,
+                            logical_y,
+                        )
+                        point = ((left + right) // 2, (top + bottom) // 2)
+                        self.assertEqual(
+                            geometry.event_grid(*point),
+                            (logical_x, logical_y),
+                        )
 
     def test_apply_waits_when_the_display_rescan_is_asynchronous(self):
         calls = []
