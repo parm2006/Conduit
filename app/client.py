@@ -654,6 +654,10 @@ class ConduitClient:
         return True
 
     def on_switch(self, data):
+        handoff_id = data.get('handoff_id')
+        if not isinstance(handoff_id, str) or not handoff_id:
+            logger.warning("[cursor] Rejected switch without a valid handoff ID")
+            return False
         current_topology = getattr(self, 'active_topology_config', None) or {}
         current_version = current_topology.get(
             'topology_version',
@@ -694,9 +698,7 @@ class ConduitClient:
                 incoming_version,
             )
             return False
-        logger.info("Server switched control to this client.")
-        self.is_active = True
-        self._apply_clipboard_offer_route()
+        logger.info("Server requested cursor ownership on this client.")
         direction = data.get('direction')
         ratio = data.get('ratio', 0.5)
         supplied_scale_x = data.get('scale_x')
@@ -797,6 +799,28 @@ class ConduitClient:
             len(edge_regions),
         )
         self.active_topology_config = dict(data)
+        self.is_active = True
+        try:
+            acknowledged = bool(self.control_network.send_message({
+                'type': 'switch_ack',
+                'handoff_id': handoff_id,
+                'topology_version': incoming_version,
+            }))
+        except Exception as exc:
+            logger.warning(
+                "[cursor] Switch acknowledgement failed (%s)",
+                type(exc).__name__,
+            )
+            acknowledged = False
+        if not acknowledged:
+            self._release_all_injected_input()
+            self.is_active = False
+            if hasattr(self.input_handler, 'set_client_topology_edges'):
+                self.input_handler.set_client_topology_edges(())
+            elif hasattr(self.input_handler, 'set_client_topology_edge'):
+                self.input_handler.set_client_topology_edge(None)
+            return False
+        self._apply_clipboard_offer_route()
         return True
 
     def on_mouse_move(self, data):

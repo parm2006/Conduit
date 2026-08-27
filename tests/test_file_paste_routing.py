@@ -254,7 +254,12 @@ class FileAvailabilityRoutingTests(unittest.TestCase):
             }
         )
 
-        client.on_switch({"direction": "right", "ratio": 0.5})
+        client.on_switch({
+            "handoff_id": "handoff-1",
+            "topology_version": 1,
+            "direction": "right",
+            "ratio": 0.5,
+        })
 
         self.assertIsNotNone(client.paste_coordinator.current_offer)
         self.assertEqual(client.paste_coordinator.current_offer.source, "server")
@@ -517,7 +522,12 @@ class FileAvailabilityRoutingTests(unittest.TestCase):
         self.assertFalse(client.paste_coordinator.transfer_required)
         self.assertIsNone(client.paste_coordinator.current_offer)
 
-        client.on_switch({"direction": "right", "ratio": 0.5})
+        client.on_switch({
+            "handoff_id": "handoff-1",
+            "topology_version": 1,
+            "direction": "right",
+            "ratio": 0.5,
+        })
 
         self.assertTrue(client.is_active)
         self.assertEqual(client.paste_coordinator.current_offer.source, "server")

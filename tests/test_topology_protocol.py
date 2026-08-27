@@ -11,6 +11,7 @@ from app.display_topology import (
 )
 from app.server import ConduitServer
 from app.input_handler import TopologyEdgeRegion
+from app.input_router import LocalServer
 
 
 def group():
@@ -495,10 +496,15 @@ class TopologyProtocolTests(unittest.TestCase):
                 "set_client_topology_edge": lambda self, region: configured.append(region),
             },
         )()
+        client.is_active = False
+        client.active_topology_config = {"version": 2}
+        client.control_network = RecordingNetwork()
         client._apply_clipboard_offer_route = lambda: None
 
         client.on_switch(
             {
+                "handoff_id": "handoff-1",
+                "topology_version": 2,
                 "direction": "right",
                 "ratio": 0.5,
                 "destination_display_id": "client-hdmi",
@@ -585,6 +591,7 @@ class TopologyProtocolTests(unittest.TestCase):
             "Router",
             (),
             {
+                "state": LocalServer("server-primary", (960, 540)),
                 "handle_edge": lambda self, *args, **kwargs: calls.append(
                     (args, kwargs)
                 ) or True,

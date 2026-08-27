@@ -85,6 +85,7 @@ The accepted behavior is specified in
 - `tests/test_input_router.py`
 - `tests/test_topology_protocol.py`
 - `tests/test_multi_client_system.py`
+- `tests/test_file_paste_routing.py` (switch-protocol compatibility fixtures only)
 - `docs/plans/multi-client-topology/012-land-acknowledged-cursor-handoff.md`
 - `docs/plans/multi-client-topology/README.md`
 
@@ -134,8 +135,9 @@ Preserve held-input release order and existing pause semantics. Plan 013 will
 move steady-state forwarded input off the socket path; do not build that queue
 here.
 
-**Verify**: run only the new router transaction tests → GREEN. Then run the
-entire `tests.test_input_router` module → all pass.
+**Verify**: run only the new router transaction tests → GREEN. The full module
+remains intentionally red in Client ACK and legacy immediate-ownership tests;
+Step 3 owns those protocol and fixture updates and restores the module to green.
 
 ### Step 3: Wire authenticated Server and Client protocol callbacks
 
@@ -153,7 +155,7 @@ cleanup path. It must be idempotent with heartbeat teardown.
 Update existing synchronous transition tests to acknowledge explicitly. Do
 not weaken stale-session/topology rejection.
 
-**Verify**: router and topology-protocol commands → all pass. Commit the
+**Verify**: the entire router module and topology-protocol commands → all pass. Commit the
 acknowledged handoff as one green functional commit.
 
 ### Step 4: Prove deadline and teardown races

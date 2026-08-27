@@ -28,7 +28,7 @@ from app.latest_wins_sender import LatestWinsSender
 from app.safe_errors import error_name
 from app.global_hotkey import GlobalHotkeyMonitor
 from app.ports import DEFAULT_BASE_PORT
-from app.input_router import InputRouter
+from app.input_router import InputRouter, LocalServer
 from app.machine_identity import windows_machine_id
 
 logger = logging.getLogger(__name__)
@@ -182,6 +182,7 @@ class ConduitServer:
         self.control_network.register_callback('connected', lambda d: self._on_socket_connected('control', d))
         self.control_network.register_callback('disconnected', lambda d: self._on_socket_disconnected('control', d))
         self.control_network.register_callback('switch_back', self.on_switch_back)
+        self.control_network.register_callback('switch_ack', self.on_switch_ack)
         self.control_network.register_callback('topology_ack', self.on_topology_ack)
         self.control_network.register_callback(
             'topology_commit_ack',
@@ -378,6 +379,8 @@ class ConduitServer:
             topology,
             session_for_machine=self._session_for_machine,
             input_effects=_ServerInputEffects(self),
+            handoff_failed=self._on_handoff_failed,
+            ownership_changed=self._on_cursor_ownership_changed,
         )
         if getattr(self, 'routing_suspended', False):
             self.input_router.pause("topology reset required")
@@ -857,6 +860,32 @@ class ConduitServer:
         self.pressed_keys.clear()
         return not was_suspended
 
+    def _on_handoff_failed(self, session_id, reason):
+        logger.warning(
+            "[cursor] Handoff failed for session=%s reason=%s; suspending routing",
+            str(session_id)[:8],
+            reason,
+        )
+        self.suspend_input_routing("cursor handoff failed")
+
+        def close_failed_session():
+            try:
+                self.control_network.disconnect(session_id=session_id)
+            except Exception as exc:
+                logger.error(
+                    "[cursor] Failed to close handoff session (%s)",
+                    type(exc).__name__,
+                )
+
+        threading.Thread(
+            target=close_failed_session,
+            name=f"cursor-handoff-close-{str(session_id)[:8]}",
+            daemon=True,
+        ).start()
+
+    def _on_cursor_ownership_changed(self, _state):
+        self._apply_clipboard_offer_route()
+
     def on_edge_hit(self, direction, ratio, region=None):
         if getattr(self, "routing_suspended", False):
             return False
@@ -885,9 +914,20 @@ class ConduitServer:
                 ratio,
                 topology_version=router.topology.version,
             )
-            if switched:
-                self._apply_clipboard_offer_route()
             return switched
+
+    def on_switch_ack(self, data):
+        if getattr(self, "routing_suspended", False):
+            return False
+        router = getattr(self, 'input_router', None)
+        if router is None:
+            return False
+        return router.acknowledge_handoff(
+            handoff_id=data.get('handoff_id'),
+            session_id=data.get('session_id'),
+            machine_id=data.get('peer_identity'),
+            topology_version=data.get('topology_version'),
+        )
 
     def on_switch_back(self, data):
         if getattr(self, "routing_suspended", False):
@@ -919,9 +959,14 @@ class ConduitServer:
             session_id=data.get('session_id'),
             topology_version=data.get('topology_version'),
         )
-        if switched:
+        router_state = getattr(router, "state", None)
+        if switched and (
+            router_state is None or isinstance(router_state, LocalServer)
+        ):
             self._apply_clipboard_offer_route()
             logger.info("[cursor] Switch-back accepted; Server owns the cursor")
+        elif switched:
+            logger.info("[cursor] Client-to-Client handoff is awaiting acknowledgement")
         else:
             logger.warning("[cursor] Switch-back rejected; router state unchanged")
         return switched

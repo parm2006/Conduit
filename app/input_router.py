@@ -3,6 +3,7 @@
 from dataclasses import dataclass
 import logging
 import threading
+import uuid
 
 from app.display_topology import edge_ratio
 
@@ -27,8 +28,14 @@ class RemoteClient:
 @dataclass(frozen=True)
 class Transitioning:
     source: object
+    destination_session_id: str
     destination_machine_id: str
+    destination_display_id: str
+    destination_position: tuple[int, int]
+    topology_version: int
+    handoff_id: str
     released_state: bool
+    capture_on_ack: bool
 
 
 @dataclass(frozen=True)
@@ -39,7 +46,18 @@ class Paused:
 class InputRouter:
     """Serializes graph transitions and targets Server-originated input."""
 
-    def __init__(self, topology, *, session_for_machine, input_effects):
+    def __init__(
+        self,
+        topology,
+        *,
+        session_for_machine,
+        input_effects,
+        handoff_id_factory=None,
+        schedule_deadline=None,
+        handoff_timeout=0.75,
+        handoff_failed=None,
+        ownership_changed=None,
+    ):
         self.topology = topology
         self._session_for_machine = session_for_machine
         self._input_effects = input_effects
@@ -49,6 +67,16 @@ class InputRouter:
         self._held_buttons = set()
         self._lock = threading.RLock()
         self._pause_requested = threading.Event()
+        self._handoff_id_factory = handoff_id_factory or (
+            lambda: uuid.uuid4().hex
+        )
+        self._schedule_deadline = (
+            schedule_deadline or self._start_deadline_timer
+        )
+        self._handoff_timeout = float(handoff_timeout)
+        self._handoff_failed = handoff_failed
+        self._ownership_changed = ownership_changed
+        self._pending_deadline = None
 
     @property
     def held_keys(self):
@@ -214,16 +242,24 @@ class InputRouter:
             return sent
 
     def destination_lost(self, session_id):
+        restore_center = None
         with self._lock:
-            if not (
-                isinstance(self.state, RemoteClient)
-                and self.state.session_id == session_id
-            ):
+            if isinstance(self.state, RemoteClient):
+                matches = self.state.session_id == session_id
+            elif isinstance(self.state, Transitioning):
+                matches = self.state.destination_session_id == session_id
+            else:
+                matches = False
+            if not matches:
                 return False
+            self._cancel_pending_deadline_locked()
             self._held_keys.clear()
             self._held_buttons.clear()
-            self._return_to_server_center()
-            return True
+            display_id, restore_center = self.topology.server_primary_center()
+            self.state = LocalServer(display_id, restore_center)
+        self._input_effects.release_local_input()
+        self._input_effects.restore_local(restore_center)
+        return True
 
     def request_pause(self, reason):
         """Reject new input immediately, without waiting for the router lock."""
@@ -235,6 +271,7 @@ class InputRouter:
         with self._lock:
             if isinstance(self.state, Paused):
                 return False
+            self._cancel_pending_deadline_locked()
             previous = self.state
             if isinstance(previous, RemoteClient):
                 self._release_remote(previous)
@@ -261,7 +298,18 @@ class InputRouter:
     def _transition(self, edge):
         previous = self.state
         mapping = edge.mapping
-        self.state = Transitioning(previous, mapping.destination_machine_id, False)
+        placeholder = Transitioning(
+            previous,
+            "",
+            mapping.destination_machine_id,
+            mapping.destination_display_id,
+            edge.destination_position,
+            self.topology.version,
+            "",
+            False,
+            isinstance(previous, LocalServer),
+        )
+        self.state = placeholder
         if isinstance(previous, RemoteClient):
             released = self._release_remote(previous)
         else:
@@ -269,7 +317,17 @@ class InputRouter:
             self._held_keys.clear()
             self._held_buttons.clear()
             released = True
-        self.state = Transitioning(previous, mapping.destination_machine_id, released)
+        self.state = Transitioning(
+            previous,
+            "",
+            mapping.destination_machine_id,
+            mapping.destination_display_id,
+            edge.destination_position,
+            self.topology.version,
+            "",
+            released,
+            isinstance(previous, LocalServer),
+        )
         if not released:
             self._return_to_server_center()
             return False
@@ -292,8 +350,25 @@ class InputRouter:
         ):
             self._return_to_server_center()
             return False
+        handoff_id = str(self._handoff_id_factory())
+        if not handoff_id:
+            self._return_to_server_center()
+            return False
+        pending = Transitioning(
+            previous,
+            session.session_id,
+            mapping.destination_machine_id,
+            mapping.destination_display_id,
+            edge.destination_position,
+            self.topology.version,
+            handoff_id,
+            released,
+            isinstance(previous, LocalServer),
+        )
+        self.state = pending
         message = {
             "type": "switch",
+            "handoff_id": handoff_id,
             "topology_version": self.topology.version,
             "direction": mapping.source_side,
             "source_machine_id": mapping.source_machine_id,
@@ -317,33 +392,132 @@ class InputRouter:
                 mapping.destination_machine_id
             ),
         }
-        if not session.control_lane.send_message(message):
-            logger.warning(
-                "[cursor] Switch command failed for machine=%r session=%s",
-                mapping.destination_machine_id,
-                str(session.session_id)[:8],
-            )
-            self._return_to_server_center()
-            return False
-        if self._pause_requested.is_set():
-            return False
-        if isinstance(previous, LocalServer):
-            self._input_effects.begin_remote_capture(session.session_id)
-        if self._pause_requested.is_set():
-            return False
-        logger.info(
-            "[cursor] Remote ownership active on machine=%r session=%s entry=%s",
-            mapping.destination_machine_id,
-            str(session.session_id)[:8],
-            edge.destination_position,
+        deadline = self._schedule_deadline(
+            self._handoff_timeout,
+            lambda: self._fail_handoff(handoff_id, "handoff timeout"),
         )
-        self.state = RemoteClient(
-            session.session_id,
-            mapping.destination_machine_id,
-            mapping.destination_display_id,
-            edge.destination_position,
-        )
+        self._pending_deadline = deadline
+        threading.Thread(
+            target=self._send_switch,
+            args=(pending, session.control_lane, message),
+            name=f"cursor-handoff-{str(session.session_id)[:8]}",
+            daemon=True,
+        ).start()
         return True
+
+    def acknowledge_handoff(
+        self,
+        *,
+        handoff_id,
+        session_id,
+        machine_id,
+        topology_version,
+    ):
+        capture_session_id = None
+        ownership_callback = None
+        next_state = None
+        with self._lock:
+            pending = self.state
+            if not isinstance(pending, Transitioning):
+                return False
+            if (
+                self._pause_requested.is_set()
+                or handoff_id != pending.handoff_id
+                or session_id != pending.destination_session_id
+                or machine_id != pending.destination_machine_id
+                or topology_version != pending.topology_version
+                or topology_version != self.topology.version
+            ):
+                return False
+            self._cancel_pending_deadline_locked()
+            if pending.capture_on_ack:
+                capture_session_id = pending.destination_session_id
+            next_state = RemoteClient(
+                pending.destination_session_id,
+                pending.destination_machine_id,
+                pending.destination_display_id,
+                pending.destination_position,
+            )
+            if capture_session_id is None:
+                self.state = next_state
+            ownership_callback = self._ownership_changed
+
+        if capture_session_id is not None:
+            self._input_effects.begin_remote_capture(capture_session_id)
+            with self._lock:
+                if self.state != pending or self._pause_requested.is_set():
+                    return False
+                self.state = next_state
+
+        logger.info(
+            "[cursor] Remote ownership acknowledged machine=%r session=%s "
+            "entry=%s handoff=%s",
+            next_state.machine_id,
+            str(next_state.session_id)[:8],
+            next_state.position,
+            str(handoff_id)[:8],
+        )
+        if ownership_callback is not None:
+            ownership_callback(next_state)
+        return True
+
+    def _send_switch(self, pending, lane, message):
+        try:
+            sent = bool(lane.send_message(message))
+        except Exception as exc:
+            logger.warning(
+                "[cursor] Switch command raised for machine=%r session=%s (%s)",
+                pending.destination_machine_id,
+                str(pending.destination_session_id)[:8],
+                type(exc).__name__,
+            )
+            sent = False
+        if sent:
+            return
+        logger.warning(
+            "[cursor] Switch command failed for machine=%r session=%s",
+            pending.destination_machine_id,
+            str(pending.destination_session_id)[:8],
+        )
+        self._fail_handoff(pending.handoff_id, "switch send failed")
+
+    def _fail_handoff(self, handoff_id, reason):
+        callback = None
+        session_id = None
+        center = None
+        with self._lock:
+            pending = self.state
+            if not (
+                isinstance(pending, Transitioning)
+                and pending.handoff_id == handoff_id
+            ):
+                return False
+            session_id = pending.destination_session_id
+            self._cancel_pending_deadline_locked()
+            self._held_keys.clear()
+            self._held_buttons.clear()
+            display_id, center = self.topology.server_primary_center()
+            self.state = LocalServer(display_id, center)
+            callback = self._handoff_failed
+
+        self._input_effects.release_local_input()
+        self._input_effects.restore_local(center)
+        if callback is not None:
+            callback(session_id, reason)
+        return True
+
+    def _cancel_pending_deadline_locked(self):
+        deadline = self._pending_deadline
+        self._pending_deadline = None
+        if deadline is not None:
+            deadline.cancel()
+
+    @staticmethod
+    def _start_deadline_timer(delay, callback):
+        timer = threading.Timer(delay, callback)
+        timer.daemon = True
+        timer.start()
+        return timer
 
     def _release_remote(self, state):
         session = self._session_for_machine(state.machine_id)
@@ -368,6 +542,7 @@ class InputRouter:
         return released
 
     def _return_to_server_center(self):
+        self._cancel_pending_deadline_locked()
         self._held_keys.clear()
         self._held_buttons.clear()
         self._input_effects.release_local_input()
