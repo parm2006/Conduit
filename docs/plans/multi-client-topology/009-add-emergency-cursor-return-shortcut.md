@@ -2,6 +2,8 @@
 
 > **Executor instructions:** Follow this plan step by step. Run every verification command and confirm the expected result before moving on. If anything in "STOP conditions" occurs, stop and write a handback; do not improvise. When done, update this plan's status row in the effort README.
 >
+> **Step handoff checkpoint:** After completing and verifying every numbered Step, create a new append-only `handoffs/YYYY-MM-DD-HHMM-multi-client-topology.md` and update `handoffs/index.md` before starting the next Step. Record the exact verification result, branch/SHA and working-tree state, decisions, remaining work, and the next Step. Do not overwrite an earlier handoff or commit handoff files unless the user explicitly requests it.
+>
 > **Drift check (run first):** `git -c safe.directory=C:/Users/parth/Projects/Conduit diff 66346ff36dca8f6550ddc3f2f652b2a9b8664604 -- app/global_hotkey.py app/input_router.py app/server.py tests/test_global_hotkey.py tests/test_input_router.py tests/test_emergency_release.py docs/plans/multi-client-topology/README.md`
 >
 > If these paths changed after this plan was written, compare the current-state notes against the live code before proceeding. Stop if the change alters hotkey ownership, input-routing state, or Apply pause semantics.

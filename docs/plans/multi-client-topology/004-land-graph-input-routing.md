@@ -2,6 +2,8 @@
 
 > **Executor instructions:** Execute test-first. Run each verification gate. Stop and write a handback if the live architecture creates an unplanned routing or input-ownership fork.
 >
+> **Step handoff checkpoint:** After completing and verifying every numbered Step, create a new append-only `handoffs/YYYY-MM-DD-HHMM-multi-client-topology.md` and update `handoffs/index.md` before starting the next Step. Record the exact verification result, branch/SHA and working-tree state, decisions, remaining work, and the next Step. Do not overwrite an earlier handoff or commit handoff files unless the user explicitly requests it.
+>
 > **Drift check (run first):** `git -c safe.directory=C:/Users/parth/Projects/Conduit diff 3d76acb -- app/input_router.py app/display_topology.py app/server.py app/client.py app/input_handler.py app/input_geometry.py tests/test_input_router.py tests/test_input_geometry.py tests/test_emergency_release.py tests/test_input_numpad_forwarding.py tests/test_input_delete_forwarding.py tests/test_overlay_motion.py`
 >
 > Expected dependency drift: Plan 002 adds the topology model and Plan 003 replaces Server singleton lanes with ready `ClientSession` lookups. Confirm both outcomes. Stop if input already depends on raw socket objects or topology drafts.

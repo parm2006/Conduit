@@ -19,6 +19,16 @@ This effort expands Conduit into one fixed Server hub with at most two simultane
 
 Status values: TODO | IN PROGRESS | DONE | BLOCKED (one-line reason) | SUPERSEDED (one-line pointer).
 
+## Step handoff rule
+
+Every numbered Step in Plans 002–011 ends with a durable handoff checkpoint.
+After the Step's verification passes, create a new append-only
+`handoffs/YYYY-MM-DD-HHMM-multi-client-topology.md` and repoint the workstream
+entry in `handoffs/index.md` before beginning the next Step. Each handoff must
+record exact verification evidence, branch/SHA and working-tree state,
+decisions, open work, and the next Step. Handoffs remain local and uncommitted
+unless the user explicitly requests otherwise.
+
 ## Dependency notes
 
 - **002 → 003:** session fan-out needs stable machine/display identity, draft placement, and the compact editor contract.
@@ -34,6 +44,7 @@ Status values: TODO | IN PROGRESS | DONE | BLOCKED (one-line reason) | SUPERSEDE
 
 ## Reconciliation log
 
+- **2026-08-27:** Added a mandatory handoff checkpoint after every numbered Step in Plans 002–011 so each subplan can be resumed without relying on conversation history.
 - **2026-08-27:** Hardened completed Plan 010 after rapid physical handoffs exposed a lock-order gap in the original disconnect latch. Client loss now requests pause without waiting for the router lock, synchronously stops Server capture and centers the cursor, rejects all Server input entry points, suspends survivors, and completes formal router cleanup asynchronously. The full 745-test suite, 150 repeated race regressions, compileall, and `diff --check` pass. Physical three-PC acceptance remains in Plan 008.
 - **2026-08-27:** Expanded deferred Plan 009 with the topology action label lifecycle. Each Server lifetime begins with **Apply**; only the first successful atomic Apply changes it to **Reset**; failures keep the current label; Stop/Start restores **Apply**. This remains planning-only; Plan 008 physical acceptance is the current gate.
 - **2026-08-26:** Completed Plans 010–011 locally. Any ready Client loss now latches cluster input routing off, releases input, returns the cursor to Server primary center, foregrounds the Server recovery UI, and requires an authoritative Reset before routing resumes. Disconnect and Server-tab recovery reconstruct the authoritative Server anchor; Reset refreshes all ready inventories while preserving placements and session colors, so stale color state cannot blank the grid. The compact canvas fits the actual mapped extent while retaining exactly seven columns and four rows. The automated gate passes 739 tests plus compileall and `diff --check`; Plan 008 resumes for physical `run.bat` acceptance.

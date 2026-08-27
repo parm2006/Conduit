@@ -2,6 +2,8 @@
 
 > **Executor instructions:** Execute test-first. This plan composes existing services; it must not redesign them inside one transaction. Run every gate. At an unplanned failure or ordering fork, stop and write a handback.
 >
+> **Step handoff checkpoint:** After completing and verifying every numbered Step, create a new append-only `handoffs/YYYY-MM-DD-HHMM-multi-client-topology.md` and update `handoffs/index.md` before starting the next Step. Record the exact verification result, branch/SHA and working-tree state, decisions, remaining work, and the next Step. Do not overwrite an earlier handoff or commit handoff files unless the user explicitly requests it.
+>
 > **Drift check (run first):** `git -c safe.directory=C:/Users/parth/Projects/Conduit diff 3d76acb -- app/topology_service.py app/display_topology.py app/topology_editor.py app/topology_toast.py app/gui.py app/server.py app/client.py app/preferences.py app/input_router.py app/clipboard_hub.py app/file_transfer/cluster_router.py tests/test_topology_apply.py tests/test_topology_reconnect.py tests/test_topology_editor.py tests/test_gui_connection_lifecycle.py tests/test_emergency_release.py tests/test_clipboard_hub.py tests/test_cluster_file_routing.py`
 >
 > Expected dependency drift: Plans 002–006 create topology, session, input, clipboard, and file service interfaces. Confirm each exposes explicit pause/resume or cleanup commands and that no draft can reach active routing outside one activation owner.

@@ -2,6 +2,8 @@
 
 > **Executor instructions:** Execute test-first. Preserve current clipboard behavior unless this plan explicitly changes cluster routing. Run every gate and write a handback at any unplanned format, ordering, or Windows clipboard fork.
 >
+> **Step handoff checkpoint:** After completing and verifying every numbered Step, create a new append-only `handoffs/YYYY-MM-DD-HHMM-multi-client-topology.md` and update `handoffs/index.md` before starting the next Step. Record the exact verification result, branch/SHA and working-tree state, decisions, remaining work, and the next Step. Do not overwrite an earlier handoff or commit handoff files unless the user explicitly requests it.
+>
 > **Drift check (run first):** `git -c safe.directory=C:/Users/parth/Projects/Conduit diff 3d76acb -- app/clipboard_hub.py app/server.py app/client.py app/clipboard_handler.py app/latest_wins_sender.py app/file_transfer/paste_coordinator.py tests/test_clipboard_hub.py tests/test_clipboard_scheduling.py tests/test_latest_wins_sender.py tests/test_clipboard_deduplication.py tests/test_clipboard_formats.py tests/test_file_paste_clipboard.py tests/test_security_error_redaction.py`
 >
 > Expected dependency drift: Plans 003 and 004 make Server callbacks session-aware and expose active destination identity. Confirm the data lane is still distinct from the file lane and every Client remains a one-Server endpoint.

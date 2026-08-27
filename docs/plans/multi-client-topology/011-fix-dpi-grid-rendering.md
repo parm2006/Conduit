@@ -5,6 +5,14 @@
 > STOP condition occurs, stop and write a handback; do not improvise. Update the
 > effort README when complete.
 >
+> **Step handoff checkpoint:** After completing and verifying every numbered
+> Step, create a new append-only
+> `handoffs/YYYY-MM-DD-HHMM-multi-client-topology.md` and update
+> `handoffs/index.md` before starting the next Step. Record the exact
+> verification result, branch/SHA and working-tree state, decisions, remaining
+> work, and the next Step. Do not overwrite an earlier handoff or commit handoff
+> files unless the user explicitly requests it.
+>
 > **Drift check (run first)**: `git -c safe.directory=C:/Users/parth/Projects/Conduit diff 681d8da -- app/topology_editor.py tests/test_topology_editor.py`
 > Plan 010 intentionally changes these paths. Rebase the excerpts below onto
 > Plan 010's final state; an unrelated semantic change is a STOP condition.
@@ -133,4 +141,3 @@ Stop and write a handback if:
 Future visual changes must use the shared geometry helper for both rendering and
 hit-testing. Do not reintroduce raw `CELL_SIZE` pixel arithmetic in event code;
 `CELL_SIZE` is a logical design unit, not a guaranteed physical pixel count.
-

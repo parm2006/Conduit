@@ -5,6 +5,14 @@
 > anything in "STOP conditions" occurs, stop and write a handback; do not
 > improvise. When done, update this plan's row in the effort README.
 >
+> **Step handoff checkpoint:** After completing and verifying every numbered
+> Step, create a new append-only
+> `handoffs/YYYY-MM-DD-HHMM-multi-client-topology.md` and update
+> `handoffs/index.md` before starting the next Step. Record the exact
+> verification result, branch/SHA and working-tree state, decisions, remaining
+> work, and the next Step. Do not overwrite an earlier handoff or commit handoff
+> files unless the user explicitly requests it.
+>
 > **Drift check (run first)**: `git -c safe.directory=C:/Users/parth/Projects/Conduit diff 681d8da -- app/server.py app/client.py app/gui.py app/topology_editor.py tests/test_topology_apply.py tests/test_topology_protocol.py tests/test_gui_connection_lifecycle.py tests/test_topology_editor.py`
 > If these paths changed since this plan was written, compare the current-state
 > facts below with the live code before proceeding. A semantic mismatch is a

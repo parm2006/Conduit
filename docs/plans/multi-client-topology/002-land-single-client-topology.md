@@ -2,6 +2,8 @@
 
 > **Executor instructions:** Execute test-first. Run every verification command and confirm its expected result before continuing. If a STOP condition occurs, write a handback for the planning agent; do not improvise. Update this plan's README row when the work lands.
 >
+> **Step handoff checkpoint:** After completing and verifying every numbered Step, create a new append-only `handoffs/YYYY-MM-DD-HHMM-multi-client-topology.md` and update `handoffs/index.md` before starting the next Step. Record the exact verification result, branch/SHA and working-tree state, decisions, remaining work, and the next Step. Do not overwrite an earlier handoff or commit handoff files unless the user explicitly requests it.
+>
 > **Drift check (run first):** `git -c safe.directory=C:/Users/parth/Projects/Conduit diff 3d76acb -- app/display_topology.py app/windows_displays.py app/topology_editor.py app/topology_toast.py app/preferences.py app/gui.py app/server.py app/client.py app/input_handler.py app/input_geometry.py tests/test_display_topology.py tests/test_windows_displays.py tests/test_topology_editor.py tests/test_topology_toast.py tests/test_gui_preferences.py tests/test_input_geometry.py`
 >
 > Expected result before Plan 002 starts: no output. If these paths changed, compare the live code with “Current state.” Stop if ownership, lifecycle, or GUI composition no longer matches.

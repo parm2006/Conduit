@@ -2,6 +2,8 @@
 
 > **Executor instructions:** Execute test-first. Run every verification command. Stop and write a handback if a STOP condition occurs. Update this plan's README row when the work lands.
 >
+> **Step handoff checkpoint:** After completing and verifying every numbered Step, create a new append-only `handoffs/YYYY-MM-DD-HHMM-multi-client-topology.md` and update `handoffs/index.md` before starting the next Step. Record the exact verification result, branch/SHA and working-tree state, decisions, remaining work, and the next Step. Do not overwrite an earlier handoff or commit handoff files unless the user explicitly requests it.
+>
 > **Drift check (run first):** `git -c safe.directory=C:/Users/parth/Projects/Conduit diff 3d76acb -- app/session.py app/network.py app/file_transfer/transport.py app/server.py app/client.py app/gui.py app/topology_editor.py app/topology_toast.py tests/test_client_session_registry.py tests/test_security_session.py tests/test_security_network.py tests/test_security_full_session.py tests/test_file_transfer_network_identity.py tests/test_gui_connection_lifecycle.py`
 >
 > Expected dependency drift: Plan 002 changes `server.py`, `client.py`, `gui.py`, `topology_editor.py`, and `topology_toast.py` to support one topology-aware Client. Confirm those changes match Plan 002's accepted outcome. Stop on unrelated lane, authentication, or listener changes.
