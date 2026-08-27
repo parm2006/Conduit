@@ -21,6 +21,7 @@
 
 ## Status
 
+- **State**: DONE
 - **Effort**: L
 - **Risk**: HIGH
 - **Depends on**: 010-stop-routing-and-reset-topology.md
@@ -199,14 +200,14 @@ Update this plan and the effort README only after every gate passes.
 
 ## Done criteria
 
-- [ ] Remote ownership and capture never begin before exact ACK.
-- [ ] `handle_edge()` cannot block on the target lane.
-- [ ] Dead/silent target restores Server center and suspends routing by 750 ms.
-- [ ] Failed target session closes and releases its registry slot.
-- [ ] Stale/late/cross-session ACK cannot change ownership.
-- [ ] Focused, stress, system, security, full, compile, and whitespace gates pass.
-- [ ] Each large Step has an indexed handoff; every commit is green and narrow.
-- [ ] No files outside the in-scope list change.
+- [x] Remote ownership and capture never begin before exact ACK.
+- [x] `handle_edge()` cannot block on the target lane.
+- [x] Dead/silent target restores Server center and suspends routing by 750 ms.
+- [x] Failed target session closes and releases its registry slot.
+- [x] Stale/late/cross-session ACK cannot change ownership.
+- [x] Focused, stress, system, security, full, compile, and whitespace gates pass.
+- [x] Each large Step has an indexed handoff; every commit is green and narrow.
+- [x] No files outside the in-scope list change.
 
 ## STOP conditions
 

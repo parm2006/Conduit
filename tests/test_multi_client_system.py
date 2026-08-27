@@ -1,6 +1,7 @@
 import gc
 import tempfile
 import threading
+import time
 import unittest
 from types import SimpleNamespace
 
@@ -26,6 +27,7 @@ from app.file_transfer.cluster_router import (
 from app.file_transfer.models import FileItem, ItemType, Manifest
 from app.file_transfer.transport import FileLaneClient, FileLaneServer
 from app.network import NetworkClient, NetworkServer
+from app.input_router import InputRouter, LocalServer
 from app.server import ConduitServer
 from app.session import SessionRegistry
 from app.trust import PeerTrustStore
@@ -95,6 +97,17 @@ def _candidate(version=1):
     ).validate().validated.activate(version)
 
 
+def _routing_candidate(version=7):
+    return DraftTopology(
+        "server",
+        (
+            PlacedMachine(_group("client-2", "ClientTwo"), -2, 0),
+            PlacedMachine(_group("client-1", "ClientOne"), -1, 0),
+            PlacedMachine(_group("server", "ParthPC"), 0, 0),
+        ),
+    ).validate().validated.activate(version)
+
+
 class _Input:
     screen_width = 1920
     screen_height = 1080
@@ -107,6 +120,23 @@ class _Input:
 
     def inject_position(self, x, y):
         return True
+
+
+class _RoutingInputEffects:
+    def __init__(self):
+        self.captures = []
+        self.restores = []
+        self.releases = 0
+
+    def release_local_input(self):
+        self.releases += 1
+
+    def begin_remote_capture(self, session_id):
+        self.captures.append(session_id)
+        return True
+
+    def restore_local(self, position):
+        self.restores.append(position)
 
 
 class MultiClientTlsSystemTests(unittest.TestCase):
@@ -221,6 +251,149 @@ class MultiClientTlsSystemTests(unittest.TestCase):
             for bundle in self.bundles
             if bundle.machine_id == machine_id
         )
+
+    def _ready_session_for_machine(self, machine_id):
+        return next(
+            session
+            for session in self.registry.ready_sessions()
+            if session.peer_identity == machine_id
+        )
+
+    def test_acknowledged_cursor_routes_cross_real_control_tls(self):
+        topology = _routing_candidate()
+        effects = _RoutingInputEffects()
+        router = InputRouter(
+            topology,
+            session_for_machine=self._ready_session_for_machine,
+            input_effects=effects,
+        )
+        received = {bundle.machine_id: [] for bundle in self.bundles}
+
+        self.control_server.register_callback(
+            "switch_ack",
+            lambda data: router.acknowledge_handoff(
+                handoff_id=data.get("handoff_id"),
+                session_id=data.get("session_id"),
+                machine_id=data.get("peer_identity"),
+                topology_version=data.get("topology_version"),
+            ),
+        )
+        for bundle in self.bundles:
+            bundle.control.register_callback(
+                "switch",
+                lambda data, endpoint=bundle.control, machine_id=bundle.machine_id: (
+                    received[machine_id].append(dict(data)),
+                    endpoint.send_message({
+                        "type": "switch_ack",
+                        "handoff_id": data["handoff_id"],
+                        "topology_version": data["topology_version"],
+                    }),
+                )[-1],
+            )
+
+        first_session = self._session_for_machine("client-1")
+        second_session = self._session_for_machine("client-2")
+        self.assertTrue(router.handle_edge(
+            "server",
+            "server-primary",
+            "left",
+            0.5,
+            topology_version=7,
+        ))
+        self.assertTrue(_wait_for(
+            lambda: router.active_session_id == first_session
+        ))
+        self.assertEqual(effects.captures, [first_session])
+
+        self.assertTrue(router.handle_edge(
+            "client-1",
+            "client-1-primary",
+            "left",
+            0.5,
+            session_id=first_session,
+            topology_version=7,
+        ))
+        self.assertTrue(_wait_for(
+            lambda: router.active_session_id == second_session
+        ))
+
+        self.assertTrue(router.handle_edge(
+            "client-2",
+            "client-2-primary",
+            "right",
+            0.5,
+            session_id=second_session,
+            topology_version=7,
+        ))
+        self.assertTrue(_wait_for(
+            lambda: router.active_session_id == first_session
+        ))
+        self.assertTrue(router.handle_edge(
+            "client-1",
+            "client-1-primary",
+            "right",
+            0.5,
+            session_id=first_session,
+            topology_version=7,
+        ))
+        self.assertIsInstance(router.state, LocalServer)
+        self.assertEqual(
+            {machine_id: len(messages) for machine_id, messages in received.items()},
+            {"client-1": 2, "client-2": 1},
+        )
+
+    def test_silent_real_tls_destination_recovers_before_heartbeat_timeout(self):
+        topology = _routing_candidate()
+        effects = _RoutingInputEffects()
+        failures = []
+        switch_received = threading.Event()
+        failed = threading.Event()
+
+        def on_failure(session_id, reason):
+            failures.append((session_id, reason))
+            self.control_server.disconnect(session_id=session_id)
+            failed.set()
+
+        router = InputRouter(
+            topology,
+            session_for_machine=self._ready_session_for_machine,
+            input_effects=effects,
+            handoff_failed=on_failure,
+        )
+        first = next(
+            bundle for bundle in self.bundles if bundle.machine_id == "client-1"
+        )
+        first.control.register_callback(
+            "switch",
+            lambda data: switch_received.set(),
+        )
+        self.control_server.register_callback(
+            "disconnected",
+            lambda data: self.registry.close(data["session_id"]),
+        )
+
+        started = time.monotonic()
+        self.assertTrue(router.handle_edge(
+            "server",
+            "server-primary",
+            "left",
+            0.5,
+            topology_version=7,
+        ))
+        self.assertTrue(switch_received.wait(1))
+        self.assertTrue(failed.wait(1.5))
+        elapsed = time.monotonic() - started
+
+        self.assertLess(elapsed, 1.5)
+        self.assertEqual(
+            failures,
+            [(first.session_id, "handoff timeout")],
+        )
+        self.assertIsInstance(router.state, LocalServer)
+        self.assertEqual(effects.captures, [])
+        self.assertTrue(_wait_for(
+            lambda: self.registry.get(first.session_id) is None
+        ))
 
     def test_atomic_apply_and_cluster_commands_cross_real_control_tls(self):
         clipboard_hub = ClipboardHub("server")
