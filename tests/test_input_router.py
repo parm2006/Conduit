@@ -669,6 +669,200 @@ class AcknowledgedHandoffTests(unittest.TestCase):
         )
         self.assertFalse(self._ack(message))
 
+    def test_timeout_restores_server_while_switch_sender_is_still_blocked(self):
+        send_entered = threading.Event()
+        release_send = threading.Event()
+        send_finished = threading.Event()
+
+        class BlockingLane(RecordingLane):
+            def send_message(inner_self, message):
+                inner_self.log.append((inner_self.session_id, dict(message)))
+                inner_self.sent.set()
+                send_entered.set()
+                release_send.wait(1)
+                send_finished.set()
+                return True
+
+        self.sessions["client-1"].control_lane = BlockingLane(
+            "session-1",
+            self.log,
+        )
+
+        self.assertTrue(self.router.handle_edge(
+            "server",
+            "server-primary",
+            "right",
+            0.5,
+            topology_version=7,
+        ))
+        self.assertTrue(send_entered.wait(0.2))
+        self.deadlines.fire_next()
+
+        self.assertEqual(
+            self.router.state,
+            LocalServer("server-primary", (960, 540)),
+        )
+        self.assertEqual(self.failures, [("session-1", "handoff timeout")])
+        release_send.set()
+        self.assertTrue(send_finished.wait(0.2))
+        self.assertEqual(
+            self.router.state,
+            LocalServer("server-primary", (960, 540)),
+        )
+
+    def test_dispatched_timeout_cannot_undo_ack_that_won_router_lock(self):
+        capture_entered = threading.Event()
+        release_capture = threading.Event()
+
+        class BlockingCaptureEffects(RecordingInputEffects):
+            def begin_remote_capture(inner_self, session_id):
+                inner_self.log.append(("server", "remote", session_id))
+                capture_entered.set()
+                release_capture.wait(1)
+
+        self.effects = BlockingCaptureEffects(self.log)
+        self.router._input_effects = self.effects
+        message = self._begin_server_to_first()
+        _delay, deadline = self.deadlines.calls[0]
+        ack_results = []
+        ack_thread = threading.Thread(
+            target=lambda: ack_results.append(self._ack(message))
+        )
+        ack_thread.start()
+        self.assertTrue(capture_entered.wait(0.2))
+
+        deadline.callback()
+        release_capture.set()
+        ack_thread.join(1)
+
+        self.assertFalse(ack_thread.is_alive())
+        self.assertEqual(ack_results, [True])
+        self.assertEqual(self.router.active_session_id, "session-1")
+        self.assertEqual(self.failures, [])
+
+    def test_disconnect_and_pause_orderings_never_leave_late_remote_owner(self):
+        message = self._begin_server_to_first()
+        self.assertTrue(self.router.destination_lost("session-1"))
+        self.assertFalse(self._ack(message))
+        self.assertIsInstance(self.router.state, LocalServer)
+
+        self.sessions["client-1"].control_lane.sent.clear()
+        message = self._begin_server_to_first()
+        self.router.request_pause("apply")
+        self.assertFalse(self._ack(message))
+        self.assertTrue(self.router.pause("apply"))
+        self.assertIsInstance(self.router.state, Paused)
+
+    def test_reconnect_same_machine_rejects_old_session_ack(self):
+        old_message = self._begin_server_to_first()
+        self.assertTrue(self.router.destination_lost("session-1"))
+        replacement = SimpleNamespace(
+            session_id="session-new",
+            peer_identity="client-1",
+            ready=True,
+            control_lane=RecordingLane("session-new", self.log),
+        )
+        self.sessions["client-1"] = replacement
+
+        self.assertTrue(self.router.handle_edge(
+            "server",
+            "server-primary",
+            "right",
+            0.5,
+            topology_version=7,
+        ))
+        self.assertTrue(replacement.control_lane.sent.wait(0.2))
+        new_message = next(
+            item[1]
+            for item in reversed(self.log)
+            if len(item) == 2
+            and item[0] == "session-new"
+            and item[1].get("type") == "switch"
+        )
+
+        self.assertFalse(self.router.acknowledge_handoff(
+            handoff_id=old_message["handoff_id"],
+            session_id="session-1",
+            machine_id="client-1",
+            topology_version=7,
+        ))
+        self.assertTrue(self.router.acknowledge_handoff(
+            handoff_id=new_message["handoff_id"],
+            session_id="session-new",
+            machine_id="client-1",
+            topology_version=7,
+        ))
+        self.assertEqual(self.router.active_session_id, "session-new")
+
+    def test_ack_timeout_contention_is_bounded_over_fifty_repetitions(self):
+        for repetition in range(50):
+            with self.subTest(repetition=repetition):
+                log = []
+                deadline = ManualDeadline()
+                failures = []
+                session = SimpleNamespace(
+                    session_id=f"session-{repetition}",
+                    peer_identity="client-1",
+                    ready=True,
+                    control_lane=RecordingLane(
+                        f"session-{repetition}",
+                        log,
+                    ),
+                )
+                router = InputRouter(
+                    active_chain(),
+                    session_for_machine=lambda machine_id: (
+                        session if machine_id == "client-1" else None
+                    ),
+                    input_effects=RecordingInputEffects(log),
+                    handoff_id_factory=lambda: f"handoff-{repetition}",
+                    schedule_deadline=deadline.schedule,
+                    handoff_failed=lambda session_id, reason: failures.append(
+                        (session_id, reason)
+                    ),
+                )
+                self.assertTrue(router.handle_edge(
+                    "server",
+                    "server-primary",
+                    "right",
+                    0.5,
+                    topology_version=7,
+                ))
+                self.assertTrue(session.control_lane.sent.wait(0.2))
+                barrier = threading.Barrier(3)
+                ack_results = []
+                ack_thread = threading.Thread(target=lambda: (
+                    barrier.wait(),
+                    ack_results.append(router.acknowledge_handoff(
+                        handoff_id=f"handoff-{repetition}",
+                        session_id=session.session_id,
+                        machine_id="client-1",
+                        topology_version=7,
+                    )),
+                ))
+                timeout_thread = threading.Thread(target=lambda: (
+                    barrier.wait(),
+                    deadline.fire_next(),
+                ))
+                ack_thread.start()
+                timeout_thread.start()
+                barrier.wait()
+                ack_thread.join(1)
+                timeout_thread.join(1)
+
+                self.assertFalse(ack_thread.is_alive())
+                self.assertFalse(timeout_thread.is_alive())
+                self.assertEqual(len(ack_results), 1)
+                captures = [
+                    item for item in log if item[:2] == ("server", "remote")
+                ]
+                self.assertLessEqual(len(captures), 1)
+                if ack_results[0]:
+                    self.assertEqual(router.active_session_id, session.session_id)
+                    self.assertEqual(failures, [])
+                else:
+                    self.assertIsInstance(router.state, LocalServer)
+                    self.assertEqual(len(failures), 1)
 
 class ServerInputRouterIntegrationTests(unittest.TestCase):
     def setUp(self):

@@ -1,6 +1,6 @@
 """Topology-backed ownership for Conduit's single roaming Server cursor."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import logging
 import threading
 import uuid
@@ -36,6 +36,7 @@ class Transitioning:
     handoff_id: str
     released_state: bool
     capture_on_ack: bool
+    acknowledged: bool = False
 
 
 @dataclass(frozen=True)
@@ -422,6 +423,7 @@ class InputRouter:
                 return False
             if (
                 self._pause_requested.is_set()
+                or pending.acknowledged
                 or handoff_id != pending.handoff_id
                 or session_id != pending.destination_session_id
                 or machine_id != pending.destination_machine_id
@@ -430,6 +432,8 @@ class InputRouter:
             ):
                 return False
             self._cancel_pending_deadline_locked()
+            committing = replace(pending, acknowledged=True)
+            self.state = committing
             if pending.capture_on_ack:
                 capture_session_id = pending.destination_session_id
             next_state = RemoteClient(
@@ -445,7 +449,7 @@ class InputRouter:
         if capture_session_id is not None:
             self._input_effects.begin_remote_capture(capture_session_id)
             with self._lock:
-                if self.state != pending or self._pause_requested.is_set():
+                if self.state != committing or self._pause_requested.is_set():
                     return False
                 self.state = next_state
 
@@ -490,6 +494,7 @@ class InputRouter:
             if not (
                 isinstance(pending, Transitioning)
                 and pending.handoff_id == handoff_id
+                and not pending.acknowledged
             ):
                 return False
             session_id = pending.destination_session_id
