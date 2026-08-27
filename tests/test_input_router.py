@@ -168,6 +168,7 @@ class InputRouterTests(unittest.TestCase):
             session_for_machine=self.sessions.get,
             input_effects=self.effects,
         )
+        self.addCleanup(lambda: self.router.pause("test cleanup"))
 
     def test_capture_ui_callbacks_cannot_block_input_ownership_changes(self):
         callback_entered = threading.Event()
@@ -499,6 +500,7 @@ class AcknowledgedHandoffTests(unittest.TestCase):
             session_for_machine=self.sessions.get,
             input_effects=self.effects,
         )
+        self.addCleanup(lambda: self.router.pause("test cleanup"))
         self.router._handoff_id_factory = lambda: next(self.ids)
         self.router._schedule_deadline = self.deadlines.schedule
         self.router._handoff_timeout = 0.75
@@ -863,6 +865,72 @@ class AcknowledgedHandoffTests(unittest.TestCase):
                 else:
                     self.assertIsInstance(router.state, LocalServer)
                     self.assertEqual(len(failures), 1)
+                router.pause("test cleanup")
+
+    def test_active_blocked_lane_cannot_block_mouse_callback(self):
+        movement_entered = threading.Event()
+        release_movement = threading.Event()
+
+        class BlockAfterSwitchLane(RecordingLane):
+            def send_message(inner_self, message):
+                inner_self.log.append((inner_self.session_id, dict(message)))
+                inner_self.sent.set()
+                if message.get("type") != "switch":
+                    movement_entered.set()
+                    release_movement.wait(1)
+                return True
+
+        lane = BlockAfterSwitchLane("session-1", self.log)
+        self.sessions["client-1"].control_lane = lane
+        switch = self._begin_server_to_first()
+        self.assertTrue(self._ack(switch))
+        callback_returned = threading.Event()
+        result = []
+        callback = threading.Thread(target=lambda: (
+            result.append(self.router.forward_mouse_move(3, 4)),
+            callback_returned.set(),
+        ))
+        callback.start()
+        self.assertTrue(movement_entered.wait(0.2))
+        returned_promptly = callback_returned.wait(0.1)
+        release_movement.set()
+        callback.join(1)
+
+        self.assertTrue(returned_promptly, "mouse callback waited for socket send")
+        self.assertEqual(result, [True])
+
+    def test_rejected_dispatch_does_not_change_held_input_state(self):
+        switch = self._begin_server_to_first()
+        self.assertTrue(self._ack(switch))
+        self.assertTrue(self.router._dispatcher.stop_session("session-1"))
+
+        self.assertFalse(self.router.forward_key_press({
+            "type": "special",
+            "value": "ctrl",
+        }))
+        self.assertFalse(self.router.forward_button("left", True))
+        self.assertEqual(self.router.held_keys, ())
+        self.assertEqual(self.router.held_buttons, ())
+
+    def test_dispatch_failure_enters_single_handoff_failure_path(self):
+        switch = self._begin_server_to_first()
+        self.assertTrue(self._ack(switch))
+        lane = self.sessions["client-1"].control_lane
+        lane.send_result = False
+        lane.sent.clear()
+
+        self.assertTrue(self.router.forward_key_press({
+            "type": "char",
+            "value": "x",
+        }))
+        self.assertTrue(lane.sent.wait(0.2))
+        self.assertTrue(self.failure_seen.wait(0.2))
+
+        self.assertEqual(len(self.failures), 1)
+        self.assertEqual(self.failures[0][0], "session-1")
+        self.assertIn("input dispatch failed", self.failures[0][1])
+        self.assertIsInstance(self.router.state, LocalServer)
+        self.assertEqual(self.router.held_keys, ())
 
 class ServerInputRouterIntegrationTests(unittest.TestCase):
     def setUp(self):
@@ -887,6 +955,7 @@ class ServerInputRouterIntegrationTests(unittest.TestCase):
             session_for_machine=self.sessions.get,
             input_effects=self.effects,
         )
+        self.addCleanup(lambda: self.router.pause("test cleanup"))
 
     def test_server_edge_callbacks_target_the_graph_session_and_accept_its_return(self):
         topology = active_chain()
@@ -1069,6 +1138,7 @@ class ClientEdgeReportingTests(unittest.TestCase):
             session_for_machine=self.sessions.get,
             input_effects=self.effects,
         )
+        self.addCleanup(lambda: self.router.pause("test cleanup"))
 
     def test_client_releases_all_injected_input_before_reporting_graph_edge(self):
         events = []
@@ -1245,6 +1315,38 @@ class ClientEdgeReportingTests(unittest.TestCase):
             {"type": "clipboard_route_applied"},
         ])
 
+    def test_client_replays_mouse_batch_through_existing_scaled_move_path(self):
+        calls = []
+        client = ConduitClient.__new__(ConduitClient)
+        client.is_active = True
+        client.speed_scale_x = 2
+        client.speed_scale_y = 0.5
+        client.input_handler = SimpleNamespace(
+            inject_move=lambda dx, dy: calls.append((dx, dy))
+        )
+
+        self.assertTrue(client.on_mouse_move_batch({
+            "deltas": [[1, 4], [-3, 8], [0, -2]],
+        }))
+
+        self.assertEqual(calls, [(2, 2), (-6, 4), (0, -1)])
+
+    def test_client_rejects_malformed_or_oversized_mouse_batch(self):
+        calls = []
+        client = ConduitClient.__new__(ConduitClient)
+        client.is_active = True
+        client.speed_scale_x = 1
+        client.speed_scale_y = 1
+        client.input_handler = SimpleNamespace(
+            inject_move=lambda dx, dy: calls.append((dx, dy))
+        )
+
+        self.assertFalse(client.on_mouse_move_batch({"deltas": [[1]]}))
+        self.assertFalse(client.on_mouse_move_batch({
+            "deltas": [[1, 1] for _ in range(33)],
+        }))
+        self.assertEqual(calls, [])
+
     def test_inactive_client_ignores_remote_input_packets(self):
         calls = []
         client = ConduitClient.__new__(ConduitClient)
@@ -1281,8 +1383,17 @@ class ClientEdgeReportingTests(unittest.TestCase):
             self.log,
         ))
         self.sessions["client-1"].control_lane.send_result = False
+        self.sessions["client-1"].control_lane.sent.clear()
 
-        self.assertFalse(self.router.forward_mouse_move(3, 4))
+        self.assertTrue(self.router.forward_mouse_move(3, 4))
+        self.assertTrue(
+            self.sessions["client-1"].control_lane.sent.wait(0.2)
+        )
+        wait = threading.Event()
+        for _ in range(20):
+            if isinstance(self.router.state, LocalServer):
+                break
+            wait.wait(0.01)
 
         self.assertEqual(
             self.router.state,

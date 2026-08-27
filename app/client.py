@@ -117,6 +117,9 @@ class ConduitClient:
         )
         self.control_network.register_callback('switch', self.on_switch)
         self.control_network.register_callback('mouse_move', self.on_mouse_move)
+        self.control_network.register_callback(
+            'mouse_move_batch', self.on_mouse_move_batch
+        )
         self.control_network.register_callback('mouse_click', self.on_mouse_click)
         self.control_network.register_callback('mouse_scroll', self.on_mouse_scroll)
         self.control_network.register_callback('key_press', self.on_key_press)
@@ -829,6 +832,28 @@ class ConduitClient:
         dx = data.get('dx', 0) * self.speed_scale_x
         dy = data.get('dy', 0) * self.speed_scale_y
         self.input_handler.inject_move(dx, dy)
+        return True
+
+    def on_mouse_move_batch(self, data):
+        deltas = data.get('deltas')
+        if (
+            not isinstance(deltas, list)
+            or not 1 <= len(deltas) <= 32
+            or any(
+                not isinstance(delta, (list, tuple))
+                or len(delta) != 2
+                or any(
+                    isinstance(value, bool)
+                    or not isinstance(value, (int, float))
+                    for value in delta
+                )
+                for delta in deltas
+            )
+        ):
+            return False
+        for dx, dy in deltas:
+            if not self.on_mouse_move({'dx': dx, 'dy': dy}):
+                return False
         return True
 
     def on_mouse_click(self, data):

@@ -6,6 +6,7 @@ import threading
 import uuid
 
 from app.display_topology import edge_ratio
+from app.input_dispatcher import InputDispatcher
 
 
 logger = logging.getLogger(__name__)
@@ -78,6 +79,11 @@ class InputRouter:
         self._handoff_failed = handoff_failed
         self._ownership_changed = ownership_changed
         self._pending_deadline = None
+        self._dispatch_machines = {}
+        self._dispatcher = InputDispatcher(
+            lane_for_session=self._lane_for_dispatch,
+            on_failure=self._on_dispatch_failure,
+        )
 
     @property
     def held_keys(self):
@@ -188,59 +194,71 @@ class InputRouter:
             return self._transition(edge)
 
     def forward_mouse_move(self, dx, dy):
-        return self._send_active({"type": "mouse_move", "dx": dx, "dy": dy})
+        state = self._active_remote_snapshot()
+        if state is None:
+            return False
+        return self._dispatcher.enqueue_move(state.session_id, dx, dy)
 
     def forward_scroll(self, dx, dy):
-        return self._send_active({"type": "mouse_scroll", "dx": dx, "dy": dy})
+        return self._enqueue_active_discrete({
+            "type": "mouse_scroll",
+            "dx": dx,
+            "dy": dy,
+        })
 
     def forward_button(self, button, pressed):
         if self._pause_requested.is_set():
             return False
-        with self._lock:
-            if self._pause_requested.is_set() or not isinstance(
-                self.state, RemoteClient
-            ):
-                return False
-            sent = self._send_to_state(
-                self.state,
-                {"type": "mouse_click", "button": button, "pressed": bool(pressed)},
-            )
-            if sent:
+        state = self._active_remote_snapshot()
+        if state is None:
+            return False
+        sent = self._dispatcher.enqueue_discrete(
+            state.session_id,
+            {"type": "mouse_click", "button": button, "pressed": bool(pressed)},
+        )
+        if sent:
+            with self._lock:
+                if self.state != state or self._pause_requested.is_set():
+                    return sent
                 if pressed:
                     self._held_buttons.add(button)
                 else:
                     self._held_buttons.discard(button)
-            return sent
+        return sent
 
     def forward_key_press(self, key_data):
         if self._pause_requested.is_set():
             return False
-        with self._lock:
-            if self._pause_requested.is_set() or not isinstance(
-                self.state, RemoteClient
-            ):
-                return False
-            message = {"type": "key_press", "key": dict(key_data)}
-            sent = self._send_to_state(self.state, message)
-            if sent:
+        state = self._active_remote_snapshot()
+        if state is None:
+            return False
+        sent = self._dispatcher.enqueue_discrete(
+            state.session_id,
+            {"type": "key_press", "key": dict(key_data)},
+        )
+        if sent:
+            with self._lock:
+                if self.state != state or self._pause_requested.is_set():
+                    return sent
                 self._held_keys[self._key_identity(key_data)] = dict(key_data)
-            return sent
+        return sent
 
     def forward_key_release(self, key_data):
         if self._pause_requested.is_set():
             return False
-        with self._lock:
-            if self._pause_requested.is_set() or not isinstance(
-                self.state, RemoteClient
-            ):
-                return False
-            sent = self._send_to_state(
-                self.state,
-                {"type": "key_release", "key": dict(key_data)},
-            )
-            if sent:
+        state = self._active_remote_snapshot()
+        if state is None:
+            return False
+        sent = self._dispatcher.enqueue_discrete(
+            state.session_id,
+            {"type": "key_release", "key": dict(key_data)},
+        )
+        if sent:
+            with self._lock:
+                if self.state != state or self._pause_requested.is_set():
+                    return sent
                 self._held_keys.pop(self._key_identity(key_data), None)
-            return sent
+        return sent
 
     def destination_lost(self, session_id):
         restore_center = None
@@ -253,6 +271,7 @@ class InputRouter:
                 matches = False
             if not matches:
                 return False
+            self._stop_dispatch_locked(session_id)
             self._cancel_pending_deadline_locked()
             self._held_keys.clear()
             self._held_buttons.clear()
@@ -275,7 +294,10 @@ class InputRouter:
             self._cancel_pending_deadline_locked()
             previous = self.state
             if isinstance(previous, RemoteClient):
+                self._stop_dispatch_locked(previous.session_id)
                 self._release_remote(previous)
+            elif isinstance(previous, Transitioning):
+                self._stop_dispatch_locked(previous.destination_session_id)
             self._input_effects.release_local_input()
             _display_id, center = self.topology.server_primary_center()
             restore = getattr(
@@ -312,6 +334,7 @@ class InputRouter:
         )
         self.state = placeholder
         if isinstance(previous, RemoteClient):
+            self._stop_dispatch_locked(previous.session_id)
             released = self._release_remote(previous)
         else:
             self._input_effects.release_local_input()
@@ -434,6 +457,17 @@ class InputRouter:
             self._cancel_pending_deadline_locked()
             committing = replace(pending, acknowledged=True)
             self.state = committing
+            self._dispatch_machines[pending.destination_session_id] = (
+                pending.destination_machine_id
+            )
+            if not self._dispatcher.start_session(
+                pending.destination_session_id
+            ):
+                self._dispatch_machines.pop(
+                    pending.destination_session_id,
+                    None,
+                )
+                return False
             if pending.capture_on_ack:
                 capture_session_id = pending.destination_session_id
             next_state = RemoteClient(
@@ -498,6 +532,7 @@ class InputRouter:
             ):
                 return False
             session_id = pending.destination_session_id
+            self._stop_dispatch_locked(session_id)
             self._cancel_pending_deadline_locked()
             self._held_keys.clear()
             self._held_buttons.clear()
@@ -547,6 +582,11 @@ class InputRouter:
         return released
 
     def _return_to_server_center(self):
+        current = self.state
+        if isinstance(current, RemoteClient):
+            self._stop_dispatch_locked(current.session_id)
+        elif isinstance(current, Transitioning):
+            self._stop_dispatch_locked(current.destination_session_id)
         self._cancel_pending_deadline_locked()
         self._held_keys.clear()
         self._held_buttons.clear()
@@ -555,29 +595,63 @@ class InputRouter:
         self._input_effects.restore_local(center)
         self.state = LocalServer(display_id, center)
 
-    def _send_active(self, message):
+    def _active_remote_snapshot(self):
         if self._pause_requested.is_set():
-            return False
+            return None
         with self._lock:
             if self._pause_requested.is_set() or not isinstance(
                 self.state, RemoteClient
             ):
-                return False
-            return self._send_to_state(self.state, message)
+                return None
+            return self.state
 
-    def _send_to_state(self, state, message):
-        session = self._session_for_machine(state.machine_id)
+    def _enqueue_active_discrete(self, message):
+        state = self._active_remote_snapshot()
+        if state is None:
+            return False
+        return self._dispatcher.enqueue_discrete(state.session_id, message)
+
+    def _lane_for_dispatch(self, session_id):
+        with self._lock:
+            machine_id = self._dispatch_machines.get(session_id)
+        if machine_id is None:
+            return None
+        session = self._session_for_machine(machine_id)
         if (
             session is None
             or not getattr(session, "ready", False)
-            or session.session_id != state.session_id
+            or session.session_id != session_id
         ):
-            self._return_to_server_center()
+            return None
+        return getattr(session, "control_lane", None)
+
+    def _stop_dispatch_locked(self, session_id):
+        if not session_id:
             return False
-        sent = bool(session.control_lane.send_message(message))
-        if not sent:
-            self._return_to_server_center()
-        return sent
+        self._dispatch_machines.pop(session_id, None)
+        return self._dispatcher.stop_session(session_id)
+
+    def _on_dispatch_failure(self, session_id, reason):
+        callback = None
+        center = None
+        with self._lock:
+            if not (
+                isinstance(self.state, RemoteClient)
+                and self.state.session_id == session_id
+            ):
+                return False
+            self._stop_dispatch_locked(session_id)
+            self._held_keys.clear()
+            self._held_buttons.clear()
+            display_id, center = self.topology.server_primary_center()
+            self.state = LocalServer(display_id, center)
+            callback = self._handoff_failed
+
+        self._input_effects.release_local_input()
+        self._input_effects.restore_local(center)
+        if callback is not None:
+            callback(session_id, f"input dispatch failed: {reason}")
+        return True
 
     @staticmethod
     def _key_identity(key_data):
