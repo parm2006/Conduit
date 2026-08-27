@@ -137,6 +137,51 @@ class InputRouterTests(unittest.TestCase):
             release_callback.set()
             worker.join(1)
 
+    def test_pause_request_prevents_a_blocked_handoff_from_starting_capture(self):
+        send_entered = threading.Event()
+        release_send = threading.Event()
+        result = []
+
+        class BlockingLane(RecordingLane):
+            def send_message(inner_self, message):
+                inner_self.log.append((inner_self.session_id, dict(message)))
+                if message.get("type") == "switch":
+                    send_entered.set()
+                    release_send.wait(1)
+                return True
+
+        self.sessions["client-1"].control_lane = BlockingLane(
+            "session-1",
+            self.log,
+        )
+        transition = threading.Thread(
+            target=lambda: result.append(self.router.handle_edge(
+                "server",
+                "server-primary",
+                "right",
+                0.5,
+                topology_version=7,
+            ))
+        )
+        transition.start()
+        self.assertTrue(send_entered.wait(0.2))
+        try:
+            self.assertTrue(
+                hasattr(self.router, "request_pause"),
+                "disconnect cannot invalidate a handoff without waiting for its lock",
+            )
+            self.router.request_pause("client disconnected")
+        finally:
+            release_send.set()
+            transition.join(1)
+
+        self.assertEqual(result, [False])
+        self.assertFalse(
+            any(item[:2] == ("server", "remote") for item in self.log),
+        )
+        self.assertTrue(self.router.pause("client disconnected"))
+        self.assertIsInstance(self.router.state, Paused)
+
     def test_server_client_client_server_transitions_follow_graph_without_server_hop(self):
         self.assertIsInstance(self.router.state, LocalServer)
 

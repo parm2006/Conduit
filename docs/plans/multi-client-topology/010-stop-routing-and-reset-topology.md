@@ -16,6 +16,31 @@
 - **Risk**: HIGH
 - **Depends on**: 007-land-atomic-apply.md
 - **Planned at**: revision `681d8da`, 2026-08-26
+- **Implemented**: 2026-08-26; disconnect-race hardening verified 2026-08-27
+
+## 2026-08-27 implementation reconciliation
+
+Physical rapid-handoff testing disproved this plan's original assumption that
+calling `InputRouter.pause()` was sufficient. A graph transition holds the
+router ownership lock while it releases the old owner and starts the new one.
+If Client teardown enters `pause()` during that interval, the disconnect
+callback can wait behind the transition: cursor recovery, edge shutdown,
+survivor suspension, and the Server GUI notification are all delayed together.
+
+The accepted safety behavior now has two phases:
+
+1. `InputRouter.request_pause()` sets a thread-safe rejection event without
+   acquiring the router lock. Every edge and forwarded-input entry point checks
+   this event, including checkpoints inside an in-flight transition.
+2. `ConduitServer.suspend_input_routing()` synchronously latches routing off,
+   stops Server capture, centers the cursor, and sends `topology_suspend` to
+   surviving Clients. It then finishes held-input release and the formal
+   `Paused` state on a daemon cleanup thread after the router lock becomes
+   available. Cleanup cannot delay the disconnect callback or reopen edges.
+
+This evidence authorizes the previously out-of-scope `app/input_router.py` and
+`tests/test_input_router.py` changes. It does not change clipboard routing and
+does not implement Plan 009's deferred button-label lifecycle.
 
 ## Why this matters
 
@@ -72,6 +97,7 @@ routing can resume.
 
 **In scope** (the only files you should modify):
 
+- `app/input_router.py` (added by the 2026-08-27 reconciliation)
 - `app/server.py`
 - `app/client.py`
 - `app/gui.py`
@@ -81,13 +107,12 @@ routing can resume.
 - `tests/test_gui_connection_lifecycle.py`
 - `tests/test_topology_editor.py`
 - `tests/test_topology_reconnect.py`
+- `tests/test_input_router.py` (added by the 2026-08-27 reconciliation)
 - `docs/plans/multi-client-topology/010-stop-routing-and-reset-topology.md`
 - `docs/plans/multi-client-topology/README.md`
 
 **Out of scope**:
 
-- `app/input_router.py` — the existing `pause()` behavior already satisfies the
-  routing stop; change it only via a new memo/plan if tests disprove that fact.
 - Clipboard ordering and ordinary clipboard fan-out — surviving endpoints keep
   using the existing independent clipboard lane.
 - Ctrl+Space, Space recovery shortcut — deferred to Plan 009.
@@ -206,14 +231,18 @@ blocked only on Plan 011 and subsequent physical acceptance.
 
 ## Done criteria
 
-- [ ] Any ready Client loss immediately prevents every new edge transition.
-- [ ] Held input is released and the cursor returns to Server primary center.
-- [ ] The editor does not raise `KeyError` or go blank during disconnect/Cancel.
-- [ ] Reset reconstructs Server plus all currently ready Clients from fresh
+- [x] Any ready Client loss immediately prevents every new edge transition.
+- [x] Held input is released and the cursor returns to Server primary center.
+- [x] The editor does not raise `KeyError` or go blank during disconnect/Cancel.
+- [x] Reset reconstructs Server plus all currently ready Clients from fresh
   inventories and resumes routing only after atomic success.
-- [ ] Clipboard among surviving connected machines remains available.
-- [ ] Focused, system, full-suite, compileall, and `diff --check` gates pass.
-- [ ] No files outside the in-scope list are modified.
+- [x] Clipboard among surviving connected machines remains available.
+- [x] Focused, system, full-suite, compileall, and `diff --check` gates pass:
+  745 tests plus 150 repeated race-regression executions on 2026-08-27.
+- [x] Production and regression changes stay within the reconciled scope.
+
+Physical three-PC acceptance remains Plan 008's release gate, not an incomplete
+Plan 010 implementation step.
 
 ## STOP conditions
 

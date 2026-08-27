@@ -48,6 +48,7 @@ class InputRouter:
         self._held_keys = {}
         self._held_buttons = set()
         self._lock = threading.RLock()
+        self._pause_requested = threading.Event()
 
     @property
     def held_keys(self):
@@ -85,7 +86,13 @@ class InputRouter:
         session_id=None,
         topology_version=None,
     ):
+        if self._pause_requested.is_set():
+            logger.warning("[cursor] Rejected edge while pause is pending")
+            return False
         with self._lock:
+            if self._pause_requested.is_set():
+                logger.warning("[cursor] Rejected edge while pause is pending")
+                return False
             if isinstance(self.state, (Paused, Transitioning)):
                 logger.warning(
                     "[cursor] Rejected edge while router state=%s",
@@ -158,8 +165,12 @@ class InputRouter:
         return self._send_active({"type": "mouse_scroll", "dx": dx, "dy": dy})
 
     def forward_button(self, button, pressed):
+        if self._pause_requested.is_set():
+            return False
         with self._lock:
-            if not isinstance(self.state, RemoteClient):
+            if self._pause_requested.is_set() or not isinstance(
+                self.state, RemoteClient
+            ):
                 return False
             sent = self._send_to_state(
                 self.state,
@@ -173,8 +184,12 @@ class InputRouter:
             return sent
 
     def forward_key_press(self, key_data):
+        if self._pause_requested.is_set():
+            return False
         with self._lock:
-            if not isinstance(self.state, RemoteClient):
+            if self._pause_requested.is_set() or not isinstance(
+                self.state, RemoteClient
+            ):
                 return False
             message = {"type": "key_press", "key": dict(key_data)}
             sent = self._send_to_state(self.state, message)
@@ -183,8 +198,12 @@ class InputRouter:
             return sent
 
     def forward_key_release(self, key_data):
+        if self._pause_requested.is_set():
+            return False
         with self._lock:
-            if not isinstance(self.state, RemoteClient):
+            if self._pause_requested.is_set() or not isinstance(
+                self.state, RemoteClient
+            ):
                 return False
             sent = self._send_to_state(
                 self.state,
@@ -206,7 +225,13 @@ class InputRouter:
             self._return_to_server_center()
             return True
 
+    def request_pause(self, reason):
+        """Reject new input immediately, without waiting for the router lock."""
+        self._pause_requested.set()
+        return True
+
     def pause(self, reason):
+        self.request_pause(reason)
         with self._lock:
             if isinstance(self.state, Paused):
                 return False
@@ -215,7 +240,12 @@ class InputRouter:
                 self._release_remote(previous)
             self._input_effects.release_local_input()
             _display_id, center = self.topology.server_primary_center()
-            self._input_effects.restore_local(center)
+            restore = getattr(
+                self._input_effects,
+                "restore_paused",
+                self._input_effects.restore_local,
+            )
+            restore(center)
             self.state = Paused(str(reason))
             return True
 
@@ -225,6 +255,7 @@ class InputRouter:
                 return False
             display_id, center = self.topology.server_primary_center()
             self.state = LocalServer(display_id, center)
+            self._pause_requested.clear()
             return True
 
     def _transition(self, edge):
@@ -241,6 +272,8 @@ class InputRouter:
         self.state = Transitioning(previous, mapping.destination_machine_id, released)
         if not released:
             self._return_to_server_center()
+            return False
+        if self._pause_requested.is_set():
             return False
 
         if mapping.destination_machine_id == self.topology.server_id:
@@ -292,8 +325,12 @@ class InputRouter:
             )
             self._return_to_server_center()
             return False
+        if self._pause_requested.is_set():
+            return False
         if isinstance(previous, LocalServer):
             self._input_effects.begin_remote_capture(session.session_id)
+        if self._pause_requested.is_set():
+            return False
         logger.info(
             "[cursor] Remote ownership active on machine=%r session=%s entry=%s",
             mapping.destination_machine_id,
@@ -339,8 +376,12 @@ class InputRouter:
         self.state = LocalServer(display_id, center)
 
     def _send_active(self, message):
+        if self._pause_requested.is_set():
+            return False
         with self._lock:
-            if not isinstance(self.state, RemoteClient):
+            if self._pause_requested.is_set() or not isinstance(
+                self.state, RemoteClient
+            ):
                 return False
             return self._send_to_state(self.state, message)
 

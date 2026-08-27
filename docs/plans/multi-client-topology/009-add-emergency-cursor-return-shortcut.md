@@ -1,4 +1,4 @@
-# Plan 009: Add an emergency cursor return shortcut
+# Plan 009: Add recovery shortcuts and the Apply/Reset label lifecycle
 
 > **Executor instructions:** Follow this plan step by step. Run every verification command and confirm the expected result before moving on. If anything in "STOP conditions" occurs, stop and write a handback; do not improvise. When done, update this plan's status row in the effort README.
 >
@@ -28,6 +28,10 @@ The roaming cursor can be difficult to recover when remote ownership or edge rou
 - If the input router is paused for Apply, re-release and re-center without resuming it. Apply already returns the cursor to the Server, so no separate pending queue is needed.
 - If no topology router exists, release captured input and use the Server's stored primary-screen dimensions as a local fallback.
 - Keep the shortcut fixed. Do not add settings, a toast, a network command, or a Client-side trigger. Log one concise `[cursor]` diagnostic.
+- When a Server instance starts, label the topology action **Apply**.
+- Change the label to **Reset** only after that Server instance completes its first successful atomic topology Apply. Invalid layouts, rejected transactions, timeouts, and rollbacks leave the label as **Apply**.
+- Keep the label **Reset** for every later layout operation and disconnect-recovery cycle in the same Server lifetime. Stop Server followed by Start Server begins a new lifetime and restores **Apply**.
+- Treat the label as GUI session state. Do not persist it and do not infer it from a stored topology version, connection count, or `routing_suspended`.
 
 ## Current state
 
@@ -62,10 +66,13 @@ The roaming cursor can be difficult to recover when remote ownership or edge rou
 **Out of scope:**
 
 - `app/client.py`, `app/network.py`, and cluster protocols; the shortcut is local to the authoritative Server.
-- `app/gui.py`; the always-running GUI monitor must not receive the callback and duplicate the Server monitor.
 - Topology validation or Apply transaction changes.
 - Clipboard, file-transfer, firewall, port, toast, and settings behavior.
 - User-configurable shortcut bindings.
+
+`app/gui.py`, `app/topology_editor.py`, and their focused tests are in scope only
+for the deferred Apply/Reset label lifecycle. They remain out of scope for the
+shortcut callback itself.
 
 ## Steps
 
@@ -99,6 +106,17 @@ Extend `tests/test_emergency_release.py` with callback delegation and no-router 
 
 ### Step 4: Run regression and physical gates
 
+Before the physical gate, implement the deferred label lifecycle with tests:
+
+- Server startup sets the editor action to **Apply**.
+- Invalid or failed first attempts keep **Apply**.
+- The first successful completion callback changes it to **Reset**.
+- Later failures keep **Reset**.
+- Server stop/start restores **Apply** without changing the saved topology.
+
+Keep this presentation state separate from `routing_suspended`; disconnect
+safety remains Plan 010's responsibility.
+
 Run compileall, the full unit suite, and `diff --check`. Build the existing development executable through Plan 008's package command before physical testing.
 
 Physically verify the chord with the shared cursor on the Server primary display, a Server secondary display, Client 1, and Client 2. Repeat while holding a mouse button and a non-chord modifier; no input may remain stuck. Confirm Client sessions, clipboard state, file jobs, and active topology remain unchanged.
@@ -119,6 +137,7 @@ Physically verify the chord with the shared cursor on the Server primary display
 - [ ] The cursor lands at the current Server primary display's center.
 - [ ] Apply remains paused when the shortcut runs during Apply.
 - [ ] No topology, connection, clipboard, file, toast, firewall, port, or settings behavior changes.
+- [ ] The action reads Apply for a new Server lifetime, changes to Reset only after the first successful Apply, and returns to Apply only after Server restart.
 - [ ] Focused tests, compileall, full suite, and `diff --check` pass.
 - [ ] Packaged physical tests pass from every supported cursor location.
 - [ ] No files outside the in-scope list are modified.

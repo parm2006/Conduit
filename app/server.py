@@ -42,15 +42,27 @@ class _ServerInputEffects:
         self.server.pressed_keys.clear()
 
     def begin_remote_capture(self, session_id):
+        if getattr(self.server, "routing_suspended", False):
+            return False
         self.server.input_handler.stop()
+        if getattr(self.server, "routing_suspended", False):
+            return False
         self.server.input_handler.start_keyboard_capture()
         self._notify_capture_ui(self.server.on_capture_start, "start")
+        return True
 
     def restore_local(self, position):
+        self._restore_local(position, start_edges=True)
+
+    def restore_paused(self, position):
+        self._restore_local(position, start_edges=False)
+
+    def _restore_local(self, position, *, start_edges):
         self.server.input_handler.stop_keyboard_capture()
         self._notify_capture_ui(self.server.on_capture_stop, "stop")
         self.server.input_handler.inject_position(*position)
-        self.server.input_handler.start_edge_detection()
+        if start_edges and not getattr(self.server, "routing_suspended", False):
+            self.server.input_handler.start_edge_detection()
 
     @staticmethod
     def _notify_capture_ui(callback, phase):
@@ -796,25 +808,61 @@ class ConduitServer:
         self.routing_suspended = True
         router = getattr(self, 'input_router', None)
         if router is not None:
-            router.pause(reason)
-        self.pressed_keys.clear()
+            request_pause = getattr(router, "request_pause", None)
+            if request_pause is not None:
+                request_pause(reason)
         self.input_handler.stop()
-        if self.on_capture_stop:
-            self.on_capture_stop()
-        registry = getattr(self, 'session_registry', None)
-        sessions = () if registry is None else tuple(registry.ready_sessions())
-        network = getattr(self, 'control_network', None)
-        if network is not None:
+        if router is not None:
+            _display_id, center = router.topology.server_primary_center()
+        else:
+            center = (
+                getattr(self.input_handler, "screen_width", 1920) // 2,
+                getattr(self.input_handler, "screen_height", 1080) // 2,
+            )
+        _ServerInputEffects(self).restore_paused(center)
+
+        def notify_survivors():
+            registry = getattr(self, 'session_registry', None)
+            sessions = () if registry is None else tuple(registry.ready_sessions())
+            network = getattr(self, 'control_network', None)
+            if network is None:
+                return
             message = {'type': 'topology_suspend', 'reason': 'client_disconnected'}
             if registry is None:
                 network.send_message(message)
             else:
                 for session in sessions:
                     network.send_message(message, session_id=session.session_id)
+
+        notify_survivors()
+        if router is not None:
+            def finish_router_pause():
+                try:
+                    router.pause(reason)
+                except Exception as exc:
+                    logger.error(
+                        "[cursor] Failed to finish router suspension (%s)",
+                        type(exc).__name__,
+                    )
+                finally:
+                    if getattr(self, "routing_suspended", False):
+                        self.input_handler.stop()
+                        notify_survivors()
+
+            threading.Thread(
+                target=finish_router_pause,
+                name="input-routing-suspend",
+                daemon=True,
+            ).start()
+        self.pressed_keys.clear()
         return not was_suspended
 
     def on_edge_hit(self, direction, ratio, region=None):
+        if getattr(self, "routing_suspended", False):
+            return False
         with self._get_paste_route_lock():
+            if getattr(self, "routing_suspended", False):
+                return False
             paste_service = getattr(self, "file_paste_service", None)
             if (
                 paste_service is not None
@@ -842,10 +890,14 @@ class ConduitServer:
             return switched
 
     def on_switch_back(self, data):
+        if getattr(self, "routing_suspended", False):
+            return False
         with self._get_paste_route_lock():
             return self._on_switch_back_locked(data)
 
     def _on_switch_back_locked(self, data):
+        if getattr(self, "routing_suspended", False):
+            return False
         router = getattr(self, 'input_router', None)
         if router is None:
             return False
@@ -875,6 +927,8 @@ class ConduitServer:
         return switched
 
     def on_mouse_move(self, dx, dy):
+        if getattr(self, "routing_suspended", False):
+            return False
         router = getattr(self, 'input_router', None)
         if router is not None:
             return router.forward_mouse_move(dx, dy)
@@ -885,6 +939,8 @@ class ConduitServer:
         })
 
     def on_mouse_click(self, button, pressed):
+        if getattr(self, "routing_suspended", False):
+            return False
         router = getattr(self, 'input_router', None)
         if router is not None:
             return router.forward_button(button, pressed)
@@ -895,6 +951,8 @@ class ConduitServer:
         })
 
     def on_mouse_scroll(self, dx, dy):
+        if getattr(self, "routing_suspended", False):
+            return False
         router = getattr(self, 'input_router', None)
         if router is not None:
             return router.forward_scroll(dx, dy)
@@ -928,6 +986,8 @@ class ConduitServer:
             self._reload_connection()
             return
 
+        if getattr(self, "routing_suspended", False):
+            return False
         router = getattr(self, 'input_router', None)
         if router is not None:
             return router.forward_key_press(key_data)
@@ -943,6 +1003,8 @@ class ConduitServer:
             return
         if val in self.pressed_keys:
             self.pressed_keys.discard(val)
+        if getattr(self, "routing_suspended", False):
+            return False
         router = getattr(self, 'input_router', None)
         if router is not None:
             return router.forward_key_release(key_data)

@@ -87,12 +87,37 @@ class TopologyProtocolTests(unittest.TestCase):
         server.input_router = type(
             "Router",
             (),
-            {"pause": lambda self, reason: events.append(("pause", reason)) or True},
+            {
+                "topology": type(
+                    "Topology",
+                    (),
+                    {
+                        "server_primary_center": lambda self: (
+                            "primary",
+                            (960, 540),
+                        )
+                    },
+                )(),
+                "request_pause": lambda self, reason: events.append(
+                    ("request-pause", reason)
+                )
+                or True,
+                "pause": lambda self, reason: events.append(("pause", reason))
+                or True,
+            },
         )()
         server.input_handler = type(
             "Input",
             (),
-            {"stop": lambda self: events.append("input-stop")},
+            {
+                "stop": lambda self: events.append("input-stop"),
+                "stop_keyboard_capture": lambda self: events.append(
+                    "keyboard-stop"
+                ),
+                "inject_position": lambda self, x, y: events.append(
+                    ("position", x, y)
+                ),
+            },
         )()
         server.pressed_keys = {"ctrl"}
         server.on_capture_stop = lambda: events.append("capture-stop")
@@ -138,6 +163,165 @@ class TopologyProtocolTests(unittest.TestCase):
             events,
         )
         self.assertEqual(server.pressed_keys, set())
+
+    def test_disconnect_reclaims_local_input_before_waiting_for_router_lock(self):
+        events = []
+        pause_entered = threading.Event()
+        release_pause = threading.Event()
+
+        class Router:
+            topology = type(
+                "Topology",
+                (),
+                {"server_primary_center": lambda self: ("primary", (960, 540))},
+            )()
+
+            def request_pause(self, reason):
+                events.append(("request-pause", reason))
+
+            def pause(self, reason, blocking=True):
+                events.append(("pause", reason, blocking))
+                pause_entered.set()
+                release_pause.wait(1)
+                return True
+
+        class Input:
+            def stop(self):
+                events.append("input-stop")
+
+            def stop_keyboard_capture(self):
+                events.append("keyboard-stop")
+
+            def inject_position(self, x, y):
+                events.append(("position", x, y))
+
+        survivor = type(
+            "Session",
+            (),
+            {"session_id": "survivor", "peer_identity": "survivor", "ready": True},
+        )()
+        server = ConduitServer.__new__(ConduitServer)
+        server.routing_suspended = False
+        server.input_router = Router()
+        server.input_handler = Input()
+        server.on_capture_stop = None
+        server.pressed_keys = set()
+        server.session_registry = type(
+            "Registry",
+            (),
+            {"ready_sessions": lambda self: (survivor,)},
+        )()
+        server.control_network = type(
+            "Network",
+            (),
+            {
+                "send_message": lambda self, message, session_id=None: events.append(
+                    ("send", session_id, dict(message))
+                )
+                or True,
+            },
+        )()
+
+        worker = threading.Thread(
+            target=lambda: server.suspend_input_routing("client disconnected")
+        )
+        worker.start()
+        self.assertTrue(pause_entered.wait(0.2))
+        try:
+            worker.join(0.2)
+            self.assertFalse(
+                worker.is_alive(),
+                "disconnect callback waited for router cleanup",
+            )
+            self.assertIn(("request-pause", "client disconnected"), events)
+            self.assertIn("input-stop", events)
+            self.assertIn(("position", 960, 540), events)
+            self.assertIn(
+                (
+                    "send",
+                    "survivor",
+                    {"type": "topology_suspend", "reason": "client_disconnected"},
+                ),
+                events,
+            )
+            self.assertTrue(server.routing_suspended)
+        finally:
+            release_pause.set()
+
+    def test_suspension_latch_rejects_every_server_input_entry_point(self):
+        routed = []
+
+        class Router:
+            topology = type("Topology", (), {"version": 7})()
+
+            def handle_edge(self, *args, **kwargs):
+                routed.append(("edge", args, kwargs))
+                return True
+
+            def forward_mouse_move(self, *args):
+                routed.append(("move", args))
+                return True
+
+            def forward_button(self, *args):
+                routed.append(("button", args))
+                return True
+
+            def forward_scroll(self, *args):
+                routed.append(("scroll", args))
+                return True
+
+            def forward_key_press(self, *args):
+                routed.append(("key-press", args))
+                return True
+
+            def forward_key_release(self, *args):
+                routed.append(("key-release", args))
+                return True
+
+        server = ConduitServer.__new__(ConduitServer)
+        server.routing_suspended = True
+        server.input_router = Router()
+        server._paste_route_lock = threading.RLock()
+        server.file_paste_service = None
+        server.on_topology_edit_cancel = None
+        server._apply_clipboard_offer_route = lambda: None
+        server.pressed_keys = set()
+        server.paste_coordinator = type(
+            "Paste",
+            (),
+            {
+                "on_key_press": lambda self, value: False,
+                "on_key_release": lambda self, value: False,
+            },
+        )()
+
+        region = TopologyEdgeRegion(
+            "server",
+            "primary",
+            "right",
+            "client",
+            "display",
+            "left",
+            NativeRect(0, 0, 1920, 1080),
+            NativeRect(0, 0, 1920, 1080),
+        )
+        switch_back = {
+            "peer_identity": "client",
+            "session_id": "session",
+            "source_display_id": "display",
+            "source_side": "left",
+            "ratio": 0.5,
+            "topology_version": 7,
+        }
+
+        self.assertFalse(server.on_edge_hit("right", 0.5, region))
+        self.assertFalse(server.on_switch_back(switch_back))
+        self.assertFalse(server.on_mouse_move(1, 2))
+        self.assertFalse(server.on_mouse_click("left", True))
+        self.assertFalse(server.on_mouse_scroll(0, 1))
+        self.assertFalse(server.on_key_press({"type": "char", "value": "a"}))
+        self.assertFalse(server.on_key_release({"type": "char", "value": "a"}))
+        self.assertEqual(routed, [])
 
     def test_ready_client_sends_its_real_display_inventory(self):
         client = ConduitClient.__new__(ConduitClient)
