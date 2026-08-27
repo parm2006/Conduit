@@ -12,7 +12,7 @@
 
 Conduit will treat cursor movement between machines as an acknowledged ownership transaction. Sending a `switch` packet will no longer prove that the destination owns the cursor. The destination Client must validate and activate the switch, then return a matching acknowledgement before the Server captures local input or forwards any input to that Client.
 
-Conduit will also remove control-lane writes from Tk and input-hook callbacks. A bounded, per-session dispatcher will serialize keyboard and mouse messages on daemon workers. Mouse movement may coalesce while a worker is busy. Key and button events remain ordered and may never be silently dropped. A blocked Client cannot freeze the Server GUI, the router, the heartbeat teardown, or another Client's dispatcher.
+Conduit will also remove control-lane writes from Tk and input-hook callbacks. A bounded, per-session dispatcher will serialize keyboard and mouse messages on daemon workers. Consecutive relative mouse deltas may share one transport batch, but the Client will replay each delta in order. Key and button events remain ordered and may never be silently dropped. A blocked Client cannot freeze the Server GUI, the router, the heartbeat teardown, or another Client's dispatcher.
 
 ## Observed failure and root cause
 
@@ -67,9 +67,15 @@ Late, duplicated, stale, and cross-session acknowledgements have no effect.
 
 No Server input packet may target the Client before step 5.
 
+### Deadline budget
+
+The 750 ms deadline is a product safety budget, not a measured baseline. It reserves up to 500 ms for request delivery, Client-side topology validation, Windows cursor positioning, and acknowledgement delivery. The remaining 250 ms covers thread scheduling and transient load while keeping total cursor recovery under the one-second acceptance limit.
+
+Implementation diagnostics will measure each successful handoff from dispatch to acknowledgement. Physical acceptance will record at least 50 crossings on every Server-to-Client and Client-to-Client path. The 750 ms constant remains acceptable only when the observed maximum is at most 500 ms; this preserves the 250 ms scheduling margin. A slower result blocks acceptance and requires investigation rather than silently increasing the deadline beyond one second.
+
 ### Client-to-Client handoff
 
-The source Client keeps the existing rule: release every injected key and button before reporting its graph edge. The Server retains its already-active capture overlay while the target handoff is pending, but drops new movement during the transition. A valid acknowledgement activates the target Client. Failure restores `LocalServer`, hides the overlay, and centers the Server cursor.
+The source Client keeps the existing rule: release every injected key and button before reporting its graph edge. The Server retains its already-active capture overlay while the target handoff is pending, but drops new movement during the transition. This brief stutter is intentional: ownership is undefined until acknowledgement, and replaying queued movement could make the new Client jump after activation. Server-to-Client handoff follows the same rule—the visible Server cursor may move locally, but no movement is queued for later remote replay. A valid acknowledgement activates the target Client. Failure restores `LocalServer`, hides the overlay, and centers the Server cursor.
 
 The transition deadline bounds the suppressed-input interval to 750 ms.
 
@@ -108,11 +114,11 @@ No worker holds the router lock while calling `send_message()`. The worker repor
 
 ### Event classes
 
-- **Mouse movement:** keep at most one pending movement record per session. Consecutive movement deltas coalesce by addition while preserving sign and scale. New movement never grows an unbounded queue.
+- **Mouse movement:** Conduit transports relative `dx`/`dy` deltas, but naive addition is not equivalent near Windows cursor clamping or a topology boundary. Consecutive moves may share one ordered batch of at most 32 original delta pairs. The Client replays every pair through `inject_move()` so each clamp and edge check occurs exactly as it does today. A key, button, or scroll event closes the current movement batch and preserves cross-event order.
 - **Keys and mouse buttons:** store in one bounded FIFO and preserve exact press/release order. Queue exhaustion fails the destination instead of dropping an event that could leave input held.
-- **Scroll:** preserve order with discrete input. Adjacent scroll records may coalesce only when no key or button event separates them.
+- **Scroll:** preserve order with discrete input. Adjacent scroll records remain separate in the first implementation.
 
-The initial implementation uses a 256-record discrete queue. This is a safety bound, not a user setting.
+The initial implementation uses a 256-record discrete queue plus at most 512 pending movement deltas. This is a safety bound, not a user setting. Windows' normal maximum keyboard repeat is about 30 characters per second, or about 60 press/release records per second; a completely stalled worker therefore has more than four seconds before discrete overflow. A healthy LAN worker drains far faster. Clipboard paste and Conduit file paste do not synthesize one key event per character and cannot fill this queue.
 
 ### Router bookkeeping
 
@@ -173,9 +179,11 @@ The Server shows no modal dialog during handoff. A failed destination uses the e
 ### Dispatcher tests
 
 - A blocked session worker does not block enqueueing, router state reads, GUI callbacks, heartbeat teardown, or another session worker.
-- Mouse movements coalesce and the pending structure remains bounded.
+- Ordered mouse batches preserve the exact delta sequence, including boundary-crossing and clamp-sensitive reversals; pending movement remains bounded.
 - Key and button events retain FIFO order.
 - Discrete queue overflow invokes failure and drops no accepted release silently.
+- A responsive fake lane sustains the equivalent of 30-character-per-second key repeat for ten seconds without overflow or reordering.
+- A deterministic macro-sized burst on a responsive lane drains without false destination failure; an actually blocked lane still reaches the safety bound and fails once.
 - Send failure invokes failure once and rejects later work for that session.
 - Session removal and application stop terminate acceptance without joining a blocked daemon worker.
 
@@ -195,6 +203,7 @@ The Server shows no modal dialog during handoff. A failed destination uses the e
 6. Repeat with Client 2 as the failed bridge while Client 1 owns the cursor.
 7. Reconnect the failed Client, verify it can reclaim its slot, and confirm routing stays paused until a successful Reset.
 8. Repeat 20 rapid crossings on live Clients to detect acknowledgement ordering or stale-timeout races.
+9. Record dispatch-to-acknowledgement timing for at least 50 crossings on each route. Every observed handoff must complete within 500 ms, leaving the specified 250 ms deadline margin.
 
 ## Acceptance criteria
 
