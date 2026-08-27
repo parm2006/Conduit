@@ -42,6 +42,9 @@ class DeleteForwardingTests(unittest.TestCase):
             def start(self):
                 events.append("listener_started")
 
+            def wait(self):
+                events.append("listener_ready")
+
         handler = InputHandler.__new__(InputHandler)
         handler.keyboard_listener = None
         handler.special_key_injector = Injector()
@@ -51,7 +54,12 @@ class DeleteForwardingTests(unittest.TestCase):
 
         self.assertEqual(
             events,
-            ["release_modifiers", ("listener", True), "listener_started"],
+            [
+                "release_modifiers",
+                ("listener", True),
+                "listener_started",
+                "listener_ready",
+            ],
         )
 
     def test_shutdown_releases_every_locally_injected_key(self):

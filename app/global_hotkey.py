@@ -25,6 +25,7 @@ class GlobalHotkeyMonitor:
         )
         self.listener.daemon = True
         self.listener.start()
+        self.listener.wait()
         logger.info("Global hotkey monitor started (Ctrl+Shift+Alt+Escape, Ctrl+Shift+Alt+R, Ctrl+Shift+Alt+B)")
 
     def stop(self):
@@ -82,4 +83,3 @@ class GlobalHotkeyMonitor:
         val = self._normalize_key(key)
         with self._lock:
             self.pressed_keys.discard(val)
-

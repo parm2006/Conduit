@@ -1,3 +1,4 @@
+import threading
 import unittest
 from types import SimpleNamespace
 
@@ -11,7 +12,7 @@ from app.display_topology import (
 from app.input_router import InputRouter, LocalServer, Paused, RemoteClient
 from app.input_handler import TopologyEdgeRegion
 from app.client import ConduitClient
-from app.server import ConduitServer
+from app.server import ConduitServer, _ServerInputEffects
 
 
 class RecordingLane:
@@ -93,6 +94,48 @@ class InputRouterTests(unittest.TestCase):
             session_for_machine=self.sessions.get,
             input_effects=self.effects,
         )
+
+    def test_capture_ui_callbacks_cannot_block_input_ownership_changes(self):
+        callback_entered = threading.Event()
+        release_callback = threading.Event()
+        restore_finished = threading.Event()
+
+        class Input:
+            def stop_keyboard_capture(self):
+                pass
+
+            def inject_position(self, x, y):
+                pass
+
+            def start_edge_detection(self):
+                pass
+
+        def blocking_capture_stop():
+            callback_entered.set()
+            release_callback.wait(1)
+
+        server = SimpleNamespace(
+            input_handler=Input(),
+            on_capture_stop=blocking_capture_stop,
+        )
+        effects = _ServerInputEffects(server)
+
+        worker = threading.Thread(
+            target=lambda: (
+                effects.restore_local((960, 540)),
+                restore_finished.set(),
+            )
+        )
+        worker.start()
+        self.assertTrue(callback_entered.wait(0.2))
+        try:
+            self.assertTrue(
+                restore_finished.wait(0.2),
+                "GUI overlay callback blocked cursor ownership restoration",
+            )
+        finally:
+            release_callback.set()
+            worker.join(1)
 
     def test_server_client_client_server_transitions_follow_graph_without_server_hop(self):
         self.assertIsInstance(self.router.state, LocalServer)

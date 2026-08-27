@@ -44,15 +44,37 @@ class _ServerInputEffects:
     def begin_remote_capture(self, session_id):
         self.server.input_handler.stop()
         self.server.input_handler.start_keyboard_capture()
-        if self.server.on_capture_start:
-            self.server.on_capture_start()
+        self._notify_capture_ui(self.server.on_capture_start, "start")
 
     def restore_local(self, position):
         self.server.input_handler.stop_keyboard_capture()
-        if self.server.on_capture_stop:
-            self.server.on_capture_stop()
+        self._notify_capture_ui(self.server.on_capture_stop, "stop")
         self.server.input_handler.inject_position(*position)
         self.server.input_handler.start_edge_detection()
+
+    @staticmethod
+    def _notify_capture_ui(callback, phase):
+        if callback is None:
+            return
+
+        def notify():
+            try:
+                callback()
+            except Exception as error:
+                logger.debug(
+                    "Could not notify capture UI during %s (%s)",
+                    phase,
+                    error_name(error),
+                )
+
+        # Tk callbacks can synchronously wait for the GUI thread. They are
+        # cosmetic and must never hold up cursor ownership or the control
+        # lane's heartbeat processing.
+        threading.Thread(
+            target=notify,
+            name=f"capture-ui-{phase}",
+            daemon=True,
+        ).start()
 
 
 class _ServerClusterControl:

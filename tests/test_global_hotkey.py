@@ -1,11 +1,39 @@
 import unittest
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 from pynput.keyboard import Key, KeyCode
 
 from app.global_hotkey import GlobalHotkeyMonitor
 
 
 class GlobalHotkeyMonitorTests(unittest.TestCase):
+    def test_monitor_waits_until_keyboard_hook_is_ready(self):
+        events = []
+
+        class Listener:
+            daemon = False
+
+            def __init__(self, **kwargs):
+                events.append(("listener", tuple(sorted(kwargs))))
+
+            def start(self):
+                events.append("listener_started")
+
+            def wait(self):
+                events.append("listener_ready")
+
+        monitor = GlobalHotkeyMonitor()
+        with patch("app.global_hotkey.KeyboardListener", Listener):
+            monitor.start()
+
+        self.assertEqual(
+            events,
+            [
+                ("listener", ("on_press", "on_release")),
+                "listener_started",
+                "listener_ready",
+            ],
+        )
+
     def test_detects_emergency_exit_hotkey(self):
         exit_called = []
         monitor = GlobalHotkeyMonitor(
@@ -48,4 +76,3 @@ class GlobalHotkeyMonitorTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

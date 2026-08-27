@@ -1,4 +1,5 @@
 import unittest
+from unittest.mock import patch
 
 from app.input_geometry import (
     client_entry_position,
@@ -18,6 +19,31 @@ from app.input_handler import InputHandler, TopologyEdgeRegion
 
 
 class InputGeometryTests(unittest.TestCase):
+    def test_edge_listener_is_ready_before_start_returns(self):
+        events = []
+
+        class Listener:
+            def __init__(self, **kwargs):
+                events.append(("listener", tuple(kwargs)))
+
+            def start(self):
+                events.append("listener_started")
+
+            def wait(self):
+                events.append("listener_ready")
+
+        handler = InputHandler.__new__(InputHandler)
+        handler.mouse_listener = None
+        handler.keyboard_listener = None
+
+        with patch("app.input_handler.MouseListener", Listener):
+            handler.start_edge_detection()
+
+        self.assertEqual(
+            events,
+            [("listener", ("on_move",)), "listener_started", "listener_ready"],
+        )
+
     def test_topology_edge_detection_uses_actual_negative_monitor_rectangle(self):
         server = MachineDisplayGroup(
             "server",

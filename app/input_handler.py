@@ -158,6 +158,10 @@ class InputHandler:
         self.stop()
         self.mouse_listener = MouseListener(on_move=self._on_move_edge)
         self.mouse_listener.start()
+        # pynput's Windows stop path waits for its message loop to initialize.
+        # Do not return control until a rapid screen transition can safely stop
+        # this listener without waiting forever for that initialization signal.
+        self.mouse_listener.wait()
 
     def stop(self):
         if self.mouse_listener:
@@ -175,6 +179,10 @@ class InputHandler:
             suppress=True
         )
         self.keyboard_listener.start()
+        # A switch-back can arrive immediately after capture starts. Waiting
+        # here closes pynput's start/stop race, which otherwise leaves its
+        # suppressing Windows hook installed while stop() blocks forever.
+        self.keyboard_listener.wait()
 
     def stop_keyboard_capture(self):
         if self.keyboard_listener:
