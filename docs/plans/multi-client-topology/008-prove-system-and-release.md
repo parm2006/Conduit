@@ -12,7 +12,7 @@
 
 - **Effort:** L
 - **Risk:** HIGH
-- **Depends on:** `002-land-single-client-topology.md`, `003-land-two-client-sessions.md`, `004-land-graph-input-routing.md`, `005-land-global-clipboard.md`, `006-land-file-relay-and-cluster-commands.md`, `007-land-atomic-apply.md`
+- **Depends on:** `002-land-single-client-topology.md`, `003-land-two-client-sessions.md`, `004-land-graph-input-routing.md`, `005-land-global-clipboard.md`, `006-land-file-relay-and-cluster-commands.md`, `007-land-atomic-apply.md`, `010-stop-routing-and-reset-topology.md`, `011-fix-dpi-grid-rendering.md`, `012-land-acknowledged-cursor-handoff.md`, `013-land-nonblocking-input-dispatch.md`
 - **Planned at:** revision `3d76acb3daa28e5dbc5331af4da93ca427317795`, 2026-08-24
 
 ## Why this matters
@@ -163,6 +163,8 @@ Use one Server and two physical Client PCs. Record each result in `VALIDATION.md
 - real single/multi-monitor groups with mixed DPI, negative coordinates, rotation, and HDMI/DisplayPort;
 - valid/invalid drafts, cursor-away Cancel, successful Apply, failed acknowledgement rollback, reconnect, and display unplug before Apply;
 - Server↔Client and Client1↔Client2 cursor transitions, equal perceived speed, local Client mouse isolation, and release of held modifiers/buttons;
+- abrupt Wi-Fi loss before heartbeat while entering the dead Client, abrupt loss while that Client already owns the cursor, and bridge-Client loss while the other Client owns it; every case must keep the GUI/keybind responsive, return Server control, clear the ghost slot, and require Reset;
+- at least 50 measured crossings on every Server→Client and Client→Client route; every dispatch-to-acknowledgement time must be at most 500 ms under the accepted 750 ms deadline;
 - copy from every PC using text, HTML/RTF, rapid screenshots, and repeat-identical content;
 - Explorer paste for every source/destination pair, newer copy during transfer, cancel, and endpoint disconnect;
 - reload, shutdown, background mode, Server-only warnings, Client-primary identification toasts, and source/destination-only transfer toasts;

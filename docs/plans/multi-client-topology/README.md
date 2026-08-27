@@ -12,16 +12,18 @@ This effort expands Conduit into one fixed Server hub with at most two simultane
 | [005](005-land-global-clipboard.md) | Synchronize one global newest clipboard item | L | 003, 004 | DONE |
 | [006](006-land-file-relay-and-cluster-commands.md) | Relay file jobs and cluster commands through the Server | L | 003–005 | DONE |
 | [007](007-land-atomic-apply.md) | Activate topology through one atomic cluster Apply | L | 002–006 | DONE |
-| [008](008-prove-system-and-release.md) | Prove the three-PC system and release contracts | L | 002–007, 010–011 | IN PROGRESS |
+| [008](008-prove-system-and-release.md) | Prove the three-PC system and release contracts | L | 002–007, 010–013 | IN PROGRESS |
 | [009](009-add-emergency-cursor-return-shortcut.md) | Add emergency cursor return and the Apply/Reset label lifecycle | S | 008 | TODO |
 | [010](010-stop-routing-and-reset-topology.md) | Stop routing on Client loss and rebuild topology through Reset | L | 007 | DONE |
 | [011](011-fix-dpi-grid-rendering.md) | Keep the seven-by-four topology grid fitted at every Windows DPI | M | 010 | DONE |
+| [012](012-land-acknowledged-cursor-handoff.md) | Commit cursor ownership only after Client acknowledgement | L | 010 | TODO |
+| [013](013-land-nonblocking-input-dispatch.md) | Keep every remote input write off GUI and hook threads | L | 012 | TODO |
 
 Status values: TODO | IN PROGRESS | DONE | BLOCKED (one-line reason) | SUPERSEDED (one-line pointer).
 
 ## Step handoff rule
 
-Every numbered Step in Plans 002–011 ends with a durable handoff checkpoint.
+Every numbered Step in Plans 002–013 ends with a durable handoff checkpoint.
 After the Step's verification passes, create a new append-only
 `handoffs/YYYY-MM-DD-HHMM-multi-client-topology.md` and repoint the workstream
 entry in `handoffs/index.md` before beginning the next Step. Each handoff must
@@ -41,9 +43,13 @@ unless the user explicitly requests otherwise.
 - **007 → 010:** disconnect recovery must preserve the atomic Apply transaction while adding a persistent safety latch and authoritative Reset.
 - **010 → 011:** both repairs touch the compact editor; land the state/lifecycle repair before changing its drawing geometry.
 - **010 + 011 → 008:** repeat physical acceptance only after disconnect recovery and high-DPI rendering are green.
+- **010 → 012:** the existing persistent safety latch is the failure destination for unacknowledged cursor ownership.
+- **012 → 013:** establish the ownership protocol before moving steady-state input delivery onto bounded workers.
+- **012 + 013 → 008:** repeat the physical Wi-Fi-loss matrix only after acknowledgement and nonblocking dispatch are green.
 
 ## Reconciliation log
 
+- **2026-08-27:** Physical testing exposed a pre-heartbeat Wi-Fi-loss race: the Server treated local `sendall` success as remote cursor ownership and allowed Tk callbacks to block on later input writes. Added Plans 012–013 from the reviewed [acknowledged cursor handoff design](../../superpowers/specs/2026-08-27-acknowledged-cursor-handoff-design.md). Plan 008 now requires abrupt-loss and measured handoff-timing rows after both land. Next: 012.
 - **2026-08-27:** Added a mandatory handoff checkpoint after every numbered Step in Plans 002–011 so each subplan can be resumed without relying on conversation history.
 - **2026-08-27:** Hardened completed Plan 010 after rapid physical handoffs exposed a lock-order gap in the original disconnect latch. Client loss now requests pause without waiting for the router lock, synchronously stops Server capture and centers the cursor, rejects all Server input entry points, suspends survivors, and completes formal router cleanup asynchronously. The full 745-test suite, 150 repeated race regressions, compileall, and `diff --check` pass. Physical three-PC acceptance remains in Plan 008.
 - **2026-08-27:** Expanded deferred Plan 009 with the topology action label lifecycle. Each Server lifetime begins with **Apply**; only the first successful atomic Apply changes it to **Reset**; failures keep the current label; Stop/Start restores **Apply**. This remains planning-only; Plan 008 physical acceptance is the current gate.
