@@ -227,12 +227,15 @@ class TopologyProtocolTests(unittest.TestCase):
             target=lambda: server.suspend_input_routing("client disconnected")
         )
         worker.start()
-        self.assertTrue(pause_entered.wait(0.2))
         try:
             worker.join(0.2)
             self.assertFalse(
                 worker.is_alive(),
                 "disconnect callback waited for router cleanup",
+            )
+            self.assertTrue(
+                pause_entered.wait(1),
+                "background router cleanup did not begin",
             )
             self.assertIn(("request-pause", "client disconnected"), events)
             self.assertIn("input-stop", events)
