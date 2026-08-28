@@ -1433,6 +1433,11 @@ class ConduitServer:
             state.current_offer,
             remote_destination=remote_destination,
         )
+        if transfer_required is None:
+            return coordinator.set_route(
+                state.current_offer,
+                destination,
+            )
         return coordinator.set_route(
             state.current_offer,
             destination,
