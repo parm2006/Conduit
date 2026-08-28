@@ -11,7 +11,7 @@ from app.clipboard_formats import (
     decode_clipboard_message,
     encode_clipboard_message,
 )
-from app.clipboard_hub import ClipboardHub, ClipboardHubItem
+from app.clipboard_hub import ClipboardHub
 from app.crypto import IdentityStore
 from app.display_topology import (
     Display,
@@ -25,6 +25,7 @@ from app.file_transfer.cluster_router import (
     ClusterFileRouter,
 )
 from app.file_transfer.models import FileItem, ItemType, Manifest
+from app.file_transfer.paste_coordinator import PasteCoordinator
 from app.file_transfer.transport import FileLaneClient, FileLaneServer
 from app.network import NetworkClient, NetworkServer
 from app.input_router import InputRouter, LocalServer
@@ -137,6 +138,21 @@ class _RoutingInputEffects:
 
     def restore_local(self, position):
         self.restores.append(position)
+
+
+class _ActiveMachineRouter:
+    def __init__(self, machine_id, session_id):
+        self.active_machine_id = machine_id
+        self.active_session_id = session_id
+        self.forwarded_keys = []
+
+    def forward_key_press(self, key_data):
+        self.forwarded_keys.append(("press", dict(key_data)))
+        return True
+
+    def forward_key_release(self, key_data):
+        self.forwarded_keys.append(("release", dict(key_data)))
+        return True
 
 
 class MultiClientTlsSystemTests(unittest.TestCase):
@@ -586,9 +602,6 @@ class MultiClientTlsSystemTests(unittest.TestCase):
         )
 
     def test_global_clipboard_and_client_to_client_file_frame_use_real_lanes(self):
-        machine_to_session = {
-            bundle.machine_id: bundle.session_id for bundle in self.bundles
-        }
         hub = ClipboardHub("server")
         self.addCleanup(hub.stop)
         local_items = []
@@ -610,6 +623,7 @@ class MultiClientTlsSystemTests(unittest.TestCase):
                     },
                     session_id=session_id,
                 ),
+                source_domain=bundle.session_id,
             )
 
         sequences = {bundle.machine_id: 0 for bundle in self.bundles}
@@ -651,90 +665,194 @@ class MultiClientTlsSystemTests(unittest.TestCase):
             )
         ))
 
-        offer = [ClipboardHubItem(3, "client-1", 9, "files")]
-        router = ClusterFileRouter(
-            "server",
-            latest_offer=lambda: offer[0],
-            endpoint_available=lambda machine_id: machine_id in machine_to_session,
-            send_control=lambda machine_id, message: self.control_server.send_message(
-                message,
-                session_id=machine_to_session[machine_id],
-            ),
-            send_file=lambda machine_id, metadata, payload: self.file_server.send(
-                metadata,
-                payload,
-                session_id=machine_to_session[machine_id],
-            ),
+        server = ConduitServer.__new__(ConduitServer)
+        server.server_machine_id = "server"
+        server.session_registry = self.registry
+        server.control_network = self.control_server
+        server.file_network = self.file_server
+        server.clipboard_hub = hub
+        server.clipboard = SimpleNamespace(inject=lambda payload: True)
+        server.input_router = None
+        server.pressed_keys = set()
+        server.paste_coordinator = PasteCoordinator(
+            server._request_remote_file_paste
         )
-        self.addCleanup(router.stop)
+        server.cluster_file_router = ClusterFileRouter(
+            "server",
+            latest_offer=lambda: hub.latest_item,
+            endpoint_available=server._cluster_endpoint_available,
+            send_control=server._send_cluster_file_control,
+            send_file=server._send_cluster_file_frame,
+        )
+        self.addCleanup(server.cluster_file_router.stop)
+        server_delivery_errors = []
+
+        def deliver_to_server(item):
+            try:
+                return server._deliver_clipboard_to_server(item)
+            except Exception as error:
+                server_delivery_errors.append(error)
+                raise
+
+        hub.register_endpoint("server", deliver_to_server)
+        self.control_server.register_callback(
+            "clipboard_offer",
+            server.on_remote_clipboard_offer,
+        )
+        self.control_server.register_callback(
+            "file_manifest_request",
+            server.on_file_manifest_request,
+        )
         self.control_server.register_callback(
             "file_manifest_response",
-            lambda data: router.on_manifest_response(data["peer_identity"], data),
+            server.on_file_manifest_response,
         )
         self.control_server.register_callback(
             "file_manifest_ack",
-            lambda data: router.on_manifest_ack(data["peer_identity"], data),
+            server.on_file_manifest_ack,
         )
         self.file_server.register_callback(
             "chunk",
-            lambda metadata, payload: router.relay_frame(
+            lambda metadata, payload: server.cluster_file_router.relay_frame(
                 metadata["peer_identity"],
                 metadata,
                 payload,
             ),
         )
-        transfer_id = "b" * 32
-        request_id = "a" * 32
-        manifest = Manifest(
-            transfer_id,
-            (FileItem("file.txt", ItemType.FILE, 4, 1, "0" * 64),),
-            4,
-            1,
-        )
-        source_ack = threading.Event()
-        destination_chunk = []
-        first.control.register_callback(
-            "file_manifest_request",
-            lambda data: first.control.send_message({
-                "type": "file_manifest_response",
-                "request_id": data["request_id"],
-                "manifest": manifest.to_wire(),
-            }),
-        )
-        first.control.register_callback(
-            "file_manifest_ack",
-            lambda data: source_ack.set(),
-        )
-        second.control.register_callback(
-            "file_manifest_response",
-            lambda data: second.control.send_message({
-                "type": "file_manifest_ack",
-                "job_id": data["manifest"]["job_id"],
-            }),
-        )
-        second.file.register_callback(
-            "chunk",
-            lambda metadata, payload: destination_chunk.append(
-                (metadata, payload)
+        intents = {bundle.machine_id: [] for bundle in self.bundles}
+        chunks = {bundle.machine_id: [] for bundle in self.bundles}
+        acknowledgements = {bundle.machine_id: [] for bundle in self.bundles}
+
+        for direction, (source, destination) in enumerate(
+            (
+                (self.bundles[0], self.bundles[1]),
+                (self.bundles[1], self.bundles[0]),
             ),
-        )
+            start=1,
+        ):
+            intent_counts = {
+                machine_id: len(values) for machine_id, values in intents.items()
+            }
+            chunk_counts = {
+                machine_id: len(values) for machine_id, values in chunks.items()
+            }
+            ack_count = len(acknowledgements[source.machine_id])
+            request_id = str(direction) * 32
+            transfer_id = str(direction + 2) * 32
+            manifest = Manifest(
+                transfer_id,
+                (FileItem("file.txt", ItemType.FILE, 4, 1, "0" * 64),),
+                4,
+                1,
+            )
+            source_ack = threading.Event()
 
-        self.assertIsNotNone(router.request_paste("client-2", request_id))
-        self.assertTrue(source_ack.wait(2))
-        first.file.send(
-            {
-                "type": "chunk",
-                "job_id": transfer_id,
-                "relative_path": "file.txt",
-                "offset": 0,
-            },
-            b"data",
-        )
+            source.control.register_callback(
+                "file_manifest_request",
+                lambda data, endpoint=source.control, value=manifest: endpoint.send_message({
+                    "type": "file_manifest_response",
+                    "request_id": data["request_id"],
+                    "manifest": value.to_wire(),
+                }),
+            )
+            source.control.register_callback(
+                "file_manifest_ack",
+                lambda data, machine_id=source.machine_id: (
+                    acknowledgements[machine_id].append(dict(data)),
+                    source_ack.set(),
+                )[-1],
+            )
+            destination.control.register_callback(
+                "file_paste_intent",
+                lambda data, endpoint=destination.control,
+                machine_id=destination.machine_id, value=request_id: (
+                    intents[machine_id].append(dict(data)),
+                    endpoint.send_message({
+                        "type": "file_manifest_request",
+                        "request_id": value,
+                    }),
+                )[-1],
+            )
+            destination.control.register_callback(
+                "file_manifest_response",
+                lambda data, endpoint=destination.control: endpoint.send_message({
+                    "type": "file_manifest_ack",
+                    "job_id": data["manifest"]["job_id"],
+                }),
+            )
+            destination.file.register_callback(
+                "chunk",
+                lambda metadata, payload,
+                machine_id=destination.machine_id: chunks[machine_id].append(
+                    (metadata, payload)
+                ),
+            )
 
-        self.assertTrue(_wait_for(lambda: len(destination_chunk) == 1))
-        self.assertEqual(destination_chunk[0][1], b"data")
-        self.assertEqual(destination_chunk[0][0]["source_id"], "client-1")
-        self.assertEqual(destination_chunk[0][0]["destination_id"], "client-2")
+            server.input_router = _ActiveMachineRouter(
+                destination.machine_id,
+                destination.session_id,
+            )
+            self.assertTrue(source.control.send_message({
+                "type": "clipboard_offer",
+                "kind": "files",
+                "sequence": 10 + direction,
+            }))
+            self.assertTrue(_wait_for(
+                lambda: (
+                    hub.latest_item is not None
+                    and hub.latest_item.source_id == source.machine_id
+                    and server.paste_coordinator.transfer_required
+                )
+            ), repr(server_delivery_errors))
+
+            server.on_key_press({"type": "special", "value": "ctrl_l"})
+            server.on_key_press({"type": "char", "value": "v"})
+            server.on_key_release({"type": "char", "value": "v"})
+            server.on_key_release({"type": "special", "value": "ctrl_l"})
+
+            self.assertTrue(source_ack.wait(2))
+            self.assertEqual(
+                len(intents[destination.machine_id]),
+                intent_counts[destination.machine_id] + 1,
+            )
+            self.assertEqual(
+                len(intents[source.machine_id]),
+                intent_counts[source.machine_id],
+            )
+            self.assertNotIn(
+                "v",
+                [
+                    key_data["value"]
+                    for action, key_data in server.input_router.forwarded_keys
+                    if action == "press"
+                ],
+            )
+            source.file.send(
+                {
+                    "type": "chunk",
+                    "job_id": transfer_id,
+                    "relative_path": "file.txt",
+                    "offset": 0,
+                },
+                b"data",
+            )
+
+            self.assertTrue(_wait_for(
+                lambda: len(chunks[destination.machine_id])
+                == chunk_counts[destination.machine_id] + 1
+            ))
+            metadata, payload = chunks[destination.machine_id][-1]
+            self.assertEqual(payload, b"data")
+            self.assertEqual(metadata["source_id"], source.machine_id)
+            self.assertEqual(metadata["destination_id"], destination.machine_id)
+            self.assertEqual(
+                len(chunks[source.machine_id]),
+                chunk_counts[source.machine_id],
+            )
+            self.assertEqual(
+                len(acknowledgements[source.machine_id]),
+                ack_count + 1,
+            )
 
     def test_third_real_control_candidate_times_out_without_disturbing_two_sessions(self):
         third = NetworkClient(
