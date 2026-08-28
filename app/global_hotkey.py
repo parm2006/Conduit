@@ -1,5 +1,6 @@
 import logging
 import threading
+import time
 from pynput.keyboard import Controller as KeyboardController, Listener as KeyboardListener, Key, KeyCode
 
 logger = logging.getLogger(__name__)
@@ -8,10 +9,25 @@ logger = logging.getLogger(__name__)
 class GlobalHotkeyMonitor:
     """Always-active background keybind monitor for emergency exit, connection reload, and background daemon mode."""
 
-    def __init__(self, on_emergency_exit=None, on_reload_connection=None, on_toggle_daemon=None):
+    def __init__(
+        self,
+        on_emergency_exit=None,
+        on_reload_connection=None,
+        on_toggle_daemon=None,
+        on_return_to_server=None,
+        *,
+        clock=None,
+        return_interval=0.75,
+    ):
+        if not isinstance(return_interval, (int, float)) or return_interval <= 0:
+            raise ValueError("return shortcut interval must be positive")
         self.on_emergency_exit = on_emergency_exit
         self.on_reload_connection = on_reload_connection
         self.on_toggle_daemon = on_toggle_daemon
+        self.on_return_to_server = on_return_to_server
+        self._clock = clock or time.monotonic
+        self._return_interval = float(return_interval)
+        self._first_space_at = None
         self.pressed_keys = set()
         self.listener = None
         self._lock = threading.Lock()
@@ -37,6 +53,7 @@ class GlobalHotkeyMonitor:
             self.listener = None
         with self._lock:
             self.pressed_keys.clear()
+            self._first_space_at = None
 
     @staticmethod
     def _normalize_key(key):
@@ -57,6 +74,7 @@ class GlobalHotkeyMonitor:
     def _on_press(self, key):
         val = self._normalize_key(key)
         with self._lock:
+            already_pressed = val in self.pressed_keys
             self.pressed_keys.add(val)
             has_ctrl = any(k in self.pressed_keys for k in ("ctrl", "ctrl_l", "ctrl_r"))
             has_alt = any(k in self.pressed_keys for k in ("alt", "alt_l", "alt_r", "alt_gr"))
@@ -64,6 +82,33 @@ class GlobalHotkeyMonitor:
             has_esc = val in ("esc", "escape")
             has_r = val in ("r", "R")
             has_b = val in ("b", "B")
+
+            if self._first_space_at is not None and val not in {
+                "space", "ctrl", "ctrl_l", "ctrl_r"
+            }:
+                self._first_space_at = None
+
+            if val == "space" and not already_pressed:
+                if not has_ctrl:
+                    self._first_space_at = None
+                else:
+                    now = self._clock()
+                    if (
+                        self._first_space_at is not None
+                        and now - self._first_space_at <= self._return_interval
+                    ):
+                        self._first_space_at = None
+                        if self.on_return_to_server:
+                            logger.warning(
+                                "[HOTKEY DIAGNOSTIC] Ctrl+Space, Space "
+                                "triggered on Server"
+                            )
+                            threading.Thread(
+                                target=self.on_return_to_server,
+                                daemon=True,
+                            ).start()
+                    else:
+                        self._first_space_at = now
 
             if has_ctrl and has_alt and has_shift:
                 if has_esc and self.on_emergency_exit:
@@ -83,3 +128,5 @@ class GlobalHotkeyMonitor:
         val = self._normalize_key(key)
         with self._lock:
             self.pressed_keys.discard(val)
+            if val in {"ctrl", "ctrl_l", "ctrl_r"}:
+                self._first_space_at = None
