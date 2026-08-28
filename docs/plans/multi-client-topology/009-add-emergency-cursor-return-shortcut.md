@@ -12,6 +12,7 @@
 
 - **Effort:** S
 - **Risk:** MED
+- **State:** Automated implementation complete at `3719bed`; packaged physical acceptance pending
 - **Depends on:** Plan 008 automated/package gates; the user explicitly moved this work ahead of its remaining physical matrix
 - **Planned at:** revision `ba11b72`, 2026-08-28
 - **Design:** `docs/superpowers/specs/2026-08-28-cursor-return-and-compact-topology-controls-design.md`
@@ -140,15 +141,15 @@ Physically verify the chord with the shared cursor on the Server primary display
 ## Done criteria
 
 - [ ] The fixed Ctrl+Space, Space chord works from the physical Server keyboard while the shared cursor is local or remote.
-- [ ] Forwarded keys and buttons are released before Server ownership returns.
-- [ ] The cursor lands at the current Server primary display's center.
-- [ ] Apply remains paused when the shortcut runs during Apply.
-- [ ] No topology, connection, clipboard, file, toast, firewall, port, or settings behavior changes.
-- [ ] `✓` and `✕` remain fixed while hover text and behavior reflect Apply, Reset, and Cancel accurately.
-- [ ] The hidden action starts as Apply, advances only after the first successful Apply, and returns to Apply only after Server restart.
-- [ ] Focused tests, compileall, full suite, and `diff --check` pass.
+- [x] Forwarded keys and buttons are released before Server ownership returns.
+- [x] The cursor lands at the current Server primary display's center.
+- [x] Apply remains paused when the shortcut runs during Apply.
+- [x] No topology, connection, clipboard, file, toast, firewall, port, or settings behavior changes in the automated suite.
+- [x] `✓` and `✕` remain fixed while hover text and behavior reflect Apply, Reset, and Cancel accurately.
+- [x] The hidden action starts as Apply, advances only after the first successful Apply, and returns to Apply only after Server restart.
+- [x] Focused tests, compileall, full suite, and `diff --check` pass (99 focused and 799 total tests).
 - [ ] Packaged physical tests pass from every supported cursor location.
-- [ ] No files outside the in-scope list are modified.
+- [x] No implementation files outside the in-scope list are modified.
 
 ## STOP conditions
 
