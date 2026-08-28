@@ -6,6 +6,7 @@ from pynput.mouse import Controller as MouseController, Listener as MouseListene
 from pynput.keyboard import Controller as KeyboardController, Listener as KeyboardListener, Key, KeyCode
 from app.safe_errors import error_name
 from app.display_topology import EDGE_HIT_TOLERANCE, edge_ratio
+from app.global_hotkey import ReturnShortcutDetector
 
 logger = logging.getLogger(__name__)
 
@@ -81,6 +82,7 @@ class InputHandler:
             WindowsSpecialKeyInjector() if os.name == "nt" else None
         )
         self.keyboard_listener = None
+        self._return_shortcut = ReturnShortcutDetector()
         self.callbacks = {}
         self._injected_keys = {}
         self._injected_keys_lock = threading.Lock()
@@ -188,6 +190,9 @@ class InputHandler:
         if self.keyboard_listener:
             self.keyboard_listener.stop()
             self.keyboard_listener = None
+        detector = getattr(self, '_return_shortcut', None)
+        if detector is not None:
+            detector.reset()
 
     def _on_move_edge(self, x, y):
         if hasattr(self, "topology_edge_regions"):
@@ -246,9 +251,20 @@ class InputHandler:
 
     def _on_key_press(self, key):
         self.trigger('key_press', self._serialize_key(key))
+        if self._return_shortcut.press(key):
+            logger.warning(
+                "[HOTKEY DIAGNOSTIC] Ctrl+Space, Space triggered during "
+                "Server keyboard capture"
+            )
+            threading.Thread(
+                target=self.trigger,
+                args=('return_to_server',),
+                daemon=True,
+            ).start()
 
     def _on_key_release(self, key):
         self.trigger('key_release', self._serialize_key(key))
+        self._return_shortcut.release(key)
 
     def _serialize_key(self, key):
         virtual_key = getattr(key, 'vk', None)

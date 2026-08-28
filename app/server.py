@@ -154,6 +154,10 @@ class ConduitServer:
             ),
         )
         self.input_handler = InputHandler()
+        self.input_handler.register_callback(
+            'return_to_server',
+            self._return_cursor_to_server,
+        )
         self._paste_route_lock = threading.RLock()
         self.global_hotkey_monitor = GlobalHotkeyMonitor(
             on_emergency_exit=self._request_app_shutdown,
