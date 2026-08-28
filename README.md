@@ -1,95 +1,71 @@
 # Conduit 6.0.1
 
-Conduit is a Windows wireless KVM for sharing one Server's mouse and keyboard,
-the newest clipboard item, and Explorer file pastes with up to two Clients on
-the same local network.
+A fast Windows wireless KVM for sharing your mouse, keyboard, newest clipboard item, and on-paste file relay across one Server and up to two Clients on the same local network.
 
-[Download the latest release](https://github.com/parm2006/Conduit/releases/latest)
+[![Download Latest Release](https://img.shields.io/github/v/release/parm2006/Conduit?label=Download%20Latest%20Release)](https://github.com/parm2006/Conduit/releases/latest)
 
-## What it supports
+---
 
-- One Server and up to two Clients, each with multiple Windows displays.
-- Mouse and keyboard routing between any touching machine groups.
-- Text, HTML, RTF, images, browser formats, files, and folders.
-- One global newest clipboard item and an on-paste file relay through the
-  Server.
-- TLS identity, first-connection pairing approval, and remembered trust.
+## ✨ Features
 
-## Install and connect
+- **Multi-PC Control**: Seamless cursor and keyboard routing across one Server and up to two Clients with multi-monitor support.
+- **Shared Clipboard & Files**: Syncs the global newest clipboard item (text, images, HTML/RTF) and provides an on-paste file relay for files and folders.
+- **Visual Display Arrangement**: Displays each Windows machine name in the layout; drag and snap screen edges, then click **Apply**.
+- **Secure by Default**: Authenticated pairing, TLS identity, and private network firewall rules.
 
-1. Install Conduit on every Windows 10 or 11 PC.
-2. On the main PC, select **Server (Host)**, enter one shared password, and
-   select **Start Server**.
-3. On each Client, enter the Server address, port, and shared password, then
-   select **Connect**.
-4. Compare and approve the pairing code the first time a PC connects.
-5. On the Server, arrange the automatically detected machine groups and select
-   **Apply**.
+---
 
-Conduit displays each Windows machine name in the layout. A third Client may
-replace one of the two connected Clients; an unanswered replacement request
-closes after 15 seconds.
+## 🚀 Quick Start (Recommended)
 
-## Arrange screens
+1. **Install**: Run the installer on each Windows 10/11 PC from [Releases](https://github.com/parm2006/Conduit/releases/latest).
+2. **Start Server**: On your host PC, select **Server (Host)**, enter a shared password, and click **Start Server**.
+3. **Connect Clients**: On client PCs, enter the Server IP, port, and password, then click **Connect** (a third Client may replace one of the two connected Clients; unanswered requests close after 15 seconds).
+4. **Pair & Arrange**: Approve the pairing code on first connect, arrange the screens so edges touch, and select **Apply**.
 
-Each PC's physical monitors remain fixed in their Windows arrangement. Drag the
-whole Client group until one full side touches another machine group. Gaps,
-overlaps, corners, and partial-side contact are invalid. The previous layout
-stays active until Apply succeeds.
+---
 
-If a Client disconnects, Conduit stops roaming input and returns control to the
-Server. Reconnect the device, confirm the layout, and use the `✓` control to
-reset it.
-
-## Hotkeys
+## ⌨️ Server Hotkeys
 
 Use these on the physical Server keyboard:
 
 | Hotkey | Action |
 | --- | --- |
-| Hold `Ctrl`, tap `Space` twice within 750 ms | Return the roaming cursor from any connected screen to the center of the Server's primary display. |
-| `Ctrl + Alt + Shift + B` | Toggle synchronized background mode. |
-| `Ctrl + Alt + Shift + R` | Reconnect and restore local control. |
-| `Ctrl + Alt + Shift + Escape` | Close Conduit on the Server and connected Clients. |
+| Hold `Ctrl`, tap `Space` twice | Return roaming cursor to the center of the Server primary display |
+| `Ctrl + Alt + Shift + B` | Toggle synchronized background mode |
+| `Ctrl + Alt + Shift + R` | Reconnect and restore local control |
+| `Ctrl + Alt + Shift + Esc` | Close Conduit across all connected machines |
 
-## Network and firewall
+---
 
-The Server uses TCP ports 28903-28905. Its managed firewall rule allows only
-the exact Conduit executable on Private networks and from the local subnet. It
-never enables Public-network access or changes the Windows network profile.
+## 🔒 Network & Firewall
 
-The installer asks for administrator approval and firewall consent. Choosing
-No cancels installation. Uninstall removes Conduit's firewall rule without
-changing other applications' rules. Packaged files are unsigned unless the
-release owner supplies a trusted certificate, so Windows may warn about an
-unfamiliar publisher.
+Conduit uses TCP ports 28903-28905. The installer creates a managed firewall rule restricted to Private networks and the local subnet. Choosing No cancels installation. Uninstall cleanly removes Conduit's firewall rule.
 
-## Run from source
+---
 
+## 🛠️ Building & Development
+
+<details>
+<summary>Run from Source or Build Release (Click to expand)</summary>
+
+### Run from Source
 ```powershell
 python -m venv venv
 .\venv\Scripts\python.exe -m pip install -r requirements.txt
 .\venv\Scripts\python.exe run.py
 ```
 
-A source launch can scope firewall access only to `python.exe`. Use the
-installer when you want a Conduit-specific rule.
-
-## Build a release
-
-Install `requirements-release.txt` and official NSIS 3.12, then run:
-
+### Build a Release
+Install `requirements-release.txt` and NSIS 3.12, then run:
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts\build_release.ps1
 ```
+The build script removes old release outputs before compilation and produces `Conduit.exe`, the installer, and release assets. Pass `-DevelopmentBuild` for an unsigned development build before tagging.
 
-The script requires a clean, correctly tagged release commit and removes old release outputs before compilation. Pass `-DevelopmentBuild` for an unsigned development build before tagging. It produces `Conduit.exe`, the installer,
-corresponding source, notices, provenance, and SHA-256 checksums.
+</details>
 
-## Contributing and license
+---
 
-Read [CONTRIBUTING.md](CONTRIBUTING.md) before opening a change. Report security
-issues through [SECURITY.md](SECURITY.md).
+## 📄 License & Contributing
 
-Conduit is distributed under GPL-3.0-only. Corresponding source for this
-release is available at https://github.com/parm2006/Conduit/tree/v6.0.1.
+Conduit is open source under GPL-3.0-only. Source code is available at https://github.com/parm2006/Conduit. Contributions and security reports: see [CONTRIBUTING.md](CONTRIBUTING.md) and [SECURITY.md](SECURITY.md).
