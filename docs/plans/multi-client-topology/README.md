@@ -18,12 +18,13 @@ This effort expands Conduit into one fixed Server hub with at most two simultane
 | [011](011-fix-dpi-grid-rendering.md) | Keep the seven-by-four topology grid fitted at every Windows DPI | M | 010 | DONE |
 | [012](012-land-acknowledged-cursor-handoff.md) | Commit cursor ownership only after Client acknowledgement | L | 010 | DONE |
 | [013](013-land-nonblocking-input-dispatch.md) | Keep every remote input write off GUI and hook threads | L | 012 | DONE |
+| [014](014-fix-client-to-client-file-paste-routing.md) | Route file paste between distinct Clients by machine identity | M | 005, 006, 013 | TODO |
 
 Status values: TODO | IN PROGRESS | DONE | BLOCKED (one-line reason) | SUPERSEDED (one-line pointer).
 
 ## Step handoff rule
 
-Every numbered Step in Plans 002–013 ends with a durable handoff checkpoint.
+Every numbered Step in Plans 002–014 ends with a durable handoff checkpoint.
 After the Step's verification passes, create a new append-only
 `handoffs/YYYY-MM-DD-HHMM-multi-client-topology.md` and repoint the workstream
 entry in `handoffs/index.md` before beginning the next Step. Each handoff must
