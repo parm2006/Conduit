@@ -57,13 +57,13 @@ class FakeDistribution:
 
 class ReleaseMetadataTests(unittest.TestCase):
     def test_product_and_tool_metadata_is_canonical(self):
-        self.assertEqual(PRODUCT_VERSION, "6.0")
-        self.assertEqual(FILE_VERSION, (6, 0, 0, 0))
-        self.assertEqual(FILE_VERSION_STRING, "6.0.0.0")
+        self.assertEqual(PRODUCT_VERSION, "6.0.1")
+        self.assertEqual(FILE_VERSION, (6, 0, 1, 0))
+        self.assertEqual(FILE_VERSION_STRING, "6.0.1.0")
         self.assertEqual(SOURCE_URL, "https://github.com/parm2006/Conduit")
         self.assertEqual(
             RELEASE_SOURCE_URL,
-            "https://github.com/parm2006/Conduit/tree/v6.0",
+            "https://github.com/parm2006/Conduit/tree/v6.0.1",
         )
         for value in (
             PYINSTALLER_LICENSE_URL,
