@@ -171,16 +171,22 @@ class PasteCoordinator:
         self._pressed_ctrl = set()
         self._suppressing_v = False
 
-    def set_route(self, offer, destination):
+    def set_route(self, offer, destination, *, transfer_required=None):
         if offer is not None and not isinstance(offer, ClipboardOffer):
             raise TypeError("clipboard route offer is invalid")
         if destination not in ENDPOINTS:
             raise ValueError("clipboard route destination is invalid")
+        if transfer_required is not None and type(transfer_required) is not bool:
+            raise TypeError("clipboard transfer decision must be boolean")
         self.current_offer = offer
         self.destination = destination
-        self.transfer_required = (
-            offer is not None
-            and should_transfer_files(offer.kind, offer.source, destination)
+        self.transfer_required = bool(
+            transfer_required
+            if transfer_required is not None
+            else (
+                offer is not None
+                and should_transfer_files(offer.kind, offer.source, destination)
+            )
         )
         return self.transfer_required
 

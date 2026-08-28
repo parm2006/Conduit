@@ -2,6 +2,7 @@ import threading
 import unittest
 from types import SimpleNamespace
 
+from app.clipboard_hub import ClipboardHubItem
 from app.clipboard_formats import ClipboardEntry, ClipboardSnapshot
 from app.client import ConduitClient
 from app.file_transfer.paste_coordinator import PasteCoordinator
@@ -22,6 +23,27 @@ class SessionNetwork(RecordingNetwork):
         super().__init__()
         self.session_id = session_id
         self.session_info = {"session_id": session_id}
+
+
+class TargetedNetwork(RecordingNetwork):
+    def send_message(self, message, session_id=None):
+        self.messages.append((session_id, message))
+        return True
+
+
+class MachineRouter:
+    def __init__(self, machine_id, session_id):
+        self.active_machine_id = machine_id
+        self.active_session_id = session_id
+        self.forwarded = []
+
+    def forward_key_press(self, key_data):
+        self.forwarded.append(("press", dict(key_data)))
+        return True
+
+    def forward_key_release(self, key_data):
+        self.forwarded.append(("release", dict(key_data)))
+        return True
 
 
 class DeliveringNetwork(RecordingNetwork):
@@ -131,6 +153,181 @@ class RefreshingClipboard:
 
 
 class FileAvailabilityRoutingTests(unittest.TestCase):
+    def test_explicit_transfer_decision_is_strict_and_legacy_default_remains(self):
+        coordinator = PasteCoordinator(lambda: None)
+        state = ConduitServer.__new__(ConduitServer)
+        state.control_network = SessionNetwork()
+        state.paste_coordinator = coordinator
+        clipboard_state = state._get_clipboard_offer_state()
+        offer = clipboard_state.observe_local("files", 1)
+
+        self.assertTrue(coordinator.set_route(offer, "client"))
+        self.assertFalse(
+            coordinator.set_route(
+                offer,
+                "client",
+                transfer_required=False,
+            )
+        )
+        with self.assertRaisesRegex(TypeError, "must be boolean"):
+            coordinator.set_route(
+                offer,
+                "client",
+                transfer_required=1,
+            )
+
+    @staticmethod
+    def _cluster_route_server(
+        *,
+        source_machine_id,
+        destination_machine_id,
+        kind="files",
+        offer_revision=25,
+        hub_revision=25,
+    ):
+        server = ConduitServer.__new__(ConduitServer)
+        server.server_machine_id = "server"
+        destination_session_id = (
+            None
+            if destination_machine_id == "server"
+            else f"session-{destination_machine_id}"
+        )
+        server.input_router = MachineRouter(
+            destination_machine_id,
+            destination_session_id,
+        )
+        server.control_network = TargetedNetwork()
+        server.pressed_keys = set()
+        server._paste_route_lock = threading.RLock()
+        server.paste_coordinator = PasteCoordinator(
+            server._request_remote_file_paste
+        )
+        server.file_paste_service = RecordingPasteService()
+        server.clipboard_hub = SimpleNamespace(
+            latest_item=ClipboardHubItem(
+                hub_revision,
+                source_machine_id,
+                218,
+                kind,
+            )
+        )
+        sessions = tuple(
+            SimpleNamespace(
+                ready=True,
+                peer_identity=machine_id,
+                session_id=f"session-{machine_id}",
+            )
+            for machine_id in ("client-a", "client-b")
+        )
+        server.session_registry = SimpleNamespace(
+            active_sessions=lambda: sessions
+        )
+        state = server._get_clipboard_offer_state()
+        state.accept_cluster(
+            offer_revision,
+            (
+                "server"
+                if source_machine_id == "server"
+                else "client"
+            ),
+            kind,
+            218,
+            session_id="cluster",
+        )
+        server._apply_clipboard_offer_route()
+        return server
+
+    @staticmethod
+    def _press_paste(server):
+        server.on_key_press({"type": "special", "value": "ctrl_l"})
+        server.on_key_press({"type": "char", "value": "v"})
+
+    def test_distinct_clients_target_file_paste_intent_by_machine_identity(self):
+        for source, destination in (
+            ("client-a", "client-b"),
+            ("client-b", "client-a"),
+        ):
+            with self.subTest(source=source, destination=destination):
+                server = self._cluster_route_server(
+                    source_machine_id=source,
+                    destination_machine_id=destination,
+                )
+
+                self._press_paste(server)
+
+                self.assertEqual(
+                    server.control_network.messages,
+                    [
+                        (
+                            f"session-{destination}",
+                            {"type": "file_paste_intent"},
+                        )
+                    ],
+                )
+                self.assertNotIn(
+                    "v",
+                    [
+                        key_data.get("value")
+                        for _action, key_data in server.input_router.forwarded
+                    ],
+                )
+
+    def test_same_client_file_paste_remains_native(self):
+        server = self._cluster_route_server(
+            source_machine_id="client-a",
+            destination_machine_id="client-a",
+        )
+
+        self._press_paste(server)
+
+        self.assertEqual(server.control_network.messages, [])
+        self.assertEqual(
+            server.input_router.forwarded[-1],
+            ("press", {"type": "char", "value": "v"}),
+        )
+
+    def test_server_and_client_file_routes_keep_existing_direction_results(self):
+        server_to_client = self._cluster_route_server(
+            source_machine_id="server",
+            destination_machine_id="client-b",
+        )
+        self._press_paste(server_to_client)
+        self.assertEqual(
+            server_to_client.control_network.messages,
+            [
+                (
+                    "session-client-b",
+                    {"type": "file_paste_intent"},
+                )
+            ],
+        )
+
+        client_to_server = self._cluster_route_server(
+            source_machine_id="client-a",
+            destination_machine_id="server",
+        )
+        self._press_paste(client_to_server)
+        self.assertEqual(client_to_server.file_paste_service.requests, 1)
+        self.assertEqual(client_to_server.control_network.messages, [])
+
+    def test_ordinary_and_stale_cluster_routes_do_not_target_a_client(self):
+        ordinary = self._cluster_route_server(
+            source_machine_id="client-a",
+            destination_machine_id="client-b",
+            kind="ordinary",
+        )
+        self._press_paste(ordinary)
+        self.assertEqual(ordinary.control_network.messages, [])
+
+        stale = self._cluster_route_server(
+            source_machine_id="client-a",
+            destination_machine_id="client-b",
+            offer_revision=24,
+            hub_revision=25,
+        )
+        self._press_paste(stale)
+        self.assertEqual(stale.control_network.messages, [])
+
     def test_client_ordinary_payload_queue_preserves_explicit_local_offer(self):
         client = ConduitClient.__new__(ConduitClient)
         client.is_active = True

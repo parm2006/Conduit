@@ -1427,10 +1427,67 @@ class ConduitServer:
         coordinator = getattr(self, "paste_coordinator", None)
         if coordinator is None:
             return False
-        destination = (
-            "client" if self._remote_destination_active() else "server"
+        remote_destination = self._remote_destination_active()
+        destination = "client" if remote_destination else "server"
+        transfer_required = self._cluster_file_transfer_decision(
+            state.current_offer,
+            remote_destination=remote_destination,
         )
-        return coordinator.set_route(state.current_offer, destination)
+        return coordinator.set_route(
+            state.current_offer,
+            destination,
+            transfer_required=transfer_required,
+        )
+
+    def _cluster_file_transfer_decision(self, offer, *, remote_destination):
+        hub = getattr(self, "clipboard_hub", None)
+        if hub is None or getattr(offer, "session_id", None) != "cluster":
+            return None
+        item = hub.latest_item
+        router = getattr(self, "input_router", None)
+        server_id = getattr(self, "server_machine_id", None)
+        destination_id = (
+            getattr(router, "active_machine_id", None)
+            if remote_destination
+            else server_id
+        )
+        route_matches = (
+            item is not None
+            and offer is not None
+            and item.revision == offer.revision
+            and item.kind == offer.kind
+            and isinstance(item.source_id, str)
+            and bool(item.source_id)
+            and isinstance(destination_id, str)
+            and bool(destination_id)
+        )
+        if route_matches and remote_destination:
+            session = self._session_for_machine(destination_id)
+            route_matches = (
+                session is not None
+                and session.session_id
+                == getattr(router, "active_session_id", None)
+            )
+        if not route_matches:
+            logger.info(
+                "Cluster file paste route unavailable "
+                "(offer_revision=%s hub_revision=%s remote=%s)",
+                getattr(offer, "revision", None),
+                getattr(item, "revision", None),
+                remote_destination,
+            )
+            return False
+        required = (
+            item.kind == "files" and item.source_id != destination_id
+        )
+        logger.info(
+            "Cluster file paste route selected "
+            "(source=%s destination=%s transfer=%s)",
+            item.source_id[-8:],
+            destination_id[-8:],
+            required,
+        )
+        return required
 
     def _refresh_active_destination_offer(self):
         if self._remote_destination_active():
