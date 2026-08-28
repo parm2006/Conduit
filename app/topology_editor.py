@@ -12,6 +12,55 @@ CLIENT_COLORS = ("#3B82F6", "#34D399", "#A855F7")
 INVALID_COLOR = "#EF4444"
 
 
+class _HoverTooltip:
+    def __init__(self, widget, text):
+        self.widget = widget
+        self.text = text
+        self.window = None
+        widget.bind("<Enter>", self._show, add="+")
+        widget.bind("<Leave>", self._hide, add="+")
+        widget.bind("<ButtonPress>", self._hide, add="+")
+        widget.bind("<Destroy>", self._hide, add="+")
+
+    def set_text(self, text):
+        self.text = str(text)
+        if self.window is not None:
+            self._hide()
+
+    def _show(self, _event=None):
+        if self.window is not None or not self.text:
+            return
+        window = tk.Toplevel(self.widget)
+        window.wm_overrideredirect(True)
+        try:
+            window.attributes("-topmost", True)
+        except tk.TclError:
+            pass
+        x = self.widget.winfo_rootx() + self.widget.winfo_width() // 2
+        y = self.widget.winfo_rooty() + self.widget.winfo_height() + 4
+        window.wm_geometry(f"+{x}+{y}")
+        tk.Label(
+            window,
+            text=self.text,
+            background="#111827",
+            foreground="#F9FAFB",
+            relief="solid",
+            borderwidth=1,
+            padx=6,
+            pady=3,
+        ).pack()
+        self.window = window
+
+    def _hide(self, _event=None):
+        window = self.window
+        self.window = None
+        if window is not None:
+            try:
+                window.destroy()
+            except tk.TclError:
+                pass
+
+
 @dataclass(frozen=True)
 class TopologyGridGeometry:
     width: int
@@ -342,6 +391,9 @@ class TopologyEditorState:
 class TopologyEditor(ctk.CTkFrame):
     GRID_WIDTH = CELL_SIZE * 7
     GRID_HEIGHT = CELL_SIZE * 4
+    APPLY_GLYPH = "✓"
+    CANCEL_GLYPH = "✕"
+    ACTION_BUTTON_WIDTH = 34
 
     def __init__(
         self,
@@ -365,6 +417,7 @@ class TopologyEditor(ctk.CTkFrame):
         self.on_apply = on_apply
         self.on_cancel = on_cancel
         self.on_rescan = on_rescan
+        self._action_mode = "apply"
         self._drag = None
         self.canvas = tk.Canvas(
             self,
@@ -379,22 +432,47 @@ class TopologyEditor(ctk.CTkFrame):
         self.canvas.bind("<ButtonRelease-1>", self._drag_end)
         self.apply_button = ctk.CTkButton(
             self,
-            text="Reset",
-            width=62,
+            text=self.APPLY_GLYPH,
+            width=self.ACTION_BUTTON_WIDTH,
             height=26,
+            font=ctk.CTkFont(size=18, weight="bold"),
             command=self._apply,
         )
         self.apply_button.place(relx=1.0, x=-10, y=10, anchor="ne")
         self.cancel_button = ctk.CTkButton(
             self,
-            text="Cancel",
-            width=62,
+            text=self.CANCEL_GLYPH,
+            width=self.ACTION_BUTTON_WIDTH,
             height=26,
+            font=ctk.CTkFont(size=18, weight="bold"),
             fg_color="#374151",
             command=self._cancel,
         )
-        self.cancel_button.place(relx=1.0, x=-78, y=10, anchor="ne")
+        self.cancel_button.place(relx=1.0, x=-50, y=10, anchor="ne")
+        self._action_tooltip = _HoverTooltip(
+            self.apply_button,
+            "Apply layout",
+        )
+        self._cancel_tooltip = _HoverTooltip(
+            self.cancel_button,
+            "Cancel changes",
+        )
         self._render()
+
+    @property
+    def action_mode(self):
+        return self._action_mode
+
+    def set_action_mode(self, mode):
+        if mode not in {"apply", "reset"}:
+            raise ValueError("topology action mode is invalid")
+        self._action_mode = mode
+        tooltip = getattr(self, "_action_tooltip", None)
+        if tooltip is not None:
+            tooltip.set_text(
+                "Apply layout" if mode == "apply" else "Reset layout"
+            )
+        return True
 
     def add_client(self, group):
         added = self.state.add_client(group)
@@ -516,6 +594,9 @@ class TopologyEditor(ctk.CTkFrame):
         return self._canvas_geometry().event_grid(event.x, event.y)
 
     def _apply(self):
+        tooltip = getattr(self, "_action_tooltip", None)
+        if tooltip is not None:
+            tooltip._hide()
         if self.on_rescan is not None and self.on_rescan() is False:
             return
         self.apply_current_draft()
@@ -534,9 +615,13 @@ class TopologyEditor(ctk.CTkFrame):
             accepted = self.on_apply(result, candidate) is not False
         if accepted:
             self.state.commit(candidate)
+            self.set_action_mode("reset")
         self._render()
 
     def _cancel(self):
+        tooltip = getattr(self, "_cancel_tooltip", None)
+        if tooltip is not None:
+            tooltip._hide()
         self.state.cancel()
         self._render()
         if self.on_cancel is not None:

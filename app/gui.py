@@ -809,6 +809,7 @@ class ConduitGUI(ctk.CTk):
 
         editor = self.__dict__.get("topology_editor")
         if editor is not None:
+            self._set_topology_action_mode("apply")
             try:
                 server_id = editor.state.active.server_id
                 server_group = WindowsDisplayDiscovery().discover(
@@ -1132,6 +1133,9 @@ class ConduitGUI(ctk.CTk):
                 self._server_stopping = False
         self.server_stop_btn.pack_forget()
         self.server_start_btn.pack(pady=10)
+        editor = self.__dict__.get("topology_editor")
+        if editor is not None:
+            self._set_topology_action_mode("apply")
         self._set_status("Status: Server stopped", "gray")
         self.ensure_visible()
 
@@ -1599,6 +1603,7 @@ class ConduitGUI(ctk.CTk):
             )
             return
         self.topology_editor.state.commit(candidate)
+        self._set_topology_action_mode("reset")
         applied_machine_ids = {
             placed.group.machine_id for placed in candidate.machines
         }
@@ -1633,6 +1638,15 @@ class ConduitGUI(ctk.CTk):
                 {'type': 'topology_cancelled'},
             )
         self._set_status("Status: Layout changes cancelled", "gray")
+
+    def _set_topology_action_mode(self, mode):
+        editor = self.__dict__.get("topology_editor")
+        setter = None if editor is None else getattr(
+            editor,
+            "set_action_mode",
+            None,
+        )
+        return False if setter is None else bool(setter(mode))
 
     def _reconcile_ready_topology_draft(self, server):
         state = self.topology_editor.state

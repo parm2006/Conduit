@@ -283,6 +283,49 @@ class TopologyEditorStateTests(unittest.TestCase):
 
 
 class TopologyEditorApplyFlowTests(unittest.TestCase):
+    def test_editor_uses_compact_fixed_action_glyphs(self):
+        self.assertEqual(TopologyEditor.APPLY_GLYPH, "✓")
+        self.assertEqual(TopologyEditor.CANCEL_GLYPH, "✕")
+        self.assertLessEqual(TopologyEditor.ACTION_BUTTON_WIDTH, CELL_SIZE)
+
+    def test_action_mode_changes_hover_text_without_changing_glyph(self):
+        texts = []
+        editor = TopologyEditor.__new__(TopologyEditor)
+        editor._action_mode = "apply"
+        editor._action_tooltip = type(
+            "Tooltip",
+            (),
+            {"set_text": lambda self, text: texts.append(text)},
+        )()
+
+        editor.set_action_mode("reset")
+
+        self.assertEqual(editor.action_mode, "reset")
+        self.assertEqual(texts, ["Reset layout"])
+
+    def test_successful_synchronous_apply_advances_hidden_action(self):
+        server = machine("server", "ParthPC")
+        state = TopologyEditorState(
+            DraftTopology(
+                "server",
+                (PlacedMachine(server, 0, 0),),
+            ).validate().validated.activate(1)
+        )
+        editor = TopologyEditor.__new__(TopologyEditor)
+        editor.state = state
+        editor.on_apply = lambda result, candidate: True
+        editor._action_mode = "apply"
+        editor._action_tooltip = type(
+            "Tooltip",
+            (),
+            {"set_text": lambda self, text: None},
+        )()
+        editor._render = lambda: None
+
+        editor.apply_current_draft()
+
+        self.assertEqual(editor.action_mode, "reset")
+
     def test_editor_canvas_is_exactly_seven_cells_by_four_cells(self):
         self.assertEqual(TopologyEditor.GRID_WIDTH, CELL_SIZE * 7)
         self.assertEqual(TopologyEditor.GRID_HEIGHT, CELL_SIZE * 4)

@@ -41,6 +41,53 @@ class GuiConnectionLifecycleTests(unittest.TestCase):
         gui._show_client_disconnect_warning = warnings.append
         return gui, hidden, warnings
 
+    def test_server_stop_restores_apply_action_for_next_lifetime(self):
+        modes = []
+        gui = ConduitGUI.__new__(ConduitGUI)
+        gui.server = None
+        gui.topology_editor = SimpleNamespace(
+            set_action_mode=lambda mode: modes.append(mode)
+        )
+        gui._stop_server_display_monitor = lambda: None
+        gui._hide_connection_toasts = lambda: None
+        gui.server_stop_btn = SimpleNamespace(pack_forget=lambda: None)
+        gui.server_start_btn = SimpleNamespace(pack=lambda **kwargs: None)
+        gui._set_status = lambda *args, **kwargs: None
+        gui.ensure_visible = lambda: None
+
+        gui.stop_server()
+
+        self.assertEqual(modes, ["apply"])
+
+    def test_only_successful_apply_advances_action_to_reset(self):
+        modes = []
+        commits = []
+        editor = SimpleNamespace(
+            state=SimpleNamespace(commit=lambda candidate: commits.append(candidate)),
+            set_action_mode=lambda mode: modes.append(mode),
+            _render=lambda: None,
+        )
+        server = SimpleNamespace(
+            session_registry=SimpleNamespace(active_sessions=lambda: ()),
+            control_connected=False,
+        )
+        candidate = SimpleNamespace(
+            machines=(
+                SimpleNamespace(group=SimpleNamespace(machine_id="server")),
+            )
+        )
+        gui = ConduitGUI.__new__(ConduitGUI)
+        gui.server = server
+        gui.topology_editor = editor
+        gui._set_status = lambda *args, **kwargs: None
+
+        gui._finish_topology_apply(server, candidate, False)
+        self.assertEqual(modes, [])
+
+        gui._finish_topology_apply(server, candidate, True)
+        self.assertEqual(modes, ["reset"])
+        self.assertEqual(commits, [candidate])
+
     def test_client_disconnect_button_clears_connection_toasts_silently(self):
         client = Client()
         client.control_connected = False
