@@ -318,6 +318,45 @@ class InputRouter:
             self._pause_requested.clear()
             return True
 
+    def return_to_server_primary(self, reason="shortcut"):
+        ownership_callback = None
+        next_state = None
+        with self._lock:
+            previous = self.state
+            paused = isinstance(previous, Paused)
+            if isinstance(previous, RemoteClient):
+                self._stop_dispatch_locked(previous.session_id)
+                self._release_remote(previous)
+            elif isinstance(previous, Transitioning):
+                self._stop_dispatch_locked(previous.destination_session_id)
+                self._held_keys.clear()
+                self._held_buttons.clear()
+            else:
+                self._held_keys.clear()
+                self._held_buttons.clear()
+            self._cancel_pending_deadline_locked()
+            display_id, center = self.topology.server_primary_center()
+            if not paused:
+                next_state = LocalServer(display_id, center)
+                self.state = next_state
+                if not isinstance(previous, LocalServer):
+                    ownership_callback = self._ownership_changed
+            self._input_effects.release_local_input()
+            restore = (
+                getattr(
+                    self._input_effects,
+                    "restore_paused",
+                    self._input_effects.restore_local,
+                )
+                if paused
+                else self._input_effects.restore_local
+            )
+            restore(center)
+        logger.info("[cursor] Returned to Server primary (%s)", reason)
+        if ownership_callback is not None:
+            ownership_callback(next_state)
+        return True
+
     def _transition(self, edge):
         previous = self.state
         mapping = edge.mapping

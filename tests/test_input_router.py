@@ -472,6 +472,107 @@ class InputRouterTests(unittest.TestCase):
         self.assertIn(("server", "release"), self.log)
         self.assertIn(("server", "local", (960, 540)), self.log)
 
+    def test_return_to_server_releases_remote_input_before_restoring_center(self):
+        self.assertTrue(self.router.handle_edge(
+            "server",
+            "server-primary",
+            "right",
+            0.5,
+            topology_version=7,
+        ))
+        self.assertTrue(acknowledge_latest(
+            self.router,
+            self.sessions["client-1"],
+            self.log,
+        ))
+        self.assertTrue(self.router.forward_key_press({
+            "type": "special",
+            "value": "shift",
+        }))
+        self.assertTrue(self.router.forward_button("left", True))
+        self.log.clear()
+
+        self.assertTrue(self.router.return_to_server_primary())
+
+        self.assertEqual(
+            self.router.state,
+            LocalServer("server-primary", (960, 540)),
+        )
+        remote_releases = [
+            index
+            for index, item in enumerate(self.log)
+            if item[0] == "session-1"
+            and (
+                item[1].get("type") == "key_release"
+                or (
+                    item[1].get("type") == "mouse_click"
+                    and item[1].get("pressed") is False
+                )
+            )
+        ]
+        restore_index = self.log.index(("server", "local", (960, 540)))
+        self.assertEqual(len(remote_releases), 2)
+        self.assertLess(max(remote_releases), restore_index)
+        self.assertEqual(self.router.held_keys, ())
+        self.assertEqual(self.router.held_buttons, ())
+
+    def test_return_to_server_preserves_paused_state(self):
+        self.assertTrue(self.router.pause("apply"))
+        self.log.clear()
+
+        self.assertTrue(self.router.return_to_server_primary())
+
+        self.assertEqual(self.router.state, Paused("apply"))
+        self.assertEqual(self.log, [
+            ("server", "release"),
+            ("server", "local", (960, 540)),
+        ])
+
+    def test_repeated_local_return_uses_actual_server_primary_center(self):
+        topology = DraftTopology(
+            "server",
+            (
+                PlacedMachine(
+                    group(
+                        "server",
+                        display(
+                            "server-secondary",
+                            NativeRect(-1280, 0, 0, 1024),
+                            primary=False,
+                        ),
+                        display(
+                            "server-primary-wide",
+                            NativeRect(0, 0, 1600, 900),
+                        ),
+                    ),
+                    0,
+                    0,
+                ),
+            ),
+        ).validate().validated.activate(8)
+        log = []
+        router = InputRouter(
+            topology,
+            session_for_machine=lambda machine_id: None,
+            input_effects=RecordingInputEffects(log),
+        )
+        self.addCleanup(lambda: router.pause("test cleanup"))
+
+        self.assertTrue(router.return_to_server_primary())
+        self.assertTrue(router.return_to_server_primary())
+
+        self.assertEqual(
+            router.state,
+            LocalServer("server-primary-wide", (800, 450)),
+        )
+        self.assertEqual(
+            [item for item in log if item[:2] == ("server", "local")],
+            [
+                ("server", "local", (800, 450)),
+                ("server", "local", (800, 450)),
+            ],
+        )
+
 
 class AcknowledgedHandoffTests(unittest.TestCase):
     def setUp(self):
