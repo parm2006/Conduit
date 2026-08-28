@@ -228,6 +228,114 @@ class InputDispatcherTests(unittest.TestCase):
         ))
         lane.release.set()
 
+    def test_sustained_thirty_character_rate_has_no_false_overflow(self):
+        lane = self.lanes["session-1"]
+        self.assertTrue(self.dispatcher.start_session("session-1"))
+        for index in range(300):
+            key = {"type": "char", "value": chr(32 + index % 90)}
+            self.assertTrue(self.dispatcher.enqueue_discrete(
+                "session-1",
+                {"type": "key_press", "key": key},
+            ))
+            self.assertTrue(self.dispatcher.enqueue_discrete(
+                "session-1",
+                {"type": "key_release", "key": key},
+            ))
+            self.assertTrue(lane.wait_for_count((index + 1) * 2, 0.2))
+
+        self.assertEqual(len(lane.messages), 600)
+        self.assertEqual(self.failures, [])
+
+    def test_macro_sized_responsive_burst_stays_ordered(self):
+        lane = self.lanes["session-1"]
+        self.assertTrue(self.dispatcher.start_session("session-1"))
+        expected = [
+            {"type": "key_press", "key": {"value": str(index)}}
+            for index in range(200)
+        ]
+        for message in expected:
+            self.assertTrue(self.dispatcher.enqueue_discrete(
+                "session-1",
+                message,
+            ))
+
+        self.assertTrue(lane.wait_for_count(200, 1))
+        self.assertEqual(lane.messages, expected)
+        self.assertEqual(self.failures, [])
+
+    def test_one_thousand_hz_equivalent_movement_stays_exact_and_bounded(self):
+        lane = self.lanes["session-1"]
+        self.assertTrue(self.dispatcher.start_session("session-1"))
+        expected = [(index, -index) for index in range(1000)]
+        for chunk_start in range(0, len(expected), 250):
+            chunk = expected[chunk_start:chunk_start + 250]
+            for dx, dy in chunk:
+                self.assertTrue(self.dispatcher.enqueue_move(
+                    "session-1",
+                    dx,
+                    dy,
+                ))
+            target = chunk_start + len(chunk)
+            with lane.condition:
+                self.assertTrue(lane.condition.wait_for(
+                    lambda: sum(
+                        len(message["deltas"])
+                        for message in lane.messages
+                    ) >= target,
+                    1,
+                ))
+
+        batches = lane.messages
+        self.assertTrue(all(
+            message["type"] == "mouse_move_batch"
+            and len(message["deltas"]) <= 32
+            for message in batches
+        ))
+        self.assertEqual(
+            [tuple(delta) for message in batches for delta in message["deltas"]],
+            expected,
+        )
+        self.assertEqual(self.failures, [])
+
+    def test_blocked_session_isolation_repeats_fifty_times(self):
+        for repetition in range(50):
+            with self.subTest(repetition=repetition):
+                blocked = BlockingLane()
+                responsive = RecordingLane()
+                lanes = {
+                    "blocked": blocked,
+                    "responsive": responsive,
+                }
+                failures = []
+                dispatcher = InputDispatcher(
+                    lane_for_session=lanes.get,
+                    on_failure=lambda session_id, reason: failures.append(
+                        (session_id, reason)
+                    ),
+                )
+                self.assertTrue(dispatcher.start_session("blocked"))
+                self.assertTrue(dispatcher.start_session("responsive"))
+                self.assertTrue(dispatcher.enqueue_discrete(
+                    "blocked",
+                    {"type": "key_press", "key": {"value": "x"}},
+                ))
+                self.assertTrue(blocked.entered.wait(0.2))
+                for index in range(25):
+                    self.assertTrue(dispatcher.enqueue_move(
+                        "blocked",
+                        index,
+                        index,
+                    ))
+                    self.assertTrue(dispatcher.enqueue_discrete(
+                        "responsive",
+                        {"type": "key_press", "key": {"value": str(index)}},
+                    ))
+                self.assertTrue(responsive.wait_for_count(25, 0.2))
+                self.assertEqual(failures, [])
+                dispatcher.stop_all()
+                blocked.release.set()
+                self.assertTrue(blocked.finished.wait(0.2))
+
 
 if __name__ == "__main__":
     unittest.main()
