@@ -1108,7 +1108,7 @@ class ConduitServer:
             getattr(input_handler, "screen_width", 1920) // 2,
             getattr(input_handler, "screen_height", 1080) // 2,
         )
-        effects.restore_local(center)
+        effects.restore_paused(center)
         logger.info("[cursor] Returned to Server primary (shortcut fallback)")
         return True
 

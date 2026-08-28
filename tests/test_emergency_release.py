@@ -201,7 +201,6 @@ class EmergencyReleaseTests(unittest.TestCase):
             "release-injected",
             "stop-capture",
             ("center", 800, 450),
-            "start-edges",
         ])
 
 
