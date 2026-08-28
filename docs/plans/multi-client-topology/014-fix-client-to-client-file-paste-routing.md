@@ -13,6 +13,7 @@
 
 ## Status
 
+- **State**: DONE
 - **Effort**: M
 - **Risk**: MED
 - **Depends on**: 005-land-global-clipboard.md, 006-land-file-relay-and-cluster-commands.md, 013-land-nonblocking-input-dispatch.md
@@ -151,14 +152,14 @@ native.
 
 ## Done criteria
 
-- [ ] A-to-B and B-to-A each target the correct Client with one paste intent.
-- [ ] Same-Client file paste and ordinary clipboard paste remain native.
-- [ ] Server-to-Client and Client-to-Server behavior remains green.
-- [ ] Stale or unresolved identities cannot target the wrong Client.
-- [ ] Real TLS proves intent, manifest exchange, acknowledgement, and file-frame relay in both Client directions.
-- [ ] Focused file tests, full suite, compileall, and whitespace gates pass.
-- [ ] Each numbered Step has an indexed handoff and commits remain narrow.
-- [ ] No files outside the in-scope list change.
+- [x] A-to-B and B-to-A each target the correct Client with one paste intent.
+- [x] Same-Client file paste and ordinary clipboard paste remain native.
+- [x] Server-to-Client and Client-to-Server behavior remains green.
+- [x] Stale or unresolved identities cannot target the wrong Client.
+- [x] Real TLS proves intent, manifest exchange, acknowledgement, and file-frame relay in both Client directions.
+- [x] Focused file tests, full suite, compileall, and whitespace gates pass.
+- [x] Each numbered Step has an indexed handoff and commits remain narrow.
+- [x] No files outside the in-scope list change.
 
 ## STOP conditions
 
