@@ -1,8 +1,8 @@
 """Canonical Conduit release metadata."""
 
 PRODUCT_NAME = "Conduit"
-PRODUCT_VERSION = "5.1.1"
-FILE_VERSION = (5, 1, 1, 0)
+PRODUCT_VERSION = "6.0"
+FILE_VERSION = (6, 0, 0, 0)
 FILE_VERSION_STRING = ".".join(str(part) for part in FILE_VERSION)
 SOURCE_URL = "https://github.com/parm2006/Conduit"
 RELEASE_SOURCE_URL = f"{SOURCE_URL}/tree/v{PRODUCT_VERSION}"
