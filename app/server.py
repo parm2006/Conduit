@@ -158,6 +158,7 @@ class ConduitServer:
         self.global_hotkey_monitor = GlobalHotkeyMonitor(
             on_emergency_exit=self._request_app_shutdown,
             on_reload_connection=self._reload_connection,
+            on_return_to_server=self._return_cursor_to_server,
         )
         
         self.control_connected = False
@@ -1091,6 +1092,25 @@ class ConduitServer:
             callback()
             return
         self._on_emergency_exit()
+
+    def _return_cursor_to_server(self):
+        router = getattr(self, "input_router", None)
+        if router is not None:
+            return bool(router.return_to_server_primary("shortcut"))
+
+        input_handler = self.input_handler
+        release = getattr(input_handler, "release_all_injected_input", None)
+        if release is not None:
+            release()
+        effects = _ServerInputEffects(self)
+        effects.release_local_input()
+        center = (
+            getattr(input_handler, "screen_width", 1920) // 2,
+            getattr(input_handler, "screen_height", 1080) // 2,
+        )
+        effects.restore_local(center)
+        logger.info("[cursor] Returned to Server primary (shortcut fallback)")
+        return True
 
     def prepare_app_shutdown(self):
         self._release_forwarded_keys()

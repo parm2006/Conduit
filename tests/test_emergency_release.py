@@ -149,6 +149,61 @@ class EmergencyReleaseTests(unittest.TestCase):
             ],
         )
 
+    def test_server_return_shortcut_delegates_without_disconnecting_sessions(self):
+        calls = []
+
+        class Router:
+            def return_to_server_primary(self, reason="shortcut"):
+                calls.append(reason)
+                return True
+
+        server = ConduitServer.__new__(ConduitServer)
+        server.input_router = Router()
+        server.control_network = RecordingNetwork()
+        server.data_network = RecordingNetwork()
+
+        self.assertTrue(server._return_cursor_to_server())
+
+        self.assertEqual(calls, ["shortcut"])
+        self.assertFalse(server.control_network.disconnected)
+        self.assertFalse(server.data_network.disconnected)
+
+    def test_server_return_shortcut_without_router_releases_then_centers(self):
+        events = []
+
+        class Input:
+            screen_width = 1600
+            screen_height = 900
+
+            def release_all_injected_input(self):
+                events.append("release-injected")
+
+            def stop_keyboard_capture(self):
+                events.append("stop-capture")
+
+            def inject_position(self, x, y):
+                events.append(("center", x, y))
+
+            def start_edge_detection(self):
+                events.append("start-edges")
+
+        server = ConduitServer.__new__(ConduitServer)
+        server.input_router = None
+        server.input_handler = Input()
+        server.pressed_keys = {"ctrl_l", "space"}
+        server.on_capture_stop = None
+        server.routing_suspended = False
+
+        self.assertTrue(server._return_cursor_to_server())
+
+        self.assertEqual(server.pressed_keys, set())
+        self.assertEqual(events, [
+            "release-injected",
+            "stop-capture",
+            ("center", 800, 450),
+            "start-edges",
+        ])
+
 
 if __name__ == "__main__":
     unittest.main()
