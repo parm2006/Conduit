@@ -21,6 +21,7 @@
 
 ## Status
 
+- **Status**: DONE (2026-08-27)
 - **Effort**: L
 - **Risk**: HIGH
 - **Depends on**: 012-land-acknowledged-cursor-handoff.md
@@ -180,14 +181,14 @@ the real three-PC rows and measured 50-crossing deadline evidence.
 
 ## Done criteria
 
-- [ ] No remote mouse/key/button/scroll callback waits for a socket write.
-- [ ] Movement batches preserve every original relative delta and edge check.
-- [ ] Discrete input stays FIFO and bounded without normal-load false failure.
-- [ ] One blocked Client cannot delay Client 2 or heartbeat/session teardown.
-- [ ] Failure enters the existing suspension/reset path exactly once.
-- [ ] Focused, 50-repeat stress, system, security, full, compile, and whitespace gates pass.
-- [ ] Each large Step has an indexed handoff; every commit is green and narrow.
-- [ ] No files outside the in-scope list change.
+- [x] No remote mouse/key/button/scroll callback waits for a socket write.
+- [x] Movement batches preserve every original relative delta and edge check.
+- [x] Discrete input stays FIFO and bounded without normal-load false failure.
+- [x] One blocked Client cannot delay Client 2 or heartbeat/session teardown.
+- [x] Failure enters the existing suspension/reset path exactly once.
+- [x] Focused, 50-repeat stress, system, security, full, compile, and whitespace gates pass.
+- [x] Each large Step has an indexed handoff; every commit is green and narrow.
+- [x] No files outside the in-scope list change.
 
 ## STOP conditions
 

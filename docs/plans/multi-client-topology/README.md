@@ -17,7 +17,7 @@ This effort expands Conduit into one fixed Server hub with at most two simultane
 | [010](010-stop-routing-and-reset-topology.md) | Stop routing on Client loss and rebuild topology through Reset | L | 007 | DONE |
 | [011](011-fix-dpi-grid-rendering.md) | Keep the seven-by-four topology grid fitted at every Windows DPI | M | 010 | DONE |
 | [012](012-land-acknowledged-cursor-handoff.md) | Commit cursor ownership only after Client acknowledgement | L | 010 | DONE |
-| [013](013-land-nonblocking-input-dispatch.md) | Keep every remote input write off GUI and hook threads | L | 012 | TODO |
+| [013](013-land-nonblocking-input-dispatch.md) | Keep every remote input write off GUI and hook threads | L | 012 | DONE |
 
 Status values: TODO | IN PROGRESS | DONE | BLOCKED (one-line reason) | SUPERSEDED (one-line pointer).
 
@@ -49,6 +49,7 @@ unless the user explicitly requests otherwise.
 
 ## Reconciliation log
 
+- **2026-08-27:** Completed Plan 013. Every remote mouse, key, button, and scroll write now runs through an isolated bounded per-Client dispatcher after acknowledged ownership; GUI and hook callbacks only enqueue. Movement preserves every original relative delta in ordered batches of at most 32, discrete input remains FIFO with independent bounds, and one blocked Client cannot delay another Client or teardown. The focused 67-test stress suite passed 50 consecutive process runs; real TLS proves ordered batched motion and abrupt active-destination recovery without blocking the caller. All 778 tests, compileall, and `diff --check` pass. Next: resume Plan 008 physical Wi-Fi-loss acceptance.
 - **2026-08-27:** Completed Plan 012. Cursor ownership now waits for an authenticated, topology/session/machine-scoped Client ACK; silent targets fail back within 750 ms, close their ghost session, and enter the existing suspension/Reset path. Deterministic race tests include 50 ACK/timeout contentions, and the real-TLS seam proves Server→Client, Client→Client, Client→Server, and withheld-ACK recovery. All 762 tests pass. Next: 013.
 - **2026-08-27:** Physical testing exposed a pre-heartbeat Wi-Fi-loss race: the Server treated local `sendall` success as remote cursor ownership and allowed Tk callbacks to block on later input writes. Added Plans 012–013 from the reviewed [acknowledged cursor handoff design](../../superpowers/specs/2026-08-27-acknowledged-cursor-handoff-design.md). Plan 008 now requires abrupt-loss and measured handoff-timing rows after both land. Next: 012.
 - **2026-08-27:** Added a mandatory handoff checkpoint after every numbered Step in Plans 002–011 so each subplan can be resumed without relying on conversation history.
