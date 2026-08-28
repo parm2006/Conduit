@@ -268,6 +268,9 @@ class MultiClientTlsSystemTests(unittest.TestCase):
             input_effects=effects,
         )
         received = {bundle.machine_id: [] for bundle in self.bundles}
+        received_motion = {
+            bundle.machine_id: [] for bundle in self.bundles
+        }
 
         self.control_server.register_callback(
             "switch_ack",
@@ -290,6 +293,12 @@ class MultiClientTlsSystemTests(unittest.TestCase):
                     }),
                 )[-1],
             )
+            bundle.control.register_callback(
+                "mouse_move_batch",
+                lambda data, machine_id=bundle.machine_id: received_motion[
+                    machine_id
+                ].extend(tuple(delta) for delta in data["deltas"]),
+            )
 
         first_session = self._session_for_machine("client-1")
         second_session = self._session_for_machine("client-2")
@@ -304,6 +313,15 @@ class MultiClientTlsSystemTests(unittest.TestCase):
             lambda: router.active_session_id == first_session
         ))
         self.assertEqual(effects.captures, [first_session])
+
+        expected_motion = [(index, -index) for index in range(1, 71)]
+        for dx, dy in expected_motion:
+            self.assertTrue(router.forward_mouse_move(dx, dy))
+        self.assertTrue(_wait_for(
+            lambda: len(received_motion["client-1"]) == len(expected_motion)
+        ))
+        self.assertEqual(received_motion["client-1"], expected_motion)
+        self.assertEqual(received_motion["client-2"], [])
 
         self.assertTrue(router.handle_edge(
             "client-1",
@@ -341,6 +359,74 @@ class MultiClientTlsSystemTests(unittest.TestCase):
             {machine_id: len(messages) for machine_id, messages in received.items()},
             {"client-1": 2, "client-2": 1},
         )
+
+    def test_abrupt_active_tls_destination_loss_does_not_block_input_caller(self):
+        topology = _routing_candidate()
+        effects = _RoutingInputEffects()
+        failures = []
+        failed = threading.Event()
+
+        def on_failure(session_id, reason):
+            failures.append((session_id, reason))
+            failed.set()
+
+        router = InputRouter(
+            topology,
+            session_for_machine=self._ready_session_for_machine,
+            input_effects=effects,
+            handoff_failed=on_failure,
+        )
+        self.control_server.register_callback(
+            "switch_ack",
+            lambda data: router.acknowledge_handoff(
+                handoff_id=data.get("handoff_id"),
+                session_id=data.get("session_id"),
+                machine_id=data.get("peer_identity"),
+                topology_version=data.get("topology_version"),
+            ),
+        )
+        first = next(
+            bundle for bundle in self.bundles if bundle.machine_id == "client-1"
+        )
+        first.control.register_callback(
+            "switch",
+            lambda data: first.control.send_message({
+                "type": "switch_ack",
+                "handoff_id": data["handoff_id"],
+                "topology_version": data["topology_version"],
+            }),
+        )
+
+        self.assertTrue(router.handle_edge(
+            "server",
+            "server-primary",
+            "left",
+            0.5,
+            topology_version=7,
+        ))
+        self.assertTrue(_wait_for(
+            lambda: router.active_session_id == first.session_id
+        ))
+        self.assertTrue(first.control.disconnect())
+        self.assertTrue(_wait_for(
+            lambda: self.control_server.connection(first.session_id) is None
+        ))
+
+        started = time.monotonic()
+        self.assertTrue(router.forward_mouse_move(9, -4))
+        elapsed = time.monotonic() - started
+
+        self.assertLess(elapsed, 0.2)
+        self.assertTrue(failed.wait(1))
+        self.assertEqual(
+            failures,
+            [(
+                first.session_id,
+                "input dispatch failed: input send failed",
+            )],
+        )
+        self.assertIsInstance(router.state, LocalServer)
+        self.assertEqual(effects.restores[-1], (960, 540))
 
     def test_silent_real_tls_destination_recovers_before_heartbeat_timeout(self):
         topology = _routing_candidate()
