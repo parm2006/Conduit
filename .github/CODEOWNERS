@@ -1,8 +1,6 @@
 # Release and trust policy
-/CODE_SIGNING_POLICY.md @parm2006
 /PRIVACY.md @parm2006
 /.github/workflows/ @parm2006
-/.signpath/ @parm2006
 /installer/ @parm2006
 /scripts/build_release.ps1 @parm2006
 /Conduit.spec @parm2006

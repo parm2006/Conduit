@@ -45,9 +45,9 @@ Conduit uses TCP ports 28903-28905. The installer creates a managed firewall rul
 
 ## Code Signing and Privacy
 
-Conduit is applying to the SignPath Foundation open-source program to use SignPath.io for future official release signing. The current Conduit 6.0.1 installer and earlier public binaries are unsigned; do not interpret the application as an existing signature. If the application is approved and the integration becomes operational, signed releases will be identified in their release notes and covered by the [code-signing policy](CODE_SIGNING_POLICY.md).
+Conduit release binaries and installers are unsigned open-source community builds. They do not include an Authenticode digital signature.
 
-Downloads are published on the [GitHub Releases page](https://github.com/parm2006/Conduit/releases/latest). Verify downloaded files against the release's [SHA-256 checksums](https://github.com/parm2006/Conduit/releases/latest/download/SHA256SUMS.txt). Conduit's data handling is described in the [privacy policy](PRIVACY.md).
+Downloads are published on the [GitHub Releases page](https://github.com/parm2006/Conduit/releases/latest). Always verify downloaded files against the release's [SHA-256 checksums](https://github.com/parm2006/Conduit/releases/latest/download/SHA256SUMS.txt). Conduit's data handling is described in the [privacy policy](PRIVACY.md).
 
 ---
 

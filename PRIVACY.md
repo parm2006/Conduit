@@ -39,7 +39,7 @@ Operational logs or screenshots may contain network addresses, machine names, lo
 
 ## Third-party services
 
-The Conduit application does not need a project-operated cloud service. Downloading Conduit or interacting with its source, issues, and releases through GitHub is governed by GitHub's own privacy practices. Future signed releases may use SignPath for build-artifact signing; SignPath receives the release artifact and build metadata required to perform that signing, not live application usage or clipboard data.
+The Conduit application does not need a project-operated cloud service. Downloading Conduit or interacting with its source, issues, and releases through GitHub is governed by GitHub's own privacy practices.
 
 ## Changes and contact
 

@@ -17,5 +17,6 @@ docs/
 features.md
 plan.md
 .worktrees/
+.superpowers/
 *.log
 *.tmp
