@@ -63,6 +63,9 @@ class _Input:
     def stop(self):
         self.events.append("input-stop")
 
+    def stop_keyboard_capture(self):
+        self.events.append("keyboard-stop")
+
     def inject_position(self, x, y):
         self.events.append(("center", x, y))
 
@@ -462,6 +465,32 @@ class AtomicTopologyApplyTests(unittest.TestCase):
         completed = threading.Event()
         server = self._server(events)
         candidate = _topology()
+
+        accepted = server.apply_topology_candidate(
+            candidate,
+            on_persist=lambda topology: True,
+            on_complete=lambda success: completed.set(),
+            timeout=0.05,
+            center_cursor=False,
+        )
+
+        self.assertTrue(accepted)
+        self.assertTrue(completed.wait(1))
+        self.assertFalse(any(isinstance(e, tuple) and e[0] == "center" for e in events))
+
+    def test_apply_topology_candidate_without_centering_cursor_with_active_router(self):
+        from app.server import _ServerInputEffects
+        from app.input_router import InputRouter
+        events = []
+        completed = threading.Event()
+        server = self._server(events)
+        candidate = _topology()
+        effects = _ServerInputEffects(server)
+        server.input_router = InputRouter(
+            candidate,
+            session_for_machine=lambda _m: None,
+            input_effects=effects,
+        )
 
         accepted = server.apply_topology_candidate(
             candidate,

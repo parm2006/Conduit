@@ -66,7 +66,8 @@ class _ServerInputEffects:
         if callable(stop_mouse_buttons):
             stop_mouse_buttons()
         self._notify_capture_ui(self.server.on_capture_stop, "stop")
-        self.server.input_handler.inject_position(*position)
+        if position is not None:
+            self.server.input_handler.inject_position(*position)
         if start_edges and not getattr(self.server, "routing_suspended", False):
             self.server.input_handler.start_edge_detection()
 
