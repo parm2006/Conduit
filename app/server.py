@@ -48,6 +48,9 @@ class _ServerInputEffects:
         if getattr(self.server, "routing_suspended", False):
             return False
         self.server.input_handler.start_keyboard_capture()
+        start_mouse_buttons = getattr(self.server.input_handler, "start_mouse_button_capture", None)
+        if callable(start_mouse_buttons):
+            start_mouse_buttons()
         self._notify_capture_ui(self.server.on_capture_start, "start")
         return True
 
@@ -59,6 +62,9 @@ class _ServerInputEffects:
 
     def _restore_local(self, position, *, start_edges):
         self.server.input_handler.stop_keyboard_capture()
+        stop_mouse_buttons = getattr(self.server.input_handler, "stop_mouse_button_capture", None)
+        if callable(stop_mouse_buttons):
+            stop_mouse_buttons()
         self._notify_capture_ui(self.server.on_capture_stop, "stop")
         self.server.input_handler.inject_position(*position)
         if start_edges and not getattr(self.server, "routing_suspended", False):

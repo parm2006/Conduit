@@ -2227,6 +2227,8 @@ class ConduitGUI(ctk.CTk):
 
     def on_overlay_press(self, event):
         if not self.server: return
+        if getattr(getattr(self.server, "input_handler", None), "mouse_button_listener", None):
+            return
         button_map = {1: 'left', 2: 'middle', 3: 'right'}
         btn = button_map.get(event.num)
         if btn:
@@ -2234,6 +2236,8 @@ class ConduitGUI(ctk.CTk):
 
     def on_overlay_release(self, event):
         if not self.server: return
+        if getattr(getattr(self.server, "input_handler", None), "mouse_button_listener", None):
+            return
         button_map = {1: 'left', 2: 'middle', 3: 'right'}
         btn = button_map.get(event.num)
         if btn:
@@ -2241,6 +2245,8 @@ class ConduitGUI(ctk.CTk):
 
     def on_overlay_scroll(self, event):
         if not self.server: return
+        if getattr(getattr(self.server, "input_handler", None), "mouse_button_listener", None):
+            return
         # Windows Tkinter reports scroll in event.delta (usually multiples of 120)
         dy = 1 if event.delta > 0 else -1
         self.server.on_mouse_scroll(0, dy)

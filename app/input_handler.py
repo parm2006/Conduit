@@ -23,6 +23,16 @@ class TopologyEdgeRegion:
     destination_rect: object
 
 
+BUTTON_NAME_ALIASES = {
+    'back': 'x1',
+    'forward': 'x2',
+    'button4': 'x1',
+    'button5': 'x2',
+    'xbutton1': 'x1',
+    'xbutton2': 'x2',
+}
+
+
 class WindowsSpecialKeyInjector:
     KEYEVENTF_EXTENDEDKEY = 0x0001
     KEYEVENTF_KEYUP = 0x0002
@@ -77,6 +87,7 @@ class InputHandler:
     def __init__(self):
         self.mouse = MouseController()
         self.mouse_listener = None
+        self.mouse_button_listener = None
         self.keyboard = KeyboardController()
         self.special_key_injector = (
             WindowsSpecialKeyInjector() if os.name == "nt" else None
@@ -169,7 +180,31 @@ class InputHandler:
         if self.mouse_listener:
             self.mouse_listener.stop()
             self.mouse_listener = None
+        self.stop_mouse_button_capture()
         self.stop_keyboard_capture()
+
+    def start_mouse_button_capture(self):
+        self.stop_mouse_button_capture()
+        self.mouse_button_listener = MouseListener(
+            on_click=self._on_mouse_click,
+            on_scroll=self._on_mouse_scroll,
+        )
+        self.mouse_button_listener.start()
+        self.mouse_button_listener.wait()
+
+    def stop_mouse_button_capture(self):
+        listener = getattr(self, 'mouse_button_listener', None)
+        if listener is not None:
+            listener.stop()
+            self.mouse_button_listener = None
+
+    def _on_mouse_click(self, x, y, button, pressed):
+        btn_name = getattr(button, 'name', None) or str(button)
+        btn_name = BUTTON_NAME_ALIASES.get(btn_name, btn_name)
+        self.trigger('mouse_click', btn_name, pressed)
+
+    def _on_mouse_scroll(self, x, y, dx, dy):
+        self.trigger('mouse_scroll', dx, dy)
 
     def start_keyboard_capture(self):
         self.stop_keyboard_capture()
@@ -266,9 +301,28 @@ class InputHandler:
         self.trigger('key_release', self._serialize_key(key))
         self._return_shortcut.release(key)
 
+    def _is_native_key_candidate(self, virtual_key, key):
+        if not (type(virtual_key) is int and 0 <= virtual_key <= 0xFF):
+            return False
+        # Numpad keys (VK_NUMPAD0..VK_DIVIDE)
+        if 0x60 <= virtual_key <= 0x6F:
+            return True
+        # Extended function keys (VK_F13..VK_F24)
+        if 0x7C <= virtual_key <= 0x87:
+            return True
+        # Browser, Media, and App Launch keys
+        if 0xA6 <= virtual_key <= 0xB7:
+            return True
+        # Macro / side buttons with vk but no character representation or standard pynput name
+        char = getattr(key, 'char', None)
+        name = getattr(key, 'name', None)
+        if char is None and name is None:
+            return True
+        return False
+
     def _serialize_key(self, key):
         virtual_key = getattr(key, 'vk', None)
-        if type(virtual_key) is int and 0x60 <= virtual_key <= 0x6F:
+        if self._is_native_key_candidate(virtual_key, key):
             scan_code = getattr(key, '_scan', 0)
             if type(scan_code) is not int or not 0 <= scan_code <= 0xFF:
                 scan_code = 0
@@ -340,14 +394,15 @@ class InputHandler:
         return observed
 
     def inject_click(self, button_name, pressed):
-        btn = getattr(Button, button_name, None)
+        normalized_name = BUTTON_NAME_ALIASES.get(button_name, button_name)
+        btn = getattr(Button, normalized_name, None)
         if btn:
             if pressed:
                 self.mouse.press(btn)
-                self._remember_injected_button(button_name)
+                self._remember_injected_button(normalized_name)
             else:
                 self.mouse.release(btn)
-                self._forget_injected_button(button_name)
+                self._forget_injected_button(normalized_name)
 
     def inject_scroll(self, dx, dy):
         self.mouse.scroll(dx, dy)
@@ -460,7 +515,7 @@ class InputHandler:
         extended = key_data.get('extended')
         if not (
             type(virtual_key) is int
-            and 0x60 <= virtual_key <= 0x6F
+            and 0 <= virtual_key <= 0xFF
             and type(scan_code) is int
             and 0 <= scan_code <= 0xFF
             and isinstance(extended, bool)
@@ -485,4 +540,8 @@ class InputHandler:
             return getattr(Key, val, None)
         elif k_type == 'vk':
             return KeyCode.from_vk(val)
+        elif k_type == 'native_key':
+            vk = key_data.get('vk')
+            if vk is not None:
+                return KeyCode.from_vk(vk)
         return None
