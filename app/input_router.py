@@ -292,7 +292,7 @@ class InputRouter:
         self._pause_requested.set()
         return True
 
-    def pause(self, reason):
+    def pause(self, reason, restore_center=None):
         self.request_pause(reason)
         with self._lock:
             if isinstance(self.state, Paused):
@@ -311,7 +311,12 @@ class InputRouter:
                 "restore_paused",
                 self._input_effects.restore_local,
             )
-            restore(center)
+            should_restore_center = (
+                isinstance(previous, (RemoteClient, Transitioning))
+                if restore_center is None
+                else bool(restore_center)
+            )
+            restore(center if should_restore_center else None)
             self.state = Paused(str(reason))
             return True
 

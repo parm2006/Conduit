@@ -1622,6 +1622,7 @@ class ConduitGUI(ctk.CTk):
                         success,
                     ),
                 ),
+                center_cursor=False,
             )
             return False
         try:

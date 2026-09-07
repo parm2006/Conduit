@@ -383,7 +383,7 @@ class ConduitServer:
     def _install_topology(self, topology):
         previous_router = getattr(self, 'input_router', None)
         if previous_router is not None:
-            previous_router.pause("topology changed")
+            previous_router.pause("topology changed", restore_center=False)
         self.active_topology = topology
         self.input_handler.configure_topology_edges(topology, topology.server_id)
         self.input_router = InputRouter(
@@ -485,6 +485,7 @@ class ConduitServer:
         on_persist,
         on_complete,
         timeout=3.0,
+        center_cursor=None,
     ):
         with self._topology_ack_lock:
             if getattr(self, "_topology_transaction", None) is not None:
@@ -504,20 +505,30 @@ class ConduitServer:
         self.input_handler.stop()
         if self.on_capture_stop:
             self.on_capture_stop()
-        server_group = next(
-            placed.group
-            for placed in topology.machines
-            if placed.group.machine_id == topology.server_id
-        )
-        primary = next(
-            display
-            for display in server_group.displays
-            if display.enabled and display.primary
-        )
-        self.input_handler.inject_position(
-            (primary.rect.left + primary.rect.right) // 2,
-            (primary.rect.top + primary.rect.bottom) // 2,
-        )
+        if center_cursor is None:
+            router = getattr(self, 'input_router', None)
+            should_center = (
+                router is not None
+                and getattr(router, 'active_session_id', None) is not None
+            ) if router is not None else True
+        else:
+            should_center = bool(center_cursor)
+
+        if should_center:
+            server_group = next(
+                placed.group
+                for placed in topology.machines
+                if placed.group.machine_id == topology.server_id
+            )
+            primary = next(
+                display
+                for display in server_group.displays
+                if display.enabled and display.primary
+            )
+            self.input_handler.inject_position(
+                (primary.rect.left + primary.rect.right) // 2,
+                (primary.rect.top + primary.rect.bottom) // 2,
+            )
         if clipboard_hub is not None:
             clipboard_hub.pause_delivery()
         file_router = getattr(self, "cluster_file_router", None)
