@@ -3,6 +3,7 @@ __pycache__/
 *.pyc
 *.exp
 *.lib
+*.old
 .env
 known_hosts.json  
 cert.pem

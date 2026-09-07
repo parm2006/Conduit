@@ -223,6 +223,24 @@ class ServerVideoReceiver:
             # Option A: Direct 256-bit CSPRNG key delivered over TLS Control Lane
             stream_key = secrets.token_bytes(32)
 
+            # Resolve server IP on the network interface used by this client
+            server_ip = None
+            if hasattr(self.server.control_network, 'connection'):
+                conn = self.server.control_network.connection(selection.session_id)
+                if conn and getattr(conn, 'sock', None):
+                    try:
+                        server_ip = conn.sock.getsockname()[0]
+                    except Exception:
+                        pass
+            if not server_ip or server_ip in ('0.0.0.0', ''):
+                try:
+                    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                    s.connect(('8.8.8.8', 80))
+                    server_ip = s.getsockname()[0]
+                    s.close()
+                except Exception:
+                    server_ip = '127.0.0.1'
+
             def on_native_event(code, msg):
                 if code == STREAMER_EVENT_FIRST_FRAME:
                     self.last_frame_at = time.monotonic()
@@ -251,6 +269,7 @@ class ServerVideoReceiver:
                 'type': 'stream_start',
                 'session_id': selection.session_id,
                 'stream_id': self._native_stream_id,
+                'server_ip': server_ip,
                 'udp_port': self.stream_port,
                 'display_id': selection.display_id,
                 'stream_key': base64.b64encode(stream_key).decode('ascii'),
@@ -340,10 +359,13 @@ class ServerVideoReceiver:
         selection = self.current_selection()
         if selection is None or selection != self.selection:
             return False
+        elapsed = now - self.last_frame_at if self.last_frame_at > 0.0 else now - self.started_at
+        timeout = FRAME_TIMEOUT if self.last_frame_at > 0.0 else 2.5
         if getattr(self, '_native_active', False):
-            return now - max(self.last_frame_at, self.started_at) >= FRAME_TIMEOUT
-        return (selection == self.failed_selection
-                or now - max(self.last_frame_at, self.started_at) >= FRAME_TIMEOUT)
+            return elapsed >= timeout
+        if selection == self.failed_selection:
+            return True
+        return elapsed >= timeout
 
     def _run(self):
         while not self._stop.is_set():
@@ -376,11 +398,16 @@ class ServerVideoReceiver:
                 while (not self._stop.is_set()
                        and self.current_selection() == selection
                        and self._native_active):
-                    if time.monotonic() - self.last_frame_at >= FRAME_TIMEOUT:
+                    elapsed = (time.monotonic() - self.last_frame_at
+                               if self.last_frame_at > 0.0
+                               else time.monotonic() - self.started_at)
+                    timeout = FRAME_TIMEOUT if self.last_frame_at > 0.0 else 2.5
+                    if elapsed >= timeout:
                         logger.warning("Native stream stalled, falling back to GDI/JPEG")
                         self._stop_native()
                         self._native_failed_selection = selection
                         self.started_at = time.monotonic()
+                        self.last_frame_at = 0.0
                         break
                     self._stop.wait(0.02)
                 if self._stop.is_set() or self.current_selection() != selection:

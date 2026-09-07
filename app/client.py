@@ -1231,18 +1231,30 @@ class ConduitClient:
                 raise ValueError("stream key must be 32 bytes")
 
             display_index = self._get_display_index(display_id)
-            server_ip = None
-            if hasattr(self.control_network, 'sock') and self.control_network.sock:
-                try:
-                    server_ip = self.control_network.sock.getpeername()[0]
-                except Exception:
-                    pass
+            server_ip = data.get('server_ip')
+            if not server_ip:
+                if hasattr(self.control_network, 'sock') and self.control_network.sock:
+                    try:
+                        server_ip = self.control_network.sock.getpeername()[0]
+                    except Exception:
+                        pass
+            if not server_ip:
+                server_ip = getattr(self.control_network, 'host', None)
             if not server_ip:
                 server_ip = getattr(self, 'host', '127.0.0.1')
 
             self._stop_native_sender()
 
-            sender = NativeStreamerSender()
+            def on_native_sender_event(code, msg):
+                from app.native_streamer import STREAMER_EVENT_ERROR, STREAMER_EVENT_STARTED, STREAMER_EVENT_STOPPED
+                if code == STREAMER_EVENT_ERROR:
+                    logger.warning("Native streamer sender error (%d): %s", code, msg)
+                elif code == STREAMER_EVENT_STARTED:
+                    logger.info("Native streamer sender started: %s", msg)
+                elif code == STREAMER_EVENT_STOPPED:
+                    logger.info("Native streamer sender stopped: %s", msg)
+
+            sender = NativeStreamerSender(on_event=on_native_sender_event)
             started = sender.start(
                 display_index=display_index,
                 target_ip=server_ip,

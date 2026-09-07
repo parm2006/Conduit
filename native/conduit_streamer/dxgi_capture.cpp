@@ -183,7 +183,7 @@ bool DxgiCapture::AcquireFrame(CapturedFrame* out_frame, uint32_t timeout_ms) {
     out_frame->cursor_visible = m_cursor_visible;
 
     bool copied = false;
-    if (frameInfo.LastPresentTime.QuadPart != 0 && desktopResource) {
+    if (desktopResource) {
         ComPtr<ID3D11Texture2D> acquiredTex;
         hr = desktopResource.As(&acquiredTex);
         if (SUCCEEDED(hr) && acquiredTex && m_shared_texture) {
@@ -192,6 +192,8 @@ bool DxgiCapture::AcquireFrame(CapturedFrame* out_frame, uint32_t timeout_ms) {
             out_frame->has_new_frame = true;
             copied = true;
         }
+        acquiredTex.Reset();
+        desktopResource.Reset();
     }
 
     m_duplication->ReleaseFrame();

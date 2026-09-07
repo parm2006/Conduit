@@ -167,7 +167,7 @@ static void StreamerSenderLoop(StreamerSenderState* state) {
     int init_rc = state->capture.Initialize(state->display_index);
     if (init_rc != 0) {
         char err[128];
-        snprintf(err, sizeof(err), "DxgiCapture initialize failed with code %d", init_rc);
+        snprintf(err, sizeof(err), "DxgiCapture initialize failed with code 0x%08X", (unsigned int)init_rc);
         state->Notify(STREAMER_EVENT_ERROR, err);
         MFShutdown();
         state->running = false;
