@@ -13,6 +13,7 @@ from enum import Enum
 
 from app.crypto import load_identity
 from app.ports import DEFAULT_BASE_PORT
+from app.listener_socket import configure_listener_socket
 from app.safe_errors import error_name, public_error_message
 from app.machine_identity import windows_machine_id
 from app.session import (
@@ -486,9 +487,10 @@ class NetworkServer:
                 self.connections.pop(connection.session_id, None)
 
     def start(self):
+        server_sock = None
         try:
             server_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            server_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            configure_listener_socket(server_sock)
             server_sock.bind((self.host, self.port))
             server_sock.listen(8)
             server_sock.settimeout(0.2)
@@ -507,6 +509,8 @@ class NetworkServer:
             )
             return True
         except Exception as error:
+            if server_sock is not None:
+                self._close_socket(server_sock)
             logger.error(
                 "Failed to start %s server (%s)", self.role, error_name(error)
             )

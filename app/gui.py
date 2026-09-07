@@ -943,7 +943,8 @@ class ConduitGUI(ctk.CTk):
         else:
             self._set_status(
                 "Status: Could not start server\n"
-                "Check whether the selected port is already in use.",
+                "Close any other Conduit server (including the installed app), "
+                "or choose a different port.",
                 "red",
             )
 

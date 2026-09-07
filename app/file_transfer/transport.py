@@ -6,6 +6,7 @@ import threading
 import logging
 
 from app.crypto import load_identity
+from app.listener_socket import configure_listener_socket
 from app.ports import DEFAULT_FILE_PORT
 from app.network import _tls_client_context
 from app.machine_identity import windows_machine_id
@@ -393,9 +394,10 @@ class FileLaneServer:
                 self.connections.pop(connection.session_id, None)
 
     def start(self):
+        server_sock = None
         try:
             server_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            server_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            configure_listener_socket(server_sock)
             server_sock.bind((self.host, self.port))
             server_sock.listen(1)
             server_sock.settimeout(0.2)
@@ -407,6 +409,8 @@ class FileLaneServer:
             logger.info("[file-lane] Server listening on %s:%d", self.host, self.port)
             return True
         except OSError as error:
+            if server_sock is not None:
+                self._close(server_sock)
             logger.error("[file-lane] Failed to start server (%s)", error)
             self.stop()
             return False
