@@ -74,6 +74,9 @@ def get_streamer_dll():
         dll.streamer_sender_destroy.restype = None
         dll.streamer_sender_destroy.argtypes = [ctypes.c_void_p]
 
+        dll.streamer_sender_get_frame_count.restype = ctypes.c_uint64
+        dll.streamer_sender_get_frame_count.argtypes = [ctypes.c_void_p]
+
         # Receiver API
         dll.streamer_receiver_create.restype = ctypes.c_void_p
         dll.streamer_receiver_create.argtypes = [
@@ -102,6 +105,9 @@ def get_streamer_dll():
 
         dll.streamer_receiver_destroy.restype = None
         dll.streamer_receiver_destroy.argtypes = [ctypes.c_void_p]
+
+        dll.streamer_receiver_get_frame_count.restype = ctypes.c_uint64
+        dll.streamer_receiver_get_frame_count.argtypes = [ctypes.c_void_p]
 
         _DLL = dll
         return _DLL
@@ -166,6 +172,11 @@ class NativeStreamerSender:
     def request_keyframe(self):
         return self._dll.streamer_sender_request_keyframe(self._handle) == 0
 
+    def get_frame_count(self) -> int:
+        if self._handle and hasattr(self._dll, "streamer_sender_get_frame_count"):
+            return int(self._dll.streamer_sender_get_frame_count(self._handle))
+        return 0
+
     def stop(self):
         if self._handle:
             self._dll.streamer_sender_stop(self._handle)
@@ -211,6 +222,11 @@ class NativeStreamerReceiver:
 
     def resize(self, width, height):
         return self._dll.streamer_receiver_resize(self._handle, int(width), int(height)) == 0
+
+    def get_frame_count(self) -> int:
+        if self._handle and hasattr(self._dll, "streamer_receiver_get_frame_count"):
+            return int(self._dll.streamer_receiver_get_frame_count(self._handle))
+        return 0
 
     def stop(self):
         if self._handle:

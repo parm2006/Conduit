@@ -42,8 +42,12 @@ STREAMER_API void streamer_sender_destroy(StreamerSenderHandle handle);
 STREAMER_API StreamerReceiverHandle streamer_receiver_create(HWND target_hwnd, StreamerEventCallback cb, void* user_data);
 STREAMER_API int streamer_receiver_start(StreamerReceiverHandle handle, int listen_port, const unsigned char* session_key, int key_len);
 STREAMER_API int streamer_receiver_resize(StreamerReceiverHandle handle, int width, int height);
+STREAMER_API uint64_t streamer_receiver_get_frame_count(StreamerReceiverHandle handle);
 STREAMER_API int streamer_receiver_stop(StreamerReceiverHandle handle);
 STREAMER_API void streamer_receiver_destroy(StreamerReceiverHandle handle);
+
+// Sender (Client) Queries
+STREAMER_API uint64_t streamer_sender_get_frame_count(StreamerSenderHandle handle);
 
 // Diagnostic & Versioning
 STREAMER_API int streamer_get_version(void);

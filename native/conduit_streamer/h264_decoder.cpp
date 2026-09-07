@@ -113,7 +113,7 @@ HRESULT H264Decoder::SetupDecoder() {
 }
 
 bool H264Decoder::DecodeFrame(const uint8_t* data, size_t size, ComPtr<ID3D11Texture2D>* out_texture,
-                              uint32_t* out_width, uint32_t* out_height) {
+                              uint32_t* out_width, uint32_t* out_height, ComPtr<IMFSample>* out_sample) {
     if (!data || size == 0 || !m_decoder || !out_texture) return false;
 
     // 1. Create input sample with H.264 data
@@ -184,12 +184,23 @@ bool H264Decoder::DecodeFrame(const uint8_t* data, size_t size, ComPtr<ID3D11Tex
     }
 
     if (FAILED(hr) || !outputData.pSample) {
+        if (outputData.pEvents) {
+            outputData.pEvents->Release();
+            outputData.pEvents = nullptr;
+        }
         return false;
+    }
+
+    ComPtr<IMFSample> pSampleHolder;
+    pSampleHolder.Attach(outputData.pSample);
+    if (outputData.pEvents) {
+        outputData.pEvents->Release();
+        outputData.pEvents = nullptr;
     }
 
     // 3. Extract D3D11 texture from sample
     ComPtr<IMFMediaBuffer> mediaBuffer;
-    hr = outputData.pSample->GetBufferByIndex(0, &mediaBuffer);
+    hr = pSampleHolder->GetBufferByIndex(0, &mediaBuffer);
     if (FAILED(hr)) return false;
 
     ComPtr<IMFDXGIBuffer> dxgiBuffer;
@@ -201,6 +212,7 @@ bool H264Decoder::DecodeFrame(const uint8_t* data, size_t size, ComPtr<ID3D11Tex
             *out_texture = tex;
             if (out_width) *out_width = m_width;
             if (out_height) *out_height = m_height;
+            if (out_sample) *out_sample = pSampleHolder;
             return true;
         }
     }

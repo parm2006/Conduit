@@ -1,4 +1,6 @@
 #include "d3d11_renderer.h"
+#include <algorithm>
+#include <cmath>
 
 D3D11Renderer::D3D11Renderer()
     : m_hwnd(nullptr)
@@ -192,6 +194,24 @@ bool D3D11Renderer::RenderFrame(ID3D11Texture2D* pTexture, uint32_t src_width, u
         &inputView
     );
     if (FAILED(hr)) return false;
+
+    // Aspect-ratio preserving letterbox rect (pure black bars)
+    float scale = (std::min)((float)m_width / src_width, (float)m_height / src_height);
+    int fitted_w = (std::max)(1, (int)round(src_width * scale));
+    int fitted_h = (std::max)(1, (int)round(src_height * scale));
+    RECT destRect;
+    destRect.left = (m_width - fitted_w) / 2;
+    destRect.top = (m_height - fitted_h) / 2;
+    destRect.right = destRect.left + fitted_w;
+    destRect.bottom = destRect.top + fitted_h;
+
+    RECT srcRect = { 0, 0, (LONG)src_width, (LONG)src_height };
+    m_video_context->VideoProcessorSetStreamSourceRect(m_vp.Get(), 0, TRUE, &srcRect);
+    m_video_context->VideoProcessorSetStreamDestRect(m_vp.Get(), 0, TRUE, &destRect);
+
+    // Clear background to solid black
+    const float black[4] = { 0.0f, 0.0f, 0.0f, 1.0f };
+    m_context->ClearRenderTargetView(m_rtv.Get(), black);
 
     D3D11_VIDEO_PROCESSOR_STREAM stream = {};
     stream.Enable = TRUE;

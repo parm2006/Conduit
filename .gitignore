@@ -4,6 +4,7 @@ __pycache__/
 *.exp
 *.lib
 *.old
+*.bak
 .env
 known_hosts.json  
 cert.pem

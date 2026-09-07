@@ -20,7 +20,7 @@ public:
     void Cleanup();
 
     // Feeds H.264 NALUs and extracts decoded D3D11 texture
-    bool DecodeFrame(const uint8_t* data, size_t size, ComPtr<ID3D11Texture2D>* out_texture, uint32_t* out_width, uint32_t* out_height);
+    bool DecodeFrame(const uint8_t* data, size_t size, ComPtr<ID3D11Texture2D>* out_texture, uint32_t* out_width, uint32_t* out_height, ComPtr<IMFSample>* out_sample = nullptr);
 
 private:
     HRESULT SetupDecoder();

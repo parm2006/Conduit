@@ -359,10 +359,15 @@ class ServerVideoReceiver:
         selection = self.current_selection()
         if selection is None or selection != self.selection:
             return False
+        if getattr(self, '_native_active', False):
+            receiver = getattr(self, '_native_receiver', None)
+            if receiver is not None:
+                count = receiver.get_frame_count()
+                if count > getattr(self, '_last_polled_frame_count', 0):
+                    self._last_polled_frame_count = count
+                    self.last_frame_at = now
         elapsed = now - self.last_frame_at if self.last_frame_at > 0.0 else now - self.started_at
         timeout = FRAME_TIMEOUT if self.last_frame_at > 0.0 else 2.5
-        if getattr(self, '_native_active', False):
-            return elapsed >= timeout
         if selection == self.failed_selection:
             return True
         return elapsed >= timeout
@@ -376,6 +381,7 @@ class ServerVideoReceiver:
                 self.selection = selection
                 self.started_at = time.monotonic()
                 self.last_frame_at = 0.0
+                self._last_polled_frame_count = 0
                 with self._lock:
                     self._latest = self._incoming = self._expected = None
 
@@ -395,9 +401,21 @@ class ServerVideoReceiver:
 
             # While native streaming is active, monitor its liveness without pulling JPEG frames
             if self._native_active:
+                last_native_count = 0
+                receiver = getattr(self, '_native_receiver', None)
+                if receiver is not None:
+                    last_native_count = receiver.get_frame_count()
+
                 while (not self._stop.is_set()
                        and self.current_selection() == selection
                        and self._native_active):
+                    receiver = getattr(self, '_native_receiver', None)
+                    if receiver is not None:
+                        current_count = receiver.get_frame_count()
+                        if current_count > last_native_count:
+                            last_native_count = current_count
+                            self.last_frame_at = time.monotonic()
+
                     elapsed = (time.monotonic() - self.last_frame_at
                                if self.last_frame_at > 0.0
                                else time.monotonic() - self.started_at)

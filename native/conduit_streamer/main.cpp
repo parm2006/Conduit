@@ -134,6 +134,7 @@ struct StreamerSenderState {
     std::thread worker_thread;
     std::atomic<bool> running;
     std::atomic<bool> force_keyframe;
+    std::atomic<uint64_t> frame_count;
     int display_index;
     int bitrate_kbps;
     int fps;
@@ -143,6 +144,7 @@ struct StreamerSenderState {
         , user_data(ud)
         , running(false)
         , force_keyframe(true)
+        , frame_count(0)
         , display_index(0)
         , bitrate_kbps(10000)
         , fps(60)
@@ -205,6 +207,7 @@ static void StreamerSenderLoop(StreamerSenderState* state) {
                 for (const auto& packet : packets) {
                     state->udp.SendFrame(packet);
                 }
+                state->frame_count.fetch_add(1);
             }
         }
 
@@ -251,6 +254,12 @@ STREAMER_API int streamer_sender_request_keyframe(StreamerSenderHandle handle) {
     return 0;
 }
 
+STREAMER_API uint64_t streamer_sender_get_frame_count(StreamerSenderHandle handle) {
+    if (!handle) return 0;
+    auto* state = static_cast<StreamerSenderState*>(handle);
+    return state->frame_count.load();
+}
+
 STREAMER_API int streamer_sender_stop(StreamerSenderHandle handle) {
     if (!handle) return -1;
     auto* state = static_cast<StreamerSenderState*>(handle);
@@ -280,6 +289,7 @@ struct StreamerReceiverState {
     UdpReceiver udp;
     std::atomic<bool> running;
     std::atomic<bool> first_frame_rendered;
+    std::atomic<uint64_t> frame_count;
     std::mutex render_mutex;
 
     StreamerReceiverState(HWND hwnd, StreamerEventCallback cb, void* ud)
@@ -288,6 +298,7 @@ struct StreamerReceiverState {
         , user_data(ud)
         , running(false)
         , first_frame_rendered(false)
+        , frame_count(0)
     {
     }
 
@@ -333,10 +344,12 @@ STREAMER_API int streamer_receiver_start(StreamerReceiverHandle handle, int list
         if (!state->running) return;
 
         ComPtr<ID3D11Texture2D> decodedTexture;
+        ComPtr<IMFSample> sampleHolder;
         uint32_t src_w = 0, src_h = 0;
-        if (state->decoder.DecodeFrame(frame.data.data(), frame.data.size(), &decodedTexture, &src_w, &src_h)) {
+        if (state->decoder.DecodeFrame(frame.data.data(), frame.data.size(), &decodedTexture, &src_w, &src_h, &sampleHolder)) {
             if (decodedTexture) {
                 state->renderer.RenderFrame(decodedTexture.Get(), src_w, src_h);
+                state->frame_count.fetch_add(1);
                 if (!state->first_frame_rendered.exchange(true)) {
                     state->Notify(STREAMER_EVENT_FIRST_FRAME, "First frame presented");
                 }
@@ -372,6 +385,12 @@ STREAMER_API int streamer_receiver_resize(StreamerReceiverHandle handle, int wid
     auto* state = static_cast<StreamerReceiverState*>(handle);
     std::lock_guard<std::mutex> lock(state->render_mutex);
     return state->renderer.Resize(width, height) ? 0 : -1;
+}
+
+STREAMER_API uint64_t streamer_receiver_get_frame_count(StreamerReceiverHandle handle) {
+    if (!handle) return 0;
+    auto* state = static_cast<StreamerReceiverState*>(handle);
+    return state->frame_count.load();
 }
 
 STREAMER_API int streamer_receiver_stop(StreamerReceiverHandle handle) {

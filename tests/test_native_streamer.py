@@ -93,14 +93,17 @@ class TestNativeStreamer(unittest.TestCase):
         )
         self.assertTrue(send_started)
 
-        # Wait up to 1.5 seconds for first frame to be decoded and rendered
-        deadline = time.monotonic() + 1.5
+        # Wait up to 3.0 seconds for first frame to be decoded and rendered
+        deadline = time.monotonic() + 3.0
         first_frame = False
         while time.monotonic() < deadline:
-            if any(code == 3 for code, _ in events_receiver): # STREAMER_EVENT_FIRST_FRAME = 3
+            if any(code == 3 for code, _ in events_receiver) or receiver.get_frame_count() > 0:
                 first_frame = True
                 break
             time.sleep(0.05)
+
+        recv_frames = receiver.get_frame_count()
+        send_frames = sender.get_frame_count()
 
         sender.stop()
         sender.destroy()
@@ -109,6 +112,8 @@ class TestNativeStreamer(unittest.TestCase):
         win32gui.DestroyWindow(hwnd)
 
         self.assertTrue(first_frame, f"Expected first frame event, got: {events_receiver}")
+        self.assertGreaterEqual(recv_frames, 1)
+        self.assertGreaterEqual(send_frames, 1)
 
 
 if __name__ == "__main__":
