@@ -4,6 +4,7 @@ import customtkinter as ctk
 import tkinter as tk
 
 from app.display_topology import DraftTopology, PlacedMachine
+from app.remote_map import squircle_points
 
 
 CELL_SIZE = 40
@@ -532,11 +533,8 @@ class TopologyEditor(ctk.CTkFrame):
             tag = f"machine:{cell.machine_id}"
             outline = INVALID_COLOR if cell.invalid else "#D7DEE8"
             width = 3 if cell.invalid else 1
-            rectangle = self.canvas.create_rectangle(
-                left + 1,
-                top + 1,
-                right - 1,
-                bottom - 1,
+            rectangle = self.canvas.create_polygon(
+                *squircle_points(left + 1, top + 1, right - 1, bottom - 1),
                 fill=cell.color,
                 outline=outline,
                 width=width,

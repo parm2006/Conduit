@@ -12,6 +12,13 @@ A fast Windows wireless KVM for sharing your mouse, keyboard, newest clipboard i
 - **Shared Clipboard & Files**: Syncs the global newest clipboard item (text, images, HTML/RTF) and provides an on-paste file relay for files and folders.
 - **Visual Display Arrangement**: Displays each Windows machine name in the layout; drag and snap screen edges, then click **Apply**.
 - **Secure by Default**: Authenticated pairing, TLS identity, and private network firewall rules.
+- **Remote Mode (source branch)**: Before starting the Server, enable the bottom Remote Mode switch. Only the Client monitor you control is shown fullscreen on the Server primary display, with its cursor and aspect ratio preserved. The switch stays locked until the Server stops and defaults off on a fresh launch.
+
+Remote Mode uses the existing paired TLS lanes for high-quality 4:4:4 JPEG frames, targeting up to 20 frames per second with one outstanding frame request. Input stays on the separate control lane; achieved frame rate depends on capture, resolution and network speed. No additional ports are needed. Run this version on both Server and Clients. An unavailable stream returns the cursor to the Server primary display after one second.
+
+The live monitor map stays at the Server primary screen's upper-left corner, including while the GUI is hidden. It is 60% opaque, click-through, unlabeled, and grouped by computer color. Its active squircle tile grows 15% with a white outline. Moving the cursor into the surrounding hide region temporarily hides the map. Server monitors are never streamed.
+
+Connection reload waits three seconds for Clients, restores accepted positions by machine identity, and invokes the existing layout checkmark. Invalid layouts reveal the GUI with the normal validation highlights. Later arrivals require a manual checkmark press. Reload preserves the current Remote Mode choice.
 
 ---
 
@@ -68,7 +75,19 @@ Install `requirements-release.txt` and NSIS 3.12, then run:
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts\build_release.ps1
 ```
+
 The build script removes old release outputs before compilation and produces `Conduit.exe`, the installer, and release assets. Pass `-DevelopmentBuild` for an unsigned development build before tagging.
+
+### Test the source branch
+
+Double-click `run.bat` to install the declared requirements and launch the GUI. It works from any current directory. For automated checks from a terminal:
+
+```bat
+run.bat --test
+run.bat --smoke-test
+```
+
+The smoke test briefly opens the real GUI using fake endpoints, checks the toggle and native viewer/map lifecycle, and closes it without pairing or capturing input. Native capture tests require an interactive Windows desktop. Multi-computer verification steps are in `PHYSICAL_TESTING.md`.
 
 </details>
 

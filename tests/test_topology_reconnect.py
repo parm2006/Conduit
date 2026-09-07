@@ -29,6 +29,42 @@ def _group(machine_id, name="Client"):
 
 
 class TopologyReconnectTests(unittest.TestCase):
+    def test_reload_rescan_failure_reveals_hidden_gui(self):
+        from unittest.mock import Mock
+        gui = ConduitGUI.__new__(ConduitGUI)
+        gui.topology_editor = SimpleNamespace(state=SimpleNamespace(draft=SimpleNamespace(server_id='server')))
+        gui._reload_auto_applying = True
+        gui._set_status = Mock()
+        gui.set_daemon_mode = Mock()
+        with patch('app.gui.WindowsDisplayDiscovery.discover', side_effect=RuntimeError('unavailable')):
+            self.assertFalse(gui._begin_topology_rescan())
+        gui.set_daemon_mode.assert_called_once_with(False)
+        self.assertFalse(gui._reload_auto_applying)
+
+    def test_reload_waits_three_seconds_then_invokes_existing_checkmark(self):
+        from app.display_topology import DraftTopology, PlacedMachine
+        from app.topology_editor import TopologyEditorState
+        from unittest.mock import Mock
+        active = DraftTopology('server', (
+            PlacedMachine(_group('server'), 0, 0),
+            PlacedMachine(_group('client-1'), -1, 0),
+        )).validate().validated.activate(2)
+        gui = ConduitGUI.__new__(ConduitGUI)
+        gui.server = SimpleNamespace(session_registry=SimpleNamespace(ready_sessions=lambda: ()))
+        gui.topology_editor = SimpleNamespace(state=TopologyEditorState(active), _render=Mock(), _apply=Mock())
+        scheduled = []
+        gui.after = lambda delay, callback: scheduled.append((delay, callback))
+        gui._set_topology_action_mode = Mock()
+        self.assertTrue(hasattr(ConduitGUI, '_begin_reload_layout_restore'))
+        gui._begin_reload_layout_restore(gui.server)
+        self.assertEqual(scheduled[0][0], 3000)
+        gui.topology_editor._apply.assert_not_called()
+        with patch('app.gui.WindowsDisplayDiscovery.discover', return_value=_group('server')):
+            scheduled[0][1]()
+        gui.topology_editor._apply.assert_called_once_with()
+        self.assertEqual(len(gui.topology_editor.state.draft.machines), 1)
+        self.assertEqual(gui._reload_layout_snapshot, active)
+
     def test_saved_machine_is_not_routable_until_current_session_is_applied(self):
         session = SimpleNamespace(
             session_id="new-session",

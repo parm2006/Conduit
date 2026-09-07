@@ -1,5 +1,51 @@
 # Conduit Two-Client Physical Test Guide
 
+## Remote Mode source branch
+
+For `codex/remote-mode`, use the source checkout on every computer and launch
+each with `run.bat`; the older packaged build instructions below are for the
+previous baseline. Use the usual pairing and Private-network configuration.
+
+1. On the Server, verify Remote Mode is off on a fresh launch. Enable it, start
+   the Server, and verify the switch is disabled. Stop and verify it unlocks.
+2. Connect Clients, arrange and accept the layout. Include a Client with an
+   external display and, if available, a secondary Server monitor.
+3. Hide the GUI. Enter a Client display from any Server monitor. The Server
+   primary should show only that Client display, including its cursor, above
+   the taskbar. No local cursor or desktop should show through the video.
+4. Test portrait/landscape and unequal resolutions. The image should fit as
+   large as possible, with black bars and readable text. Cursor switching
+   follows the image's logical edges, not the outer edges of the black bars.
+   Move between monitors on the same Client and between different Clients.
+5. Return directly to a secondary Server monitor. Video should disappear and
+   the cursor should land on that monitor without passing through the primary.
+   Movement between Server monitors should never stream video.
+6. Inspect the map on the Server primary: it fits a square 10% of screen width
+   at the upper-left, no labels, per-machine colors, 60% opacity throughout.
+   The active squircle grows 15% and has a white outline. White gridlines fade
+   within a third of a tile outside each monitor square, following L shapes.
+   GUI tiles keep their labels and size, with only the squircle shape changed.
+7. Move the visible cursor into the map's surrounding hide region (1.73 times
+   the map width and height). The map hides; it reappears when the cursor leaves.
+   Verify clicks reach the underlying app. There is no map shortcut.
+8. Reload with Ctrl+Alt+Shift+R. Clients reconnect within three seconds; the
+   saved accepted positions return and the checkmark runs automatically.
+   Remote Mode stays enabled. Repeat with a missing middle Client leaving a
+   disconnected layout: missing tiles disappear, GUI appears with ordinary
+   validation highlights. A Client reconnecting after the three-second window
+   requires a manual checkmark; its last accepted position should be retained.
+9. While viewing a Client, interrupt its connection or capture. After one
+   second without a valid video frame the cursor and view return to Server
+   primary. Leave a static desktop up for over a second: it must not trigger
+   this fallback. Test the existing Ctrl+Space, Space return gesture too.
+10. Stop/start and reload repeatedly, including while viewing video. Verify
+    no black window, map window, captured input or growing video queue remains.
+
+Automated entry points: `run.bat --test` and `run.bat --smoke-test`. The latter
+uses fake endpoints and no input hooks. Actual LAN latency, protected content,
+mixed-DPI physical displays and GPU-specific capture behavior need the tests
+above; passing the local suite does not establish those hardware results.
+
 Use this guide with one Server PC and two Client PCs. Run the phases in order.
 If a phase fails, stop there and report the failed step before testing later
 phases.

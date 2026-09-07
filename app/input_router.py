@@ -24,6 +24,7 @@ class RemoteClient:
     machine_id: str
     display_id: str
     position: tuple[int, int]
+    handoff_id: str = ''
 
 
 @dataclass(frozen=True)
@@ -59,7 +60,11 @@ class InputRouter:
         handoff_timeout=0.75,
         handoff_failed=None,
         ownership_changed=None,
+        remote_viewport=None,
     ):
+        if remote_viewport is not None:
+            from app.remote_topology import with_client_monitor_edges
+            topology = with_client_monitor_edges(topology)
         self.topology = topology
         self._session_for_machine = session_for_machine
         self._input_effects = input_effects
@@ -78,6 +83,7 @@ class InputRouter:
         self._handoff_timeout = float(handoff_timeout)
         self._handoff_failed = handoff_failed
         self._ownership_changed = ownership_changed
+        self.remote_viewport = remote_viewport
         self._pending_deadline = None
         self._dispatch_machines = {}
         self._dispatcher = InputDispatcher(
@@ -456,10 +462,13 @@ class InputRouter:
             ),
         }
         deadline = self._schedule_deadline(
+            # Keep input handoff independent of whether video is enabled.
             self._handoff_timeout,
             lambda: self._fail_handoff(handoff_id, "handoff timeout"),
         )
         self._pending_deadline = deadline
+        if self.remote_viewport is not None:
+            message['remote_viewport'] = list(self.remote_viewport)
         threading.Thread(
             target=self._send_switch,
             args=(pending, session.control_lane, message),
@@ -514,6 +523,7 @@ class InputRouter:
                 pending.destination_machine_id,
                 pending.destination_display_id,
                 pending.destination_position,
+                pending.handoff_id,
             )
             if capture_session_id is None:
                 self.state = next_state

@@ -99,6 +99,9 @@ class ConduitClient:
             on_reload_connection=self.request_cluster_reload,
         )
         self.is_active = False
+        from app.remote_video import ClientVideoCapture
+        self.video_capture = ClientVideoCapture(self)
+        self.control_network.register_callback('remote_video_request', self.video_capture.request)
         self.clipboard_offer_state = ClipboardOfferState("client")
         self.control_connected = False
         self.data_connected = False
@@ -464,6 +467,9 @@ class ConduitClient:
         )
 
     def disconnect(self, preserve_failure=False, error=None):
+        capture = getattr(self, 'video_capture', None)
+        if capture is not None:
+            capture.cancel()
         self._release_all_injected_input()
         monitor = getattr(self, "display_monitor", None)
         if monitor is not None:
@@ -740,6 +746,26 @@ class ConduitClient:
             self.input_handler.set_client_topology_edges(edge_regions)
         
         destination_rect = _message_rect(data.get('destination_rect'))
+        self._remote_control_rect = None
+        self._remote_move_remainder = (0.0, 0.0)
+        viewport = data.get('remote_viewport')
+        if (destination_rect is not None and isinstance(viewport, list) and len(viewport) == 2):
+            from app.remote_video import fit_rect, valid_size
+            if valid_size(*viewport):
+                source_size = (destination_rect.right - destination_rect.left,
+                               destination_rect.bottom - destination_rect.top)
+                _, _, fitted_width, fitted_height = fit_rect(viewport, source_size)
+                self.speed_scale_x = source_size[0] / fitted_width
+                self.speed_scale_y = source_size[1] / fitted_height
+                self._remote_control_rect = destination_rect
+                # Windows normally crosses internal Client monitors itself.
+                # The remote viewport must hand off explicitly at its selected
+                # monitor's edges, not a neighboring monitor's tolerance band.
+                if hasattr(self.input_handler, 'set_client_topology_edges'):
+                    self.input_handler.set_client_topology_edges(tuple(
+                        edge for edge in edge_regions
+                        if edge.source_display_id == data.get('destination_display_id')
+                    ))
         destination_side = data.get('destination_side')
         source_rect = _message_rect(data.get('source_rect'))
         source_side = data.get('source_side')
@@ -831,6 +857,15 @@ class ConduitClient:
             return False
         dx = data.get('dx', 0) * self.speed_scale_x
         dy = data.get('dy', 0) * self.speed_scale_y
+        rect = getattr(self, '_remote_control_rect', None)
+        if rect is not None:
+            remainder_x, remainder_y = getattr(self, '_remote_move_remainder', (0.0, 0.0))
+            total_x, total_y = dx + remainder_x, dy + remainder_y
+            dx, dy = int(total_x), int(total_y)
+            self._remote_move_remainder = (total_x - dx, total_y - dy)
+            x, y = self.input_handler.mouse.position
+            dx = max(rect.left, min(rect.right - 1, x + dx)) - x
+            dy = max(rect.top, min(rect.bottom - 1, y + dy)) - y
         self.input_handler.inject_move(dx, dy)
         return True
 

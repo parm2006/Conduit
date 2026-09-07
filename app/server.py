@@ -386,6 +386,7 @@ class ConduitServer:
             input_effects=_ServerInputEffects(self),
             handoff_failed=self._on_handoff_failed,
             ownership_changed=self._on_cursor_ownership_changed,
+            remote_viewport=getattr(self, 'remote_viewport', None),
         )
         if getattr(self, 'routing_suspended', False):
             self.input_router.pause("topology reset required")
@@ -1171,6 +1172,9 @@ class ConduitServer:
                 pass
 
     def _reload_connection(self):
+        callback = getattr(self, 'on_reload_started', None)
+        if callback is not None:
+            callback()
         router = getattr(self, 'input_router', None)
         mouse_loc = (
             "REMOTE CLIENT SCREEN"

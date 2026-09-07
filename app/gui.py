@@ -388,6 +388,7 @@ class ConduitGUI(ctk.CTk):
         self.overlay_center_y = self.winfo_screenheight() // 2
         self.overlay = None
         self.overlay_active = False
+        self.remote_view = None
         self._is_reloading = False
         self._shutdown_lock = threading.Lock()
         self._shutdown_started = False
@@ -511,6 +512,11 @@ class ConduitGUI(ctk.CTk):
         self.server_start_btn = ctk.CTkButton(self.tab_server, text="Start Server", command=self.start_server)
         self.server_start_btn.pack(pady=10)
         self.server_stop_btn = ctk.CTkButton(self.tab_server, text="Stop Server", fg_color="red", hover_color="darkred", command=self.stop_server)
+        self.remote_mode_var = tkinter.BooleanVar(value=False)
+        self.remote_mode_toggle = ctk.CTkSwitch(
+            self.tab_server, text='Remote Mode', variable=self.remote_mode_var,
+        )
+        self.remote_mode_toggle.pack(side='bottom', pady=12)
         
         # Client UI
         self.client_ip_label = ctk.CTkLabel(self.tab_client, text="Server IP:")
@@ -803,6 +809,7 @@ class ConduitGUI(ctk.CTk):
             self._start_server_after_firewall(port, password)
 
     def _start_server_after_firewall(self, port, password):
+        self._close_remote_view()
         if self.server:
             self._stop_server_display_monitor()
             self.server.stop()
@@ -845,6 +852,9 @@ class ConduitGUI(ctk.CTk):
             ),
         )
         self.server.control_network.register_callback('connected', self._on_server_client_connected)
+        self.server.on_reload_started = lambda source=self.server: self.after(
+            0, lambda: self._begin_reload_layout_restore(source)
+        )
         self.server.control_network.register_callback('disconnected', self._on_server_client_disconnected)
         self.server.control_network.register_callback('set_daemon_mode', self._on_remote_daemon_mode)
         self.server.control_network.register_callback('disconnect_notice', self._on_disconnect_notice)
@@ -867,8 +877,18 @@ class ConduitGUI(ctk.CTk):
         screen_width = self.winfo_screenwidth()
         screen_height = self.winfo_screenheight()
         self.server.set_screen_size(screen_width, screen_height)
+        remote_choice = self.__dict__.get('remote_mode_var')
+        remote_enabled = remote_choice is not None and bool(remote_choice.get())
+        if remote_enabled:
+            group = next(p.group for p in self.topology_editor.state.draft.machines
+                         if p.group.machine_id == self.topology_editor.state.draft.server_id)
+            primary = next(d.rect for d in group.displays if d.primary and d.enabled)
+            self.server.remote_viewport = (primary.right - primary.left, primary.bottom - primary.top)
         
         if self.server.start():
+            toggle = self.__dict__.get('remote_mode_toggle')
+            if toggle is not None:
+                toggle.configure(state='disabled')
             activate_topology = getattr(
                 self.server,
                 'activate_client_topology',
@@ -912,6 +932,14 @@ class ConduitGUI(ctk.CTk):
             self.server_start_btn.pack_forget()
             self.server_stop_btn.pack(pady=10)
             self._start_server_display_monitor(self.server)
+            if remote_enabled:
+                try:
+                    from app.remote_view import RemoteView
+                    self.remote_view = RemoteView(self, self.server, primary)
+                except Exception as error:
+                    logger.error('Could not start remote viewer (%s)', error_name(error))
+                    self.stop_server()
+                    self._set_status('Status: Remote viewer could not start. Server stopped.', 'red')
         else:
             self._set_status(
                 "Status: Could not start server\n"
@@ -1101,7 +1129,13 @@ class ConduitGUI(ctk.CTk):
         return session_ids
 
     def stop_server(self):
+        self._close_remote_view()
+        toggle = self.__dict__.get('remote_mode_toggle')
+        if toggle is not None:
+            toggle.configure(state='normal')
         self._is_reloading = False
+        self._reload_restore_pending = None
+        self._reload_layout_snapshot = None
         self._stop_server_display_monitor()
         self._hide_connection_toasts()
         if self.server:
@@ -1222,6 +1256,10 @@ class ConduitGUI(ctk.CTk):
                     session.color,
                 )
                 placement = session.draft_placement
+                snapshot = self.__dict__.get('_reload_layout_snapshot')
+                if placement is None and snapshot is not None:
+                    placement = next(((p.x, p.y) for p in snapshot.machines
+                                      if p.group.machine_id == group.machine_id), None)
                 if placement is not None:
                     self.topology_editor.state.move_machine(
                         group.machine_id,
@@ -1445,6 +1483,7 @@ class ConduitGUI(ctk.CTk):
             )
         except Exception as error:
             logger.error("Could not rescan Server displays (%s)", error_name(error))
+            self._reveal_reload_layout_failure()
             self._set_status(
                 "Status: Displays could not be rescanned. The previous layout is still active.",
                 "red",
@@ -1498,6 +1537,7 @@ class ConduitGUI(ctk.CTk):
         )
         if not sent:
             self._pending_topology_rescan = None
+            self._reveal_reload_layout_failure()
             self._set_status(
                 "Status: Client displays could not be rescanned. The previous layout is still active.",
                 "red",
@@ -1546,6 +1586,7 @@ class ConduitGUI(ctk.CTk):
         if self.__dict__.get("_pending_topology_rescan") is not pending:
             return
         self._pending_topology_rescan = None
+        self._reveal_reload_layout_failure()
         self._set_status(
             "Status: Client display rescan timed out. The previous layout is still active.",
             "red",
@@ -1553,6 +1594,7 @@ class ConduitGUI(ctk.CTk):
 
     def _on_topology_apply(self, result, candidate):
         if not result.is_valid:
+            self._reveal_reload_layout_failure()
             self._set_status(
                 "Status: Layout is not connected. Move every Client onto a full grid edge.",
                 "red",
@@ -1597,12 +1639,15 @@ class ConduitGUI(ctk.CTk):
         if self.server is not source:
             return
         if not success:
+            self._reveal_reload_layout_failure()
             self._set_status(
                 "Status: Client did not accept the layout. The previous layout is still active.",
                 "red",
             )
             return
         self.topology_editor.state.commit(candidate)
+        self._sync_remote_primary(candidate)
+        self._reload_auto_applying = False
         self._set_topology_action_mode("reset")
         applied_machine_ids = {
             placed.group.machine_id for placed in candidate.machines
@@ -1917,6 +1962,7 @@ class ConduitGUI(ctk.CTk):
         self._is_reloading = True
         self.after(3000, lambda: setattr(self, '_is_reloading', False))
         if self.server:
+            self._begin_reload_layout_restore(self.server)
             self.server._reload_connection()
         elif self.client:
             requester = getattr(self.client, "request_cluster_reload", None)
@@ -1930,7 +1976,40 @@ class ConduitGUI(ctk.CTk):
         self._is_reloading = True
         self.after(3000, lambda: setattr(self, '_is_reloading', False))
         if self.server and data.get("peer_identity"):
+            self._begin_reload_layout_restore(self.server)
             self.server._reload_connection()
+
+    def _begin_reload_layout_restore(self, source):
+        if self.server is not source or self.__dict__.get('_reload_restore_pending') is not None:
+            return
+        editor = self.__dict__.get('topology_editor')
+        if editor is None:
+            return
+        self._is_reloading = True
+        self._reload_layout_snapshot = editor.state.active
+        token = object()
+        self._reload_restore_pending = token
+        self.after(3000, lambda: self._restore_reload_layout(source, token))
+
+    def _restore_reload_layout(self, source, token):
+        if self.server is not source or self.__dict__.get('_reload_restore_pending') is not token:
+            return
+        self._reload_restore_pending = None
+        self._is_reloading = False
+        snapshot = self._reload_layout_snapshot
+        editor = self.topology_editor
+        # Reconcile from the accepted snapshot, never from unaccepted edits.
+        editor.state.draft = DraftTopology(snapshot.server_id, snapshot.machines)
+        self._reconcile_ready_topology_draft(source)
+        self._set_topology_action_mode('apply')
+        self._reload_auto_applying = True
+        editor._apply()  # Same rescan, validation, highlights and transaction as a click.
+
+    def _reveal_reload_layout_failure(self):
+        if self.__dict__.get('_reload_auto_applying', False):
+            self._reload_auto_applying = False
+            self._is_reloading = False
+            self.set_daemon_mode(False)
 
     def _on_disconnect_notice(self, data):
         reason = data.get('reason', '')
@@ -2012,6 +2091,7 @@ class ConduitGUI(ctk.CTk):
         if self.__dict__.get("_close_started", False):
             return
         self._close_started = True
+        self._close_remote_view()
         self.pairing_approval.shutdown()
         monitor = self.__dict__.get('global_hotkey_monitor')
         if monitor is not None:
@@ -2054,9 +2134,36 @@ class ConduitGUI(ctk.CTk):
         self.last_y = self.overlay_center_y
         self.warp_count = 0
 
+    def _close_remote_view(self):
+        view = self.__dict__.get('remote_view')
+        if view is not None:
+            self.remote_view = None
+            view.close()
+            self.hide_overlay()
+            # Recreate the ordinary capture overlay with its original geometry.
+            self.overlay.destroy()
+            self.overlay = None
+
+    def _sync_remote_primary(self, topology):
+        view = self.__dict__.get('remote_view')
+        if view is None:
+            return
+        group = next(p.group for p in topology.machines if p.group.machine_id == topology.server_id)
+        primary = next(d.rect for d in group.displays if d.primary and d.enabled)
+        self.server.remote_viewport = (primary.right - primary.left, primary.bottom - primary.top)
+        router = getattr(self.server, 'input_router', None)
+        if router is not None:
+            router.remote_viewport = self.server.remote_viewport
+        view.set_primary(primary)
+
     def show_overlay(self):
         def _show():
             try:
+                if self.__dict__.get('remote_view') is not None:
+                    from app.input_router import RemoteClient
+                    router = getattr(self.server, 'input_router', None)
+                    if router is None or not isinstance(router.state, RemoteClient):
+                        return
                 if self.overlay and self.overlay.winfo_exists():
                     self.overlay_active = True
                     self.overlay.deiconify() # Show it
@@ -2141,6 +2248,9 @@ class ConduitGUI(ctk.CTk):
         # If the user opens the Snipping Tool (Win+Shift+S) or Alt-Tabs natively,
         # the overlay loses focus. We MUST return the cursor to the Server automatically.
         if self.overlay_active and self.server and self.server.control_connected:
+            if self.__dict__.get('remote_view') is not None:
+                # Keyboard remains captured and forwarded while the GUI is hidden.
+                return
             logger.info("Overlay lost focus (e.g. Snipping Tool). Switching back to Server.")
             self.server.on_switch_back({'ratio': 0.5})
 
