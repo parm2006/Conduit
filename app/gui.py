@@ -2175,10 +2175,35 @@ class ConduitGUI(ctk.CTk):
                     self.transfer_toast.raise_if_visible()
                     
                     # Initial position
-                    self.last_x = self.overlay_center_x
-                    self.last_y = self.overlay_center_y
-                    self.warp_count = 2
-                    self.overlay.event_generate('<Motion>', warp=True, x=self.overlay_center_x, y=self.overlay_center_y)
+                    if self.__dict__.get('remote_view') is not None:
+                        self.overlay.config(cursor='arrow')
+                        entry_x = self.overlay_center_x
+                        entry_y = self.overlay_center_y
+                        router = getattr(self.server, 'input_router', None)
+                        state = getattr(router, 'state', None)
+                        if state and hasattr(state, 'position') and hasattr(router, 'topology'):
+                            for m in router.topology.machines:
+                                if m.group.machine_id == state.machine_id:
+                                    for d in m.group.displays:
+                                        if d.display_id == state.display_id:
+                                            client_w = max(1, d.rect.right - d.rect.left)
+                                            client_h = max(1, d.rect.bottom - d.rect.top)
+                                            ratio_x = state.position[0] / client_w
+                                            ratio_y = state.position[1] / client_h
+                                            w = max(1, self.overlay.winfo_width())
+                                            h = max(1, self.overlay.winfo_height())
+                                            entry_x = max(5, min(w - 5, round(w * ratio_x)))
+                                            entry_y = max(5, min(h - 5, round(h * ratio_y)))
+                                            break
+                        self.last_x = entry_x
+                        self.last_y = entry_y
+                        self.warp_count = 1
+                        self.overlay.event_generate('<Motion>', warp=True, x=entry_x, y=entry_y)
+                    else:
+                        self.last_x = self.overlay_center_x
+                        self.last_y = self.overlay_center_y
+                        self.warp_count = 2
+                        self.overlay.event_generate('<Motion>', warp=True, x=self.overlay_center_x, y=self.overlay_center_y)
             except Exception as error:
                 logger.debug("Could not show overlay: %s", error_name(error))
         self.after(0, _show)
@@ -2198,6 +2223,24 @@ class ConduitGUI(ctk.CTk):
         self.after(0, _hide)
 
     def on_overlay_motion(self, event):
+        if self.__dict__.get('remote_view') is not None:
+            if self.warp_count > 0:
+                self.warp_count -= 1
+                self.last_x = event.x
+                self.last_y = event.y
+                return
+
+            dx = event.x - self.last_x
+            dy = event.y - self.last_y
+            self.last_x = event.x
+            self.last_y = event.y
+
+            if dx != 0 or dy != 0:
+                if self.server:
+                    self.server.on_mouse_move(dx, dy)
+            return
+
+        # Original relative motion trap for non-remote-view offscreen mode:
         if self.warp_count > 0:
             self.warp_count -= 1
             self.last_x = event.x

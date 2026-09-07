@@ -26,7 +26,8 @@ class RemoteView:
         self.map_window = WindowsMapOverlay()
         overlay = gui.overlay
         overlay.attributes('-alpha', 1.0)
-        self.canvas = tk.Canvas(overlay, bg='black', highlightthickness=0, borderwidth=0, cursor='none')
+        overlay.config(cursor='arrow')
+        self.canvas = tk.Canvas(overlay, bg='black', highlightthickness=0, borderwidth=0, cursor='arrow')
         self.canvas.pack(fill='both', expand=True)
         # Default Tk bindtags propagate Canvas input to the existing Toplevel
         # handlers. Binding twice would duplicate clicks and wheel events.
@@ -64,6 +65,7 @@ class RemoteView:
         self.receiver.stop()
         self.map_window.close()
         self.canvas.destroy()
+        self.gui.overlay.config(cursor='none')
         self.gui.overlay.attributes('-alpha', .01)
 
     def _tick(self):
