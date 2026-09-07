@@ -83,6 +83,21 @@ class WindowsSpecialKeyInjector:
         self.user32.keybd_event(virtual_key, 0, flags, 0)
         return True
 
+
+class WindowsMouseInjector:
+    MOUSEEVENTF_MOVE = 0x0001
+
+    def __init__(self, user32=None):
+        if user32 is None:
+            import ctypes
+            user32 = ctypes.windll.user32
+        self.user32 = user32
+
+    def move(self, dx, dy):
+        self.user32.mouse_event(self.MOUSEEVENTF_MOVE, int(dx), int(dy), 0, 0)
+        return True
+
+
 class InputHandler:
     def __init__(self):
         self.mouse = MouseController()
@@ -91,6 +106,9 @@ class InputHandler:
         self.keyboard = KeyboardController()
         self.special_key_injector = (
             WindowsSpecialKeyInjector() if os.name == "nt" else None
+        )
+        self.mouse_injector = (
+            WindowsMouseInjector() if os.name == "nt" else None
         )
         self.keyboard_listener = None
         self._return_shortcut = ReturnShortcutDetector()
@@ -348,7 +366,14 @@ class InputHandler:
     # --- Methods for the Client side to simulate inputs ---
     
     def inject_move(self, dx, dy):
-        self.mouse.move(dx, dy)
+        injector = getattr(self, "mouse_injector", None)
+        if injector is not None:
+            try:
+                injector.move(dx, dy)
+            except Exception:
+                self.mouse.move(dx, dy)
+        else:
+            self.mouse.move(dx, dy)
         # Check if client mouse hits its return edge to switch back to server
         x, y = self.mouse.position
         if hasattr(self, "client_topology_edge_regions"):
@@ -371,13 +396,14 @@ class InputHandler:
                     )
                     return
             return
-        if self.client_edge == 'left' and x <= 0:
+        client_edge = getattr(self, 'client_edge', None)
+        if client_edge == 'left' and x <= 0:
             self.trigger('client_edge_hit', 'left', y / self.screen_height)
-        elif self.client_edge == 'right' and x >= self.screen_width - 2:
+        elif client_edge == 'right' and x >= self.screen_width - 2:
             self.trigger('client_edge_hit', 'right', y / self.screen_height)
-        elif self.client_edge == 'top' and y <= 0:
+        elif client_edge == 'top' and y <= 0:
             self.trigger('client_edge_hit', 'top', x / self.screen_width)
-        elif self.client_edge == 'bottom' and y >= self.screen_height - 2:
+        elif client_edge == 'bottom' and y >= self.screen_height - 2:
             self.trigger('client_edge_hit', 'bottom', x / self.screen_width)
 
     def inject_position(self, x, y):

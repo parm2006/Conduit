@@ -2124,7 +2124,8 @@ class ConduitGUI(ctk.CTk):
         self.overlay.attributes("-topmost", True)
         
         # Bind events
-        self.overlay.bind("<Motion>", self.on_overlay_motion)
+        for motion_seq in ("<Motion>", "<B1-Motion>", "<B2-Motion>", "<B3-Motion>", "<B4-Motion>", "<B5-Motion>"):
+            self.overlay.bind(motion_seq, self.on_overlay_motion)
         self.overlay.bind("<ButtonPress>", self.on_overlay_press)
         self.overlay.bind("<ButtonRelease>", self.on_overlay_release)
         self.overlay.bind("<MouseWheel>", self.on_overlay_scroll)

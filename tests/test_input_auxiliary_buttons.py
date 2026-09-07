@@ -3,7 +3,7 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock
 from pynput.mouse import Button
 
-from app.input_handler import InputHandler, BUTTON_NAME_ALIASES, WindowsSpecialKeyInjector
+from app.input_handler import InputHandler, BUTTON_NAME_ALIASES, WindowsSpecialKeyInjector, WindowsMouseInjector
 
 
 class RecordingUser32:
@@ -12,6 +12,9 @@ class RecordingUser32:
 
     def keybd_event(self, virtual_key, scan_code, flags, extra_info):
         self.events.append((virtual_key, scan_code, flags, extra_info))
+
+    def mouse_event(self, flags, dx, dy, data, extra_info):
+        self.events.append(('mouse', flags, dx, dy, data, extra_info))
 
 
 class RecordingMouse:
@@ -193,6 +196,23 @@ class MouseAuxiliaryButtonsAndMacroKeyTests(unittest.TestCase):
 
         app.on_overlay_scroll(event)
         mock_server.on_mouse_scroll.assert_called_once_with(0, 1)
+
+    def test_windows_mouse_injector_calls_mouse_event(self):
+        user32 = RecordingUser32()
+        injector = WindowsMouseInjector(user32)
+        self.assertTrue(injector.move(15, -20))
+        self.assertEqual(user32.events, [('mouse', 0x0001, 15, -20, 0, 0)])
+
+    def test_inject_move_uses_hardware_injector_when_available(self):
+        user32 = RecordingUser32()
+        handler = InputHandler.__new__(InputHandler)
+        handler.mouse = SimpleNamespace(position=(500, 500), move=MagicMock())
+        handler.mouse_injector = WindowsMouseInjector(user32)
+
+        handler.inject_move(10, 5)
+
+        self.assertEqual(user32.events, [('mouse', 0x0001, 10, 5, 0, 0)])
+        handler.mouse.move.assert_not_called()
 
 
 if __name__ == '__main__':
