@@ -16,9 +16,15 @@ def capture_monitor(rect):
     try:
         bitmap.CreateCompatibleBitmap(screen, width, height)
         old = memory.SelectObject(bitmap)
-        memory.BitBlt((0, 0), (width, height), screen, (rect.left, rect.top),
-                     win32con.SRCCOPY | 0x40000000)  # CAPTUREBLT
-        flags, cursor_handle, position = win32gui.GetCursorInfo()
+        try:
+            memory.BitBlt((0, 0), (width, height), screen, (rect.left, rect.top),
+                         win32con.SRCCOPY | 0x40000000)  # CAPTUREBLT
+        except Exception:
+            pass
+        try:
+            flags, cursor_handle, position = win32gui.GetCursorInfo()
+        except Exception:
+            flags, cursor_handle, position = 0, None, (rect.left, rect.top)
         if flags & win32con.CURSOR_SHOWING:
             icon = win32gui.GetIconInfo(cursor_handle)
             try:
