@@ -7,6 +7,7 @@ import base64
 import binascii
 from io import BytesIO
 import logging
+import secrets
 import threading
 import time
 import uuid
@@ -14,6 +15,7 @@ import uuid
 from PIL import Image
 
 from app.input_router import RemoteClient
+from app.ports import DEFAULT_STREAM_PORT
 
 logger = logging.getLogger(__name__)
 MAX_DIMENSION = 8192
@@ -155,9 +157,11 @@ class ClientVideoCapture:
 
 
 class ServerVideoReceiver:
-    def __init__(self, server, viewport):
+    def __init__(self, server, viewport, viewport_hwnd=None, stream_port=None):
         self.server = server
         self.viewport = viewport
+        self.viewport_hwnd = viewport_hwnd
+        self.stream_port = stream_port or DEFAULT_STREAM_PORT
         self._lock = threading.Lock()
         self._wake = threading.Event()
         self._stop = threading.Event()
@@ -168,13 +172,136 @@ class ServerVideoReceiver:
         self.last_frame_at = 0.0
         self.started_at = 0.0
         self.failed_selection = None
+
+        # Native streaming state
+        self._native_receiver = None
+        self._native_active = False
+        self._native_stream_id = None
+        self._native_failed_selection = None
+        self._native_started_event = threading.Event()
+        self._native_started_success = False
+
         server.data_network.register_callback('remote_video_frame', self.receive)
+        server.control_network.register_callback('stream_started', self._on_stream_started)
         self._thread = threading.Thread(target=self._run, name='remote-video', daemon=True)
         self._thread.start()
+
+    def _on_stream_started(self, message):
+        if (self._native_stream_id is not None
+                and message.get('stream_id') == self._native_stream_id):
+            self._native_started_success = bool(message.get('success'))
+            self._native_started_event.set()
+
+    def is_native_active(self):
+        return bool(getattr(self, '_native_active', False))
+
+    def resize(self, width, height):
+        self.viewport = (width, height)
+        receiver = getattr(self, '_native_receiver', None)
+        if receiver is not None:
+            try:
+                receiver.resize(width, height)
+            except Exception as error:
+                logger.debug("Native receiver resize failed: %s", error)
+
+    def _start_native(self, selection):
+        from app.native_streamer import (
+            is_native_streaming_supported,
+            NativeStreamerReceiver,
+            STREAMER_EVENT_FIRST_FRAME,
+            STREAMER_EVENT_NEED_KEYFRAME,
+            STREAMER_EVENT_ERROR,
+        )
+        if not self.viewport_hwnd or not is_native_streaming_supported():
+            return False
+        try:
+            self._stop_native()
+            self._native_stream_id = uuid.uuid4().hex
+            self._native_started_event.clear()
+            self._native_started_success = False
+
+            # Option A: Direct 256-bit CSPRNG key delivered over TLS Control Lane
+            stream_key = secrets.token_bytes(32)
+
+            def on_native_event(code, msg):
+                if code == STREAMER_EVENT_FIRST_FRAME:
+                    self.last_frame_at = time.monotonic()
+                    self._native_active = True
+                elif code == STREAMER_EVENT_NEED_KEYFRAME:
+                    try:
+                        self.server.control_network.send_message({
+                            'type': 'stream_keyframe_request',
+                            'session_id': selection.session_id,
+                            'stream_id': self._native_stream_id,
+                        }, session_id=selection.session_id)
+                    except Exception:
+                        pass
+                elif code == STREAMER_EVENT_ERROR:
+                    logger.warning("Native receiver error (%s), falling back to GDI/JPEG", msg)
+                    self._native_failed_selection = selection
+                    self._native_active = False
+
+            self._native_receiver = NativeStreamerReceiver(self.viewport_hwnd, on_event=on_native_event)
+            started = self._native_receiver.start(self.stream_port, stream_key)
+            if not started:
+                self._stop_native()
+                return False
+
+            sent = self.server.control_network.send_message({
+                'type': 'stream_start',
+                'session_id': selection.session_id,
+                'stream_id': self._native_stream_id,
+                'udp_port': self.stream_port,
+                'display_id': selection.display_id,
+                'stream_key': base64.b64encode(stream_key).decode('ascii'),
+                'fps': 60,
+                'bitrate_kbps': 10000,
+            }, session_id=selection.session_id)
+            if not sent:
+                self._stop_native()
+                return False
+
+            # Wait up to 500ms for client's stream_started acknowledgment
+            if self._native_started_event.wait(0.5) and self._native_started_success:
+                self._native_active = True
+                self.last_frame_at = time.monotonic()
+                logger.info("Native hardware video streaming active for %s", selection.display_id)
+                return True
+            else:
+                logger.info("Client did not start native stream, falling back to GDI/JPEG")
+                self._stop_native()
+                return False
+        except Exception as exc:
+            logger.warning("Failed to start native receiver (%s), falling back to GDI/JPEG", exc)
+            self._stop_native()
+            return False
+
+    def _stop_native(self, session_id=None):
+        if self._native_stream_id is not None:
+            sid = session_id or (self.selection.session_id if self.selection else None)
+            if sid:
+                try:
+                    self.server.control_network.send_message({
+                        'type': 'stream_stop',
+                        'session_id': sid,
+                        'stream_id': self._native_stream_id,
+                    }, session_id=sid)
+                except Exception:
+                    pass
+            self._native_stream_id = None
+        self._native_active = False
+        if self._native_receiver is not None:
+            try:
+                self._native_receiver.stop()
+                self._native_receiver.destroy()
+            except Exception:
+                pass
+            self._native_receiver = None
 
     def stop(self):
         self._stop.set()
         self._wake.set()
+        self._stop_native()
         with self._lock:
             self._expected = self._incoming = self._latest = None
 
@@ -211,22 +338,55 @@ class ServerVideoReceiver:
     def stalled(self, now=None):
         now = time.monotonic() if now is None else now
         selection = self.current_selection()
-        return (selection is not None and selection == self.selection
-                and (selection == self.failed_selection
-                     or now - max(self.last_frame_at, self.started_at) >= FRAME_TIMEOUT))
+        if selection is None or selection != self.selection:
+            return False
+        if getattr(self, '_native_active', False):
+            return now - max(self.last_frame_at, self.started_at) >= FRAME_TIMEOUT
+        return (selection == self.failed_selection
+                or now - max(self.last_frame_at, self.started_at) >= FRAME_TIMEOUT)
 
     def _run(self):
         while not self._stop.is_set():
             selection = self.current_selection()
             if selection != self.selection:
+                if self.selection is not None:
+                    self._stop_native(self.selection.session_id)
                 self.selection = selection
                 self.started_at = time.monotonic()
                 self.last_frame_at = 0.0
                 with self._lock:
                     self._latest = self._incoming = self._expected = None
+
             if selection is None or selection == self.failed_selection:
+                self._stop_native()
                 self._stop.wait(0.02)
                 continue
+
+            # Try native streaming if supported and not previously failed for this selection
+            if (self.viewport_hwnd is not None
+                    and selection != self._native_failed_selection
+                    and not self._native_active):
+                if self._start_native(selection):
+                    self.started_at = time.monotonic()
+                else:
+                    self._native_failed_selection = selection
+
+            # While native streaming is active, monitor its liveness without pulling JPEG frames
+            if self._native_active:
+                while (not self._stop.is_set()
+                       and self.current_selection() == selection
+                       and self._native_active):
+                    if time.monotonic() - self.last_frame_at >= FRAME_TIMEOUT:
+                        logger.warning("Native stream stalled, falling back to GDI/JPEG")
+                        self._stop_native()
+                        self._native_failed_selection = selection
+                        self.started_at = time.monotonic()
+                        break
+                    self._stop.wait(0.02)
+                if self._stop.is_set() or self.current_selection() != selection:
+                    continue
+
+            # Fallback path: pull-based GDI/JPEG frame loop
             request_id = uuid.uuid4().hex
             started = time.monotonic()
             with self._lock:
@@ -266,3 +426,4 @@ class ServerVideoReceiver:
                 logger.warning('Remote video unavailable (%s)', type(error).__name__)
                 self.failed_selection = selection
             self._stop.wait(max(0, FRAME_INTERVAL - (time.monotonic() - started)))
+
