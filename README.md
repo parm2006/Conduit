@@ -1,4 +1,4 @@
-# Conduit 7.0.0
+# Conduit 7.1.0
 
 A fast Windows wireless KVM for sharing your mouse, keyboard, newest clipboard item, and on-paste file relay across one Server and up to two Clients on the same local network.
 
