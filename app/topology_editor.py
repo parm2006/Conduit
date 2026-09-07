@@ -1,16 +1,53 @@
 from dataclasses import dataclass
+from functools import lru_cache
+import math
 
 import customtkinter as ctk
+from PIL import Image, ImageDraw, ImageTk
 import tkinter as tk
 
 from app.display_topology import DraftTopology, PlacedMachine
-from app.remote_map import squircle_points
 
 
 CELL_SIZE = 40
 SERVER_COLOR = "#8F99A8"
 CLIENT_COLORS = ("#3B82F6", "#34D399", "#A855F7")
 INVALID_COLOR = "#EF4444"
+
+
+@lru_cache(maxsize=64)
+def _render_cell_image(width, height, color, outline, outline_width=1, radius=6, scale=4):
+    w = width * scale
+    h = height * scale
+    r = radius * scale
+    ow = outline_width * scale
+
+    img = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(img)
+    draw.rounded_rectangle(
+        (ow // 2, ow // 2, w - 1 - ow // 2, h - 1 - ow // 2),
+        radius=r,
+        fill=color,
+        outline=outline,
+        width=ow,
+    )
+    return img.resize((width, height), Image.Resampling.LANCZOS)
+
+
+def rounded_rectangle_points(left, top, right, bottom, radius=6, points_per_corner=8):
+    r = radius
+    pts = []
+    corners = (
+        (right - r, top + r, 270, 360),
+        (right - r, bottom - r, 0, 90),
+        (left + r, bottom - r, 90, 180),
+        (left + r, top + r, 180, 270),
+    )
+    for cx, cy, start_deg, end_deg in corners:
+        for i in range(points_per_corner + 1):
+            theta = math.radians(start_deg + (end_deg - start_deg) * i / points_per_corner)
+            pts.extend((cx + r * math.cos(theta), cy + r * math.sin(theta)))
+    return pts
 
 
 class _HoverTooltip:
@@ -420,6 +457,7 @@ class TopologyEditor(ctk.CTkFrame):
         self.on_rescan = on_rescan
         self._action_mode = "apply"
         self._drag = None
+        self._cell_photos = {}
         self.canvas = tk.Canvas(
             self,
             width=self.GRID_WIDTH,
@@ -523,6 +561,7 @@ class TopologyEditor(ctk.CTkFrame):
 
     def _render(self):
         self.canvas.delete("all")
+        self._cell_photos = {}
         geometry = self._canvas_geometry()
         for x in geometry.x_boundaries:
             self.canvas.create_line(x, 0, x, geometry.height, fill="#243041")
@@ -533,16 +572,40 @@ class TopologyEditor(ctk.CTkFrame):
             tag = f"machine:{cell.machine_id}"
             outline = INVALID_COLOR if cell.invalid else "#D7DEE8"
             width = 3 if cell.invalid else 1
-            rectangle = self.canvas.create_polygon(
-                *squircle_points(left + 1, top + 1, right - 1, bottom - 1),
-                fill=cell.color,
-                outline=outline,
-                width=width,
-                tags=(tag, "machine-cell"),
-            )
+            cell_w = max(1, right - left - 1)
+            cell_h = max(1, bottom - top - 1)
+            cx = (left + right) / 2
+            cy = (top + bottom) / 2
+            photo = None
+            try:
+                pil_img = _render_cell_image(
+                    cell_w, cell_h, cell.color, outline, width, radius=6
+                )
+                photo = ImageTk.PhotoImage(pil_img)
+            except Exception:
+                photo = None
+
+            if photo is not None:
+                self._cell_photos[cell.machine_id] = photo
+                rectangle = self.canvas.create_image(
+                    left + 1,
+                    top + 1,
+                    anchor="nw",
+                    image=photo,
+                    tags=(tag, "machine-cell"),
+                )
+            else:
+                rectangle = self.canvas.create_polygon(
+                    *rounded_rectangle_points(left + 1, top + 1, right, bottom, radius=6),
+                    smooth=False,
+                    fill=cell.color,
+                    outline=outline,
+                    width=width,
+                    tags=(tag, "machine-cell"),
+                )
             label = self.canvas.create_text(
-                (left + right) / 2,
-                (top + bottom) / 2,
+                cx,
+                cy,
                 text=cell.letter,
                 fill="white",
                 font=("Segoe UI", 13, "bold"),
