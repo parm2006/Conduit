@@ -32,7 +32,10 @@ class RemoteView:
         # handlers. Binding twice would duplicate clicks and wheel events.
         overlay.update_idletasks()
         self.set_primary(primary)
-        self.receiver = ServerVideoReceiver(server, self.viewport)
+        self.receiver = ServerVideoReceiver(
+            server, self.viewport,
+            viewport_hwnd=self.canvas.winfo_id(),
+        )
         self._timer = gui.after(25, self._tick)
 
     def set_primary(self, primary):
@@ -46,6 +49,7 @@ class RemoteView:
         receiver = getattr(self, 'receiver', None)
         if receiver is not None:
             receiver.viewport = self.viewport
+            receiver.resize(*self.viewport)
         import win32con
         import win32gui
         hwnd = win32gui.GetAncestor(self.gui.overlay.winfo_id(), win32con.GA_ROOT)
@@ -102,18 +106,19 @@ class RemoteView:
                 self._cursor = None
             if not self.gui.overlay_active:
                 self.gui.show_overlay()
-            frame = self.receiver.take_frame()
-            if frame is not None and frame[0] == remote:
-                _, image, (x, y), cursor = frame
-                self._photo = ImageTk.PhotoImage(image, master=self.canvas)
-                self.canvas.delete('video')
-                self.canvas.create_image(x, y, image=self._photo, anchor='nw', tags='video')
-                if (isinstance(cursor, (list, tuple)) and len(cursor) == 2
-                        and all(type(v) in (int, float) and math.isfinite(v) for v in cursor)):
-                    self._cursor = (self.primary.left + x + cursor[0] * image.width,
-                                    self.primary.top + y + cursor[1] * image.height)
+            if not self.receiver.is_native_active():
+                frame = self.receiver.take_frame()
+                if frame is not None and frame[0] == remote:
+                    _, image, (x, y), cursor = frame
+                    self._photo = ImageTk.PhotoImage(image, master=self.canvas)
+                    self.canvas.delete('video')
+                    self.canvas.create_image(x, y, image=self._photo, anchor='nw', tags='video')
+                    if (isinstance(cursor, (list, tuple)) and len(cursor) == 2
+                            and all(type(v) in (int, float) and math.isfinite(v) for v in cursor)):
+                        self._cursor = (self.primary.left + x + cursor[0] * image.width,
+                                        self.primary.top + y + cursor[1] * image.height)
             active = (remote.machine_id, remote.display_id)
-            cursor = self._cursor
+            cursor = self._cursor or win32gui.GetCursorPos()
         elif isinstance(state, Transitioning):
             return  # Keep the preceding image until ownership is acknowledged.
         else:

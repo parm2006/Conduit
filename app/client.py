@@ -1,3 +1,4 @@
+import base64
 import logging
 import threading
 import os
@@ -102,6 +103,10 @@ class ConduitClient:
         from app.remote_video import ClientVideoCapture
         self.video_capture = ClientVideoCapture(self)
         self.control_network.register_callback('remote_video_request', self.video_capture.request)
+        self._native_sender = None
+        self.control_network.register_callback('stream_start', self.on_stream_start)
+        self.control_network.register_callback('stream_stop', self.on_stream_stop)
+        self.control_network.register_callback('stream_keyframe_request', self.on_stream_keyframe_request)
         self.clipboard_offer_state = ClipboardOfferState("client")
         self.control_connected = False
         self.data_connected = False
@@ -211,6 +216,7 @@ class ConduitClient:
                     self.connect_error = "secure session disconnected during setup"
                     report_setup_failure = True
         self.is_active = False
+        self._stop_native_sender()
         self.clipboard.stop()
         self.clipboard_sender.stop()
         self.paste_coordinator.reset()
@@ -467,6 +473,7 @@ class ConduitClient:
         )
 
     def disconnect(self, preserve_failure=False, error=None):
+        self._stop_native_sender()
         capture = getattr(self, 'video_capture', None)
         if capture is not None:
             capture.cancel()
@@ -942,6 +949,7 @@ class ConduitClient:
                     return
                 logger.info(f"Hit {direction} edge. Sending switch_back to server.")
                 self.is_active = False
+                self._stop_native_sender()
                 coordinator = getattr(self, "paste_coordinator", None)
                 if coordinator is not None:
                     coordinator.set_route(None, "client")
@@ -1165,3 +1173,116 @@ class ConduitClient:
 
     def on_file_manifest_ack(self, data):
         self.file_paste_service.on_manifest_ack(data)
+
+    def _stop_native_sender(self):
+        sender = getattr(self, '_native_sender', None)
+        if sender is not None:
+            try:
+                sender.stop()
+                sender.destroy()
+            except Exception:
+                pass
+            self._native_sender = None
+
+    def _get_display_index(self, display_id):
+        group = getattr(self, 'display_group', None)
+        if group is not None and hasattr(group, 'displays'):
+            for idx, display in enumerate(group.displays):
+                if display.display_id == display_id:
+                    return idx
+        return 0
+
+    def on_stream_start(self, data):
+        session_id = data.get('session_id')
+        stream_id = data.get('stream_id')
+        udp_port = data.get('udp_port')
+        display_id = data.get('display_id')
+        encoded_key = data.get('stream_key')
+        fps = data.get('fps', 60)
+        bitrate_kbps = data.get('bitrate_kbps', 10000)
+
+        # Authentication check: only active authenticated control connection can start stream
+        if not getattr(self, 'is_active', False) or not self.control_network.authenticated:
+            self.control_network.send_message({
+                'type': 'stream_started',
+                'session_id': session_id,
+                'stream_id': stream_id,
+                'success': False,
+                'error': 'not_authenticated',
+            })
+            return
+
+        from app.native_streamer import is_native_streaming_supported, NativeStreamerSender
+        if not is_native_streaming_supported():
+            self.control_network.send_message({
+                'type': 'stream_started',
+                'session_id': session_id,
+                'stream_id': stream_id,
+                'success': False,
+                'error': 'native_not_supported',
+            })
+            return
+
+        try:
+            if not isinstance(encoded_key, str):
+                raise ValueError("missing stream key")
+            stream_key = base64.b64decode(encoded_key)
+            if len(stream_key) != 32:
+                raise ValueError("stream key must be 32 bytes")
+
+            display_index = self._get_display_index(display_id)
+            server_ip = None
+            if hasattr(self.control_network, 'sock') and self.control_network.sock:
+                try:
+                    server_ip = self.control_network.sock.getpeername()[0]
+                except Exception:
+                    pass
+            if not server_ip:
+                server_ip = getattr(self, 'host', '127.0.0.1')
+
+            self._stop_native_sender()
+
+            sender = NativeStreamerSender()
+            started = sender.start(
+                display_index=display_index,
+                target_ip=server_ip,
+                target_port=int(udp_port),
+                session_key=stream_key,
+                fps=int(fps),
+                bitrate_kbps=int(bitrate_kbps),
+            )
+            if not started:
+                sender.destroy()
+                raise RuntimeError("Native sender start returned False")
+
+            self._native_sender = sender
+            self.control_network.send_message({
+                'type': 'stream_started',
+                'session_id': session_id,
+                'stream_id': stream_id,
+                'success': True,
+            })
+            logger.info("Native streaming sender started on display %d -> %s:%d",
+                        display_index, server_ip, udp_port)
+        except Exception as exc:
+            logger.warning("Failed to start native streaming sender: %s", exc)
+            self.control_network.send_message({
+                'type': 'stream_started',
+                'session_id': session_id,
+                'stream_id': stream_id,
+                'success': False,
+                'error': str(exc),
+            })
+
+    def on_stream_stop(self, data):
+        self._stop_native_sender()
+        logger.info("Native streaming sender stopped")
+
+    def on_stream_keyframe_request(self, data):
+        sender = getattr(self, '_native_sender', None)
+        if sender is not None:
+            try:
+                sender.request_keyframe()
+            except Exception as exc:
+                logger.debug("Failed to request keyframe on native sender: %s", exc)
+
