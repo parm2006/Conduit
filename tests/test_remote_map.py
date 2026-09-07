@@ -23,8 +23,12 @@ class RemoteMapTests(unittest.TestCase):
 
     def test_map_alpha_is_bounded_and_has_no_rectangular_background(self):
         module = self.module()
+        self.assertEqual(module.MAP_OPACITY, 179)
         cells = [('server', 's', 0, 0, '#8F99A8'), ('client', 'c', 1, 0, '#3B82F6')]
         rendered = module.render_map(cells, ('client', 'c'), 192)
         self.assertEqual(rendered.size, (192, 192))
-        self.assertLessEqual(rendered.getchannel('A').getextrema()[1], 153)
+        self.assertLessEqual(rendered.getchannel('A').getextrema()[1], 179)
         self.assertEqual(rendered.getpixel((0, 0))[3], 0)
+        # Server is grey and client is blue; inactive tile retains full visible saturation.
+        self.assertEqual(rendered.getpixel((60, 96))[:3], (143, 153, 168))
+        self.assertEqual(rendered.getpixel((130, 96))[:3], (59, 130, 246))

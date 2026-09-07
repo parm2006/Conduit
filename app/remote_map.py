@@ -3,7 +3,7 @@ import math
 from PIL import Image, ImageChops, ImageColor, ImageDraw
 
 SQUIRCLE_EXPONENT = 3.888
-MAP_OPACITY = 153  # 60% of 255; includes border and grid.
+MAP_OPACITY = 179  # 70% of 255 (+10% opacity); includes border and grid.
 
 
 def squircle_points(left, top, right, bottom, samples=96):
@@ -71,9 +71,6 @@ def render_map(cells, active, side):
         cell, box = cells[index], bounds[index]
         selected = cell[:2] == active
         color = ImageColor.getrgb(cell[4])
-        if not selected:
-            gray = round(color[0] * .2126 + color[1] * .7152 + color[2] * .0722)
-            color = tuple(round(gray * .75 + value * .25) for value in color)
         inset = -tile * .075 if selected else scale * .7
         points = squircle_points(box[0] + inset, box[1] + inset,
                                  box[2] - inset, box[3] - inset)
@@ -81,5 +78,5 @@ def render_map(cells, active, side):
         if selected:
             draw.line(points + points[:2], fill=(255, 255, 255, 255), width=3 * scale, joint='curve')
     result = result.resize((side, side), Image.Resampling.LANCZOS)
-    result.putalpha(result.getchannel('A').point(lambda alpha: round(alpha * .6)))
+    result.putalpha(result.getchannel('A').point(lambda alpha: round(alpha * (MAP_OPACITY / 255.0))))
     return result
