@@ -1,6 +1,6 @@
-# Conduit 7.1.0
+# Conduit 7.2.0
 
-A fast Windows wireless KVM for sharing your mouse, keyboard, newest clipboard item, and on-paste file relay across one Server and up to two Clients on the same local network.
+A fast Windows wireless KVM for sharing your mouse, keyboard, newest clipboard item, on-paste file relay, and low-latency native hardware video streaming across one Server and up to two Clients on the same local network.
 
 [![Download Latest Release](https://img.shields.io/github/v/release/parm2006/Conduit?label=Download%20Latest%20Release)](https://github.com/parm2006/Conduit/releases/latest)
 
@@ -9,12 +9,14 @@ A fast Windows wireless KVM for sharing your mouse, keyboard, newest clipboard i
 ## ✨ Features
 
 - **Multi-PC Control**: Seamless cursor and keyboard routing across one Server and up to two Clients with multi-monitor support.
+- **Hardware Input Pipeline**: Native hardware scan-code injection and 1:1 synchronized absolute cursor coordinate projection across machines.
+- **Native Hardware Video Streaming**: Native 60 FPS DXGI Desktop Duplication capture, hardware H.264 MFT encoding/decoding, AES-GCM encrypted UDP transport, and Direct3D 11 swapchain presentation.
+  > [!NOTE]
+  > Video stream transfer is in active development. While it is fully functional, hardware-accelerated, and provides low-latency synchronized cursor control, it is not yet 100% perfect across all network conditions and setups, but is in a solid, usable state.
 - **Shared Clipboard & Files**: Syncs the global newest clipboard item (text, images, HTML/RTF) and provides an on-paste file relay for files and folders.
 - **Visual Display Arrangement**: Displays each Windows machine name in the layout; drag and snap screen edges, then click **Apply**.
-- **Secure by Default**: Authenticated pairing, TLS identity, and private network firewall rules.
+- **Secure by Default**: Authenticated pairing, TLS identity, AES-GCM authenticated media encryption, and private network firewall rules.
 - **Remote Mode**: Before starting the Server, enable the bottom Remote Mode switch. Only the Client monitor you control is shown fullscreen on the Server primary display, with its cursor and aspect ratio preserved. The switch stays locked until the Server stops and defaults off on a fresh launch.
-
-Remote Mode uses the existing paired TLS lanes for high-quality 4:4:4 JPEG frames, targeting up to 20 frames per second with one outstanding frame request. Input stays on the separate control lane; achieved frame rate depends on capture, resolution and network speed. No additional ports are needed. Run this version on both Server and Clients. An unavailable stream returns the cursor to the Server primary display after one second.
 
 The live monitor map stays at the Server primary screen's upper-left corner, including while the GUI is hidden. It is 70% opaque, click-through, unlabeled, and grouped by computer color. Its active squircle tile grows 15% with a white outline. Moving the cursor into the surrounding hide region temporarily hides the map. Server monitors are never streamed.
 

@@ -68,6 +68,7 @@ datas = collect_data_files("customtkinter") + [
     (str(ASSETS / "app_icon.ico"), "app/assets"),
     (str(ROOT / "LICENSE"), "."),
     (str(NOTICES), "."),
+    (str(ROOT / "app" / "bin" / "conduit_streamer.dll"), "app/bin"),
 ]
 
 a = Analysis(

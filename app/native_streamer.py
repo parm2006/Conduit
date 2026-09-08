@@ -32,6 +32,12 @@ def get_streamer_dll():
 
     dll_path = os.path.join(os.path.dirname(__file__), "bin", "conduit_streamer.dll")
     if not os.path.exists(dll_path):
+        base_dir = getattr(sys, "_MEIPASS", None)
+        if base_dir:
+            cand = os.path.join(base_dir, "app", "bin", "conduit_streamer.dll")
+            if os.path.exists(cand):
+                dll_path = cand
+    if not os.path.exists(dll_path):
         logger.debug("conduit_streamer.dll not found at %s", dll_path)
         return None
 
