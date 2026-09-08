@@ -205,6 +205,12 @@ class InputRouter:
             return False
         return self._dispatcher.enqueue_move(state.session_id, dx, dy)
 
+    def forward_mouse_position(self, x, y):
+        state = self._active_remote_snapshot()
+        if state is None:
+            return False
+        return self._dispatcher.enqueue_position(state.session_id, x, y)
+
     def forward_scroll(self, dx, dy):
         return self._enqueue_active_discrete({
             "type": "mouse_scroll",

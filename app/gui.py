@@ -2179,22 +2179,18 @@ class ConduitGUI(ctk.CTk):
                         self.overlay.config(cursor='arrow')
                         entry_x = self.overlay_center_x
                         entry_y = self.overlay_center_y
-                        router = getattr(self.server, 'input_router', None)
-                        state = getattr(router, 'state', None)
-                        if state and hasattr(state, 'position') and hasattr(router, 'topology'):
-                            for m in router.topology.machines:
-                                if m.group.machine_id == state.machine_id:
-                                    for d in m.group.displays:
-                                        if d.display_id == state.display_id:
-                                            client_w = max(1, d.rect.right - d.rect.left)
-                                            client_h = max(1, d.rect.bottom - d.rect.top)
-                                            ratio_x = state.position[0] / client_w
-                                            ratio_y = state.position[1] / client_h
-                                            w = max(1, self.overlay.winfo_width())
-                                            h = max(1, self.overlay.winfo_height())
-                                            entry_x = max(5, min(w - 5, round(w * ratio_x)))
-                                            entry_y = max(5, min(h - 5, round(h * ratio_y)))
-                                            break
+                        target_rect, proj, pos = self._get_remote_geometry_and_projection()
+                        if target_rect is not None and proj is not None and pos is not None:
+                            dest_x, dest_y, fitted_w, fitted_h = proj
+                            client_w = max(1, target_rect.right - target_rect.left)
+                            client_h = max(1, target_rect.bottom - target_rect.top)
+                            ratio_x = max(0.0, min(1.0, (pos[0] - target_rect.left) / client_w))
+                            ratio_y = max(0.0, min(1.0, (pos[1] - target_rect.top) / client_h))
+                            entry_x = dest_x + round(ratio_x * fitted_w)
+                            entry_y = dest_y + round(ratio_y * fitted_h)
+                            entry_x = max(dest_x, min(dest_x + fitted_w - 1, entry_x))
+                            entry_y = max(dest_y, min(dest_y + fitted_h - 1, entry_y))
+
                         self.last_x = entry_x
                         self.last_y = entry_y
                         self.warp_count = 1
@@ -2207,6 +2203,47 @@ class ConduitGUI(ctk.CTk):
             except Exception as error:
                 logger.debug("Could not show overlay: %s", error_name(error))
         self.after(0, _show)
+
+    def _get_remote_geometry_and_projection(self):
+        router = getattr(self.server, 'input_router', None)
+        state = getattr(router, 'state', None)
+        if router is None or not hasattr(router, 'topology') or router.topology is None or state is None:
+            return None, None, None
+
+        pos = getattr(state, 'position', None)
+        machine_id = getattr(state, 'machine_id', None)
+        display_id = getattr(state, 'display_id', None)
+        if pos is None:
+            pos = getattr(state, 'destination_position', None)
+            machine_id = getattr(state, 'destination_machine_id', None)
+            display_id = getattr(state, 'destination_display_id', None)
+
+        target_rect = None
+        if machine_id and display_id:
+            for m in router.topology.machines:
+                if m.group.machine_id == machine_id:
+                    for d in m.group.displays:
+                        if d.display_id == display_id:
+                            target_rect = d.rect
+                            break
+                    if target_rect is not None:
+                        break
+
+        if target_rect is None:
+            return None, None, None
+
+        w = max(1, self.overlay.winfo_width())
+        h = max(1, self.overlay.winfo_height())
+        client_w = max(1, target_rect.right - target_rect.left)
+        client_h = max(1, target_rect.bottom - target_rect.top)
+        scale = min(w / client_w, h / client_h)
+        fitted_w = max(1, round(client_w * scale))
+        fitted_h = max(1, round(client_h * scale))
+        dest_x = (w - fitted_w) // 2
+        dest_y = (h - fitted_h) // 2
+        proj = (dest_x, dest_y, fitted_w, fitted_h)
+
+        return target_rect, proj, pos
 
     def hide_overlay(self):
         def _hide():
@@ -2235,7 +2272,22 @@ class ConduitGUI(ctk.CTk):
             self.last_x = event.x
             self.last_y = event.y
 
-            if dx != 0 or dy != 0:
+            target_rect, proj, _ = self._get_remote_geometry_and_projection()
+            if target_rect is not None and proj is not None:
+                dest_x, dest_y, fitted_w, fitted_h = proj
+                client_w = max(1, target_rect.right - target_rect.left)
+                client_h = max(1, target_rect.bottom - target_rect.top)
+
+                norm_x = (event.x - dest_x) / fitted_w
+                norm_y = (event.y - dest_y) / fitted_h
+                client_x = target_rect.left + round(norm_x * client_w)
+                client_y = target_rect.top + round(norm_y * client_h)
+                client_x = max(target_rect.left, min(target_rect.right - 1, client_x))
+                client_y = max(target_rect.top, min(target_rect.bottom - 1, client_y))
+
+                if self.server:
+                    self.server.on_mouse_position(client_x, client_y)
+            elif dx != 0 or dy != 0:
                 if self.server:
                     self.server.on_mouse_move(dx, dy)
             return

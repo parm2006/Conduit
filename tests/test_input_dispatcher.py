@@ -332,9 +332,35 @@ class InputDispatcherTests(unittest.TestCase):
                     ))
                 self.assertTrue(responsive.wait_for_count(25, 0.2))
                 self.assertEqual(failures, [])
-                dispatcher.stop_all()
-                blocked.release.set()
-                self.assertTrue(blocked.finished.wait(0.2))
+    def test_enqueue_position_coalesces_consecutive_updates(self):
+        lane = BlockingLane()
+        failures = []
+        dispatcher = InputDispatcher(
+            lane_for_session=lambda _: lane,
+            on_failure=lambda session_id, reason: failures.append((session_id, reason)),
+        )
+        self.assertTrue(dispatcher.start_session("session-1"))
+        # Block the worker with a discrete message
+        self.assertTrue(dispatcher.enqueue_discrete(
+            "session-1",
+            {"type": "mouse_click", "button": "left", "pressed": True},
+        ))
+        self.assertTrue(lane.entered.wait(0.5))
+
+        # Enqueue multiple positions while blocked
+        self.assertTrue(dispatcher.enqueue_position("session-1", 100, 200))
+        self.assertTrue(dispatcher.enqueue_position("session-1", 150, 250))
+        self.assertTrue(dispatcher.enqueue_position("session-1", 200, 300))
+
+        # Release the worker
+        lane.release.set()
+        self.assertTrue(lane.wait_for_count(2, 0.5))
+        dispatcher.stop_all()
+
+        # The first message is the click, the second should be the COALESCED position (200, 300)
+        self.assertEqual(lane.messages[0]["type"], "mouse_click")
+        self.assertEqual(lane.messages[1], {"type": "mouse_position", "x": 200, "y": 300})
+        self.assertEqual(failures, [])
 
 
 if __name__ == "__main__":

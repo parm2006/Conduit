@@ -44,6 +44,25 @@ class RemoteViewLifecycleTests(unittest.TestCase):
         client.on_mouse_move({'dx': 30, 'dy': 0})
         self.assertEqual(moves, [(1, 0)])
 
+    def test_client_on_mouse_position_clamps_and_injects(self):
+        client = ConduitClient.__new__(ConduitClient)
+        positions = []
+        edge_checks = []
+        client.is_active = True
+        client._remote_control_rect = NativeRect(0, 0, 1920, 1080)
+        client.input_handler = SimpleNamespace(
+            inject_position=lambda x, y: positions.append((x, y)),
+            check_edge_hit=lambda x, y: edge_checks.append((x, y)),
+        )
+        self.assertTrue(client.on_mouse_position({'x': 500, 'y': 300}))
+        self.assertEqual(positions, [(500, 300)])
+        self.assertEqual(edge_checks, [(500, 300)])
+
+        # Test out-of-bounds clamping
+        self.assertTrue(client.on_mouse_position({'x': 2500, 'y': -50}))
+        self.assertEqual(positions[-1], (1919, 0))
+        self.assertEqual(edge_checks[-1], (1919, 0))
+
     def test_remote_view_has_explicit_close(self):
         self.assertIsNotNone(importlib.util.find_spec('app.remote_view'))
         from app.remote_view import RemoteView

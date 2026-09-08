@@ -1007,6 +1007,18 @@ class ConduitServer:
             'dy': dy
         })
 
+    def on_mouse_position(self, x, y):
+        if getattr(self, "routing_suspended", False):
+            return False
+        router = getattr(self, 'input_router', None)
+        if router is not None:
+            return router.forward_mouse_position(x, y)
+        self.control_network.send_message({
+            'type': 'mouse_position',
+            'x': x,
+            'y': y
+        })
+
     def on_mouse_click(self, button, pressed):
         if getattr(self, "routing_suspended", False):
             return False

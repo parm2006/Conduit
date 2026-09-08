@@ -128,6 +128,7 @@ class ConduitClient:
         self.control_network.register_callback(
             'mouse_move_batch', self.on_mouse_move_batch
         )
+        self.control_network.register_callback('mouse_position', self.on_mouse_position)
         self.control_network.register_callback('mouse_click', self.on_mouse_click)
         self.control_network.register_callback('mouse_scroll', self.on_mouse_scroll)
         self.control_network.register_callback('key_press', self.on_key_press)
@@ -857,6 +858,21 @@ class ConduitClient:
                 self.input_handler.set_client_topology_edge(None)
             return False
         self._apply_clipboard_offer_route()
+        return True
+
+    def on_mouse_position(self, data):
+        if not self.is_active:
+            return False
+        x = data.get('x')
+        y = data.get('y')
+        if x is None or y is None:
+            return False
+        rect = getattr(self, '_remote_control_rect', None)
+        if rect is not None:
+            x = max(rect.left, min(rect.right - 1, int(x)))
+            y = max(rect.top, min(rect.bottom - 1, int(y)))
+        self.input_handler.inject_position(x, y)
+        self.input_handler.check_edge_hit(x, y)
         return True
 
     def on_mouse_move(self, data):

@@ -145,6 +145,10 @@ class WindowsHardwareMouseInjector:
             self.user32.mouse_event(self.MOUSEEVENTF_HWHEEL, 0, 0, int(dx * self.WHEEL_DELTA), 0)
         return True
 
+    def set_position(self, x, y):
+        self.user32.SetCursorPos(int(x), int(y))
+        return True
+
 
 WindowsMouseInjector = WindowsHardwareMouseInjector
 
@@ -459,6 +463,9 @@ class InputHandler:
             self.mouse.move(dx, dy)
         # Check if client mouse hits its return edge to switch back to server
         x, y = self.mouse.position
+        self.check_edge_hit(x, y)
+
+    def check_edge_hit(self, x, y):
         if hasattr(self, "client_topology_edge_regions"):
             for region in self.client_topology_edge_regions:
                 if self._point_hits_region(region, x, y):
@@ -477,22 +484,34 @@ class InputHandler:
                         edge_ratio(region.source_rect, region.source_side, x, y),
                         region,
                     )
-                    return
-            return
+                    return True
+            return False
         client_edge = getattr(self, 'client_edge', None)
         if client_edge == 'left' and x <= 0:
             self.trigger('client_edge_hit', 'left', y / self.screen_height)
+            return True
         elif client_edge == 'right' and x >= self.screen_width - 2:
             self.trigger('client_edge_hit', 'right', y / self.screen_height)
+            return True
         elif client_edge == 'top' and y <= 0:
             self.trigger('client_edge_hit', 'top', x / self.screen_width)
+            return True
         elif client_edge == 'bottom' and y >= self.screen_height - 2:
             self.trigger('client_edge_hit', 'bottom', x / self.screen_width)
+            return True
+        return False
 
     def inject_position(self, x, y):
         before = tuple(self.mouse.position)
-        target = (x, y)
-        self.mouse.position = target
+        target = (int(x), int(y))
+        injector = getattr(self, "mouse_injector", None)
+        if injector is not None and hasattr(injector, "set_position"):
+            try:
+                injector.set_position(*target)
+            except Exception:
+                self.mouse.position = target
+        else:
+            self.mouse.position = target
         observed = tuple(self.mouse.position)
         logger.info(
             "[cursor] Warp before=%s target=%s observed=%s",

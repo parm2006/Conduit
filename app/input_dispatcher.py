@@ -111,6 +111,29 @@ class InputDispatcher:
         self._report_failure(state.session_id, failure_reason)
         return False
 
+    def enqueue_position(self, session_id, x, y):
+        state = self._state(session_id)
+        if state is None:
+            return False
+        failure_reason = None
+        with state.condition:
+            if not state.accepting:
+                return False
+            # Coalesce: if the last queued record is already a position, update it in-place!
+            if state.records and state.records[-1][0] == "position":
+                state.records[-1] = ("position", (int(x), int(y)))
+                return True
+            if state.pending_movement >= self._max_movement:
+                failure_reason = "position queue overflow"
+                self._mark_failed_locked(state)
+            else:
+                state.records.append(("position", (int(x), int(y))))
+                state.pending_movement += 1
+                state.condition.notify()
+                return True
+        self._report_failure(state.session_id, failure_reason)
+        return False
+
     def enqueue_discrete(self, session_id, message):
         state = self._state(session_id)
         if state is None:
@@ -148,6 +171,13 @@ class InputDispatcher:
                     message = {
                         "type": "mouse_move_batch",
                         "deltas": [list(delta) for delta in payload],
+                    }
+                elif kind == "position":
+                    state.pending_movement -= 1
+                    message = {
+                        "type": "mouse_position",
+                        "x": payload[0],
+                        "y": payload[1],
                     }
                 else:
                     state.pending_discrete -= 1
