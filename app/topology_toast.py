@@ -70,6 +70,15 @@ def connection_lost_warning_view(windows_name):
     )
 
 
+def background_mode_view():
+    return TopologyToastView(
+        title="Conduit is running in the background",
+        details="Press Ctrl+Shift+Alt+B to bring it back",
+        color="#2563EB",
+        hide_after_ms=5000,
+    )
+
+
 class TopologyIdentificationToast:
     DETAILS_WRAP_LENGTH = TOAST_WIDTH - 32
 
@@ -175,6 +184,9 @@ class DisplayChangeWarningToast:
 
     def show_connection_lost(self, windows_name):
         self._show_view(connection_lost_warning_view(windows_name))
+
+    def show_background_mode(self):
+        self._show_view(background_mode_view())
 
     def _show_view(self, view):
         if self._hide_after is not None:

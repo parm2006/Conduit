@@ -62,6 +62,7 @@ class GuiConnectionLifecycleTests(unittest.TestCase):
     def test_only_successful_apply_advances_action_to_reset(self):
         modes = []
         commits = []
+        background_events = []
         editor = SimpleNamespace(
             state=SimpleNamespace(commit=lambda candidate: commits.append(candidate)),
             set_action_mode=lambda mode: modes.append(mode),
@@ -80,13 +81,49 @@ class GuiConnectionLifecycleTests(unittest.TestCase):
         gui.server = server
         gui.topology_editor = editor
         gui._set_status = lambda *args, **kwargs: None
+        gui.display_warning_toast = SimpleNamespace(
+            show_background_mode=lambda: background_events.append("notice")
+        )
+        gui.toggle_daemon_mode = lambda: background_events.append("toggle")
 
         gui._finish_topology_apply(server, candidate, False)
         self.assertEqual(modes, [])
+        self.assertEqual(background_events, [])
 
         gui._finish_topology_apply(server, candidate, True)
         self.assertEqual(modes, ["reset"])
         self.assertEqual(commits, [candidate])
+        self.assertEqual(background_events, ["notice", "toggle"])
+
+    def test_reload_auto_apply_does_not_toggle_background_mode(self):
+        background_events = []
+        candidate = SimpleNamespace(
+            machines=(
+                SimpleNamespace(group=SimpleNamespace(machine_id="server")),
+            )
+        )
+        gui = ConduitGUI.__new__(ConduitGUI)
+        gui.server = SimpleNamespace(
+            session_registry=SimpleNamespace(active_sessions=lambda: ()),
+            control_connected=False,
+        )
+        gui.topology_editor = SimpleNamespace(
+            state=SimpleNamespace(commit=lambda value: None),
+            set_action_mode=lambda mode: True,
+            _render=lambda: None,
+        )
+        gui._reload_auto_applying = True
+        gui._sync_remote_primary = lambda value: None
+        gui._set_status = lambda *args, **kwargs: None
+        gui.display_warning_toast = SimpleNamespace(
+            show_background_mode=lambda: background_events.append("notice")
+        )
+        gui.toggle_daemon_mode = lambda: background_events.append("toggle")
+
+        gui._finish_topology_apply(gui.server, candidate, True)
+
+        self.assertFalse(gui._reload_auto_applying)
+        self.assertEqual(background_events, [])
 
     def test_client_disconnect_button_clears_connection_toasts_silently(self):
         client = Client()

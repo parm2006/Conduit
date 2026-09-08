@@ -6,6 +6,7 @@ from app.file_transfer.toast import TOAST_HEIGHT, TOAST_WIDTH
 from app.topology_toast import (
     DisplayChangeWarningToast,
     TopologyIdentificationToast,
+    background_mode_view,
     connection_lost_warning_view,
     display_change_warning_view,
     topology_toast_rect,
@@ -79,6 +80,17 @@ class TopologyToastTests(unittest.TestCase):
             "Removed from the draft · Active routing stays unchanged",
         )
         self.assertEqual(view.color, "#D97706")
+        self.assertEqual(view.hide_after_ms, 5000)
+
+    def test_background_mode_notice_explains_global_restore_shortcut(self):
+        view = background_mode_view()
+
+        self.assertEqual(view.title, "Conduit is running in the background")
+        self.assertEqual(
+            view.details,
+            "Press Ctrl+Shift+Alt+B to bring it back",
+        )
+        self.assertEqual(view.color, "#2563EB")
         self.assertEqual(view.hide_after_ms, 5000)
 
     def test_fixed_size_toasts_wrap_monitor_details(self):

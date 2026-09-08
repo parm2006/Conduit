@@ -1642,6 +1642,9 @@ class ConduitGUI(ctk.CTk):
     def _finish_topology_apply(self, source, candidate, success):
         if self.server is not source:
             return
+        reload_auto_applying = bool(
+            self.__dict__.get("_reload_auto_applying", False)
+        )
         if not success:
             self._reveal_reload_layout_failure()
             self._set_status(
@@ -1675,6 +1678,22 @@ class ConduitGUI(ctk.CTk):
                 {'type': 'topology_applied'},
             )
         self._set_status("Status: Machine layout reset", "green")
+        if not reload_auto_applying:
+            notice = self.__dict__.get("display_warning_toast")
+            show_notice = (
+                None if notice is None else getattr(
+                    notice,
+                    "show_background_mode",
+                    None,
+                )
+            )
+            if show_notice is not None:
+                show_notice()
+            toggle_background = self.__dict__.get("toggle_daemon_mode")
+            if toggle_background is None and "tk" in self.__dict__:
+                toggle_background = self.toggle_daemon_mode
+            if toggle_background is not None:
+                toggle_background()
 
     def _on_topology_cancel(self):
         self._pending_topology_rescan = None
