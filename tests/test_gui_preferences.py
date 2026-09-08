@@ -806,6 +806,68 @@ class SuccessfulRoleTimingTests(unittest.TestCase):
 
 
 class FixedWindowConfigurationTests(unittest.TestCase):
+    @staticmethod
+    def _status_gui():
+        class Textbox:
+            def __init__(self):
+                self.text = ""
+
+            def configure(self, **kwargs):
+                pass
+
+            def delete(self, start, end):
+                self.text = ""
+
+            def insert(self, index, text, tags=None):
+                self.text += text
+
+            def tag_config(self, name, **kwargs):
+                pass
+
+        gui = ConduitGUI.__new__(ConduitGUI)
+        gui.status_text = Textbox()
+        return gui
+
+    def test_problem_status_displays_supplied_error_code(self):
+        gui = self._status_gui()
+
+        gui._set_status("Status: Could not start server", "red", error_code="9")
+
+        self.assertEqual(
+            gui.status_text.text,
+            "Status: Could not start server\nError Code 9",
+        )
+
+    def test_problem_status_defaults_to_error_code_xx(self):
+        gui = self._status_gui()
+
+        gui._set_status("Status: Failure", "red")
+
+        self.assertEqual(gui.status_text.text, "Status: Failure\nError Code XX")
+
+    def test_client_problem_status_displays_client_initial(self):
+        gui = self._status_gui()
+
+        gui._set_status(
+            "Status: Client failed",
+            "orange",
+            error_code="20",
+            client_name=" Bedroom",
+            client_specific=True,
+        )
+
+        self.assertEqual(
+            gui.status_text.text,
+            "Status: Client failed\nError Code 20.B",
+        )
+
+    def test_ok_status_does_not_display_error_code(self):
+        for color in ("gray", "green", "orange"):
+            with self.subTest(color=color):
+                gui = self._status_gui()
+                gui._set_status("Status: Working", color, error_code="OK")
+                self.assertEqual(gui.status_text.text, "Status: Working")
+
     def test_pairing_code_segment_is_white_inside_colored_status(self):
         class Textbox:
             def __init__(self):

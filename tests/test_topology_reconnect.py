@@ -108,7 +108,7 @@ class TopologyReconnectTests(unittest.TestCase):
                 draft=SimpleNamespace(server_id="server", machines=()),
             ),
         )
-        gui._set_status = lambda message, color: None
+        gui._set_status = lambda message, color, **kwargs: None
         gui.after = lambda delay, callback: timeouts.append(callback)
 
         with patch(
@@ -231,7 +231,7 @@ class TopologyReconnectTests(unittest.TestCase):
         old = {"source": object()}
         current = {"source": object()}
         gui._pending_topology_rescan = current
-        gui._set_status = lambda message, color: statuses.append((message, color))
+        gui._set_status = lambda message, color, **kwargs: statuses.append((message, color))
 
         gui._expire_topology_rescan(old)
 

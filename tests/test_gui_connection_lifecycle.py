@@ -523,7 +523,7 @@ class GuiConnectionLifecycleTests(unittest.TestCase):
             ),
         )
         gui.after = lambda delay, callback: callback()
-        gui._set_status = lambda message, color: None
+        gui._set_status = lambda message, color, **kwargs: None
         gui.ensure_visible = lambda: None
         gui.server_port_entry = SimpleNamespace(get=lambda: "28903")
         gui._show_client_disconnect_warning = warnings.append
@@ -547,7 +547,7 @@ class GuiConnectionLifecycleTests(unittest.TestCase):
         gui.after = lambda delay, callback: callback()
         gui.ensure_visible = lambda: None
         gui.server_port_entry = SimpleNamespace(get=lambda: "28903")
-        gui._set_status = lambda message, color: statuses.append((message, color))
+        gui._set_status = lambda message, color, **kwargs: statuses.append((message, color))
         gui._show_client_disconnect_warning = lambda name: None
 
         gui._on_server_client_disconnected(
@@ -592,7 +592,7 @@ class GuiConnectionLifecycleTests(unittest.TestCase):
         )
         gui.after = lambda delay, callback: callback()
         gui.ensure_visible = lambda: None
-        gui._set_status = lambda *args: None
+        gui._set_status = lambda *args, **kwargs: None
         gui._show_client_disconnect_warning = lambda name: None
 
         with patch("app.gui.WindowsDisplayDiscovery") as discovery:
@@ -792,7 +792,7 @@ class GuiConnectionLifecycleTests(unittest.TestCase):
         gui = ConduitGUI.__new__(ConduitGUI)
         gui.server = server
         gui.topology_editor = editor
-        gui._set_status = lambda message, color: None
+        gui._set_status = lambda message, color, **kwargs: None
 
         gui._finish_topology_apply(server, candidate, True)
 

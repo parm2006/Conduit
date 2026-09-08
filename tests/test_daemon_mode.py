@@ -53,7 +53,9 @@ class MockConduitGUI(ConduitGUI):
     def on_close(self):
         self.close_calls += 1
 
-    def _set_status(self, message, color="gray", white_text=None, show_ip=None):
+    def _set_status(
+        self, message, color="gray", white_text=None, show_ip=None, **kwargs
+    ):
         pass
 
 

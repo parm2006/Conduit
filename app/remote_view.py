@@ -5,6 +5,7 @@ import threading
 import tkinter as tk
 from PIL import ImageTk
 
+from app.error_codes import REMOTE_VIDEO_UNAVAILABLE
 from app.input_router import RemoteClient, Transitioning
 from app.remote_video import ServerVideoReceiver
 from app.remote_map import map_bounds, cursor_near_map, render_map
@@ -85,7 +86,13 @@ class RemoteView:
         self._returning = True
         self.canvas.delete('all')
         self.gui.hide_overlay()
-        self.gui._set_status('Status: Remote video unavailable. Returned to Server display.', 'orange')
+        self.gui._set_status(
+            'Status: Remote video unavailable. Returned to Server display.',
+            'orange',
+            error_code=REMOTE_VIDEO_UNAVAILABLE,
+            client_name=getattr(getattr(self, "client", None), "windows_name", None),
+            client_specific=True,
+        )
         threading.Thread(target=self.server._return_cursor_to_server,
                          name='remote-video-return', daemon=True).start()
 

@@ -11,6 +11,31 @@ from app.file_transfer.toast import TransferToast
 from app.crypto import certificate_fingerprint, pairing_code_from_fingerprint
 from app.pairing_dialog import PairingApprovalController
 from app.safe_errors import error_name, public_error_message
+from app.error_codes import (
+    CLIENT_CONNECTION_FAILED,
+    CLIENT_DISPLAYS_CHANGED,
+    CLIENT_DISPLAY_RESCAN_FAILED,
+    CLIENT_DISPLAY_RESCAN_TIMEOUT,
+    CLIENT_INVALID_PORT,
+    CLIENT_PASSWORD_REQUIRED,
+    CLIENT_TOPOLOGY_DISCONNECTED,
+    CLIENT_TOPOLOGY_POSITION_UNAVAILABLE,
+    CLIENT_TOPOLOGY_REJECTED,
+    FIREWALL_ACTION_CANCELLED,
+    FIREWALL_ACTION_FAILED,
+    FIREWALL_START_CANCELLED,
+    FIREWALL_START_FAILED,
+    OK,
+    PAIRING_IDENTITY_CLEAR_FAILED,
+    REMOTE_VIEW_START_FAILED,
+    SERVER_DISPLAY_RESCAN_FAILED,
+    SERVER_INVALID_PORT,
+    SERVER_PASSWORD_REQUIRED,
+    SERVER_START_FAILED,
+    TOPOLOGY_DISCONNECTED,
+    TOPOLOGY_LOCAL_APPLY_FAILED,
+    format_error_code,
+)
 from app.preferences import UserPreferences
 from app.ports import DEFAULT_BASE_PORT
 from app.version import PRODUCT_NAME, PRODUCT_VERSION
@@ -407,7 +432,9 @@ class ConduitGUI(ctk.CTk):
         self._server_display_monitor = None
         self.pairing_approval = PairingApprovalController(
             self,
-            on_status=lambda message: self._set_status(message, "orange"),
+            on_status=lambda message: self._set_status(
+                message, "orange", error_code=OK
+            ),
         )
         
         # UI setup
@@ -566,7 +593,7 @@ class ConduitGUI(ctk.CTk):
 
         self.status_text = ctk.CTkTextbox(self, height=92, wrap="word")
         self.status_text.grid(row=1, column=0, padx=20, pady=(0, 14), sticky="nsew")
-        self._set_status("Status: Idle", "gray")
+        self._set_status("Status: Idle", "gray", error_code=OK)
         
         # Global Hotkey Monitor
         self.global_hotkey_monitor = GlobalHotkeyMonitor(
@@ -656,6 +683,7 @@ class ConduitGUI(ctk.CTk):
                 "Status: Invalid port\n"
                 "Enter a base port from 1 to 65533.",
                 "red",
+                error_code=SERVER_INVALID_PORT,
             )
             return
         if self.firewall_onboarding.inspection.state not in {
@@ -686,12 +714,14 @@ class ConduitGUI(ctk.CTk):
                 self._set_status(
                     "Status: Firewall setup was cancelled.",
                     "orange",
+                    error_code=FIREWALL_ACTION_CANCELLED,
                 )
             elif result.outcome is not FirewallSetupOutcome.READY:
                 self._set_status(
                     "Status: Firewall setup did not complete.\n"
                     "Try again or ask your administrator for help.",
                     "red",
+                    error_code=FIREWALL_ACTION_FAILED,
                 )
 
         result = self.firewall_onboarding.configure_async(
@@ -706,6 +736,7 @@ class ConduitGUI(ctk.CTk):
                 if conflict
                 else "Status: Configuring Windows Firewall...",
                 "orange",
+                error_code=OK,
             )
         else:
             complete_setup(result)
@@ -716,12 +747,17 @@ class ConduitGUI(ctk.CTk):
             self._set_status(
                 "Status: Invalid port\nEnter a base port from 1 to 65533.",
                 "red",
+                error_code=SERVER_INVALID_PORT,
             )
             return
         password = self.server_password_entry.get()
         
         if not password:
-            self._set_status("Status: Error - Password required", "red")
+            self._set_status(
+                "Status: Error - Password required",
+                "red",
+                error_code=SERVER_PASSWORD_REQUIRED,
+            )
             return
 
         onboarding = self.__dict__.get("firewall_onboarding")
@@ -780,12 +816,14 @@ class ConduitGUI(ctk.CTk):
                     self._set_status(
                         "Status: Firewall setup was cancelled. Server not started.",
                         "orange",
+                        error_code=FIREWALL_START_CANCELLED,
                     )
                 elif result.outcome is not FirewallSetupOutcome.READY:
                     self._set_status(
                         "Status: Firewall setup did not complete. Server not "
                         "started.\nTry again or ask your administrator for help.",
                         "red",
+                        error_code=FIREWALL_START_FAILED,
                     )
 
             result = onboarding.configure_async(
@@ -801,6 +839,7 @@ class ConduitGUI(ctk.CTk):
                     if choice == "repair"
                     else "Status: Configuring Windows Firewall...",
                     "orange",
+                    error_code=OK,
                 )
             else:
                 complete_setup(result)
@@ -930,6 +969,7 @@ class ConduitGUI(ctk.CTk):
                     else "green"
                 ),
                 white_text=code,
+                error_code=OK,
             )
             self.server_start_btn.pack_forget()
             self.server_stop_btn.pack(pady=10)
@@ -941,13 +981,18 @@ class ConduitGUI(ctk.CTk):
                 except Exception as error:
                     logger.error('Could not start remote viewer (%s)', error_name(error))
                     self.stop_server()
-                    self._set_status('Status: Remote viewer could not start. Server stopped.', 'red')
+                    self._set_status(
+                        'Status: Remote viewer could not start. Server stopped.',
+                        'red',
+                        error_code=REMOTE_VIEW_START_FAILED,
+                    )
         else:
             self._set_status(
                 "Status: Could not start server\n"
                 "Close any other Conduit server (including the installed app), "
                 "or choose a different port.",
                 "red",
+                error_code=SERVER_START_FAILED,
             )
 
     def connect_client(self):
@@ -957,12 +1002,17 @@ class ConduitGUI(ctk.CTk):
             self._set_status(
                 "Status: Invalid port\nEnter a base port from 1 to 65533.",
                 "red",
+                error_code=CLIENT_INVALID_PORT,
             )
             return
         password = self.client_password_entry.get()
         
         if not password:
-            self._set_status("Status: Error - Password required", "red")
+            self._set_status(
+                "Status: Error - Password required",
+                "red",
+                error_code=CLIENT_PASSWORD_REQUIRED,
+            )
             return
         
         if self.client:
@@ -1011,7 +1061,11 @@ class ConduitGUI(ctk.CTk):
         screen_height = self.winfo_screenheight()
         client.set_screen_size(screen_width, screen_height)
         
-        self._set_status(f"Status: Connecting to {ip}:{port}...", "orange")
+        self._set_status(
+            f"Status: Connecting to {ip}:{port}...",
+            "orange",
+            error_code=OK,
+        )
         self.client_connect_btn.configure(state="disabled")
         
         def _on_connect_result(success, error_msg):
@@ -1032,7 +1086,11 @@ class ConduitGUI(ctk.CTk):
         self._is_reloading = False
         if success:
             save_role_safely(self.preferences, "client")
-            self._set_status(f"Status: Connected to {ip}:{port}", "green")
+            self._set_status(
+                f"Status: Connected to {ip}:{port}",
+                "green",
+                error_code=OK,
+            )
             self.save_known_host(ip, port)
             self.client_connect_btn.pack_forget()
             self.client_disconnect_btn.pack(pady=10)
@@ -1040,7 +1098,13 @@ class ConduitGUI(ctk.CTk):
             toast = self.__dict__.get("topology_toast")
             if toast is not None:
                 toast.hide()
-            self._set_status(f"Status: Connection failed\n{error_msg}", "red")
+            self._set_status(
+                f"Status: Connection failed\n{error_msg}",
+                "red",
+                error_code=CLIENT_CONNECTION_FAILED,
+                client_name=getattr(source, "windows_name", None),
+                client_specific=True,
+            )
 
     def _start_server_display_monitor(self, source):
         self._stop_server_display_monitor()
@@ -1107,6 +1171,9 @@ class ConduitGUI(ctk.CTk):
             f"Status: {group.windows_name} displays changed. "
             "Press Reset to rebuild mouse routing.",
             "orange",
+            error_code=CLIENT_DISPLAYS_CHANGED,
+            client_name=group.windows_name,
+            client_specific=True,
         )
 
     def _show_client_disconnect_warning(self, windows_name):
@@ -1173,7 +1240,7 @@ class ConduitGUI(ctk.CTk):
         editor = self.__dict__.get("topology_editor")
         if editor is not None:
             self._set_topology_action_mode("apply")
-        self._set_status("Status: Server stopped", "gray")
+        self._set_status("Status: Server stopped", "gray", error_code=OK)
         self.ensure_visible()
 
     def disconnect_client(self, target_client=None):
@@ -1198,7 +1265,7 @@ class ConduitGUI(ctk.CTk):
             self.client_disconnect_btn.pack_forget()
             self.client_connect_btn.pack(pady=10)
             self.client_connect_btn.configure(state="normal")
-            self._set_status("Status: Disconnected", "gray")
+            self._set_status("Status: Disconnected", "gray", error_code=OK)
             self.ensure_visible()
 
     def reconnect_client(self):
@@ -1206,7 +1273,9 @@ class ConduitGUI(ctk.CTk):
         self._is_reloading = True
         self.after(3000, lambda: setattr(self, '_is_reloading', False))
         old_client = self.client
-        self._set_status("Status: Reloading connection...", "orange")
+        self._set_status(
+            "Status: Reloading connection...", "orange", error_code=OK
+        )
         if old_client:
             try:
                 old_client.disconnect()
@@ -1215,7 +1284,12 @@ class ConduitGUI(ctk.CTk):
         self.after(500, self.connect_client)
 
     def _on_server_client_connected(self, data):
-        self.after(0, lambda: self._set_status("Status: Client Connected!", "green"))
+        self.after(
+            0,
+            lambda: self._set_status(
+                "Status: Client Connected!", "green", error_code=OK
+            ),
+        )
 
     def _on_server_display_inventory(self, source, data):
         if self.server is not source:
@@ -1251,6 +1325,9 @@ class ConduitGUI(ctk.CTk):
                 self._set_status(
                     "Status: Client connected but no free topology position is available.",
                     "orange",
+                    error_code=CLIENT_TOPOLOGY_POSITION_UNAVAILABLE,
+                    client_name=group.windows_name,
+                    client_specific=True,
                 )
                 return
             if session is not None:
@@ -1490,6 +1567,7 @@ class ConduitGUI(ctk.CTk):
             self._set_status(
                 "Status: Displays could not be rescanned. The previous layout is still active.",
                 "red",
+                error_code=SERVER_DISPLAY_RESCAN_FAILED,
             )
             return False
         monitor = self.__dict__.get("_server_display_monitor")
@@ -1544,9 +1622,13 @@ class ConduitGUI(ctk.CTk):
             self._set_status(
                 "Status: Client displays could not be rescanned. The previous layout is still active.",
                 "red",
+                error_code=CLIENT_DISPLAY_RESCAN_FAILED,
+                client_specific=True,
             )
             return False
-        self._set_status("Status: Rescanning displays...", "orange")
+        self._set_status(
+            "Status: Rescanning displays...", "orange", error_code=OK
+        )
         self.after(3000, lambda: self._expire_topology_rescan(pending))
         return False
 
@@ -1593,6 +1675,8 @@ class ConduitGUI(ctk.CTk):
         self._set_status(
             "Status: Client display rescan timed out. The previous layout is still active.",
             "red",
+            error_code=CLIENT_DISPLAY_RESCAN_TIMEOUT,
+            client_specific=True,
         )
 
     def _on_topology_apply(self, result, candidate):
@@ -1601,11 +1685,14 @@ class ConduitGUI(ctk.CTk):
             self._set_status(
                 "Status: Layout is not connected. Move every Client onto a full grid edge.",
                 "red",
+                error_code=TOPOLOGY_DISCONNECTED,
             )
             return False
         server = self.server
         if server is not None:
-            self._set_status("Status: Resetting machine layout...", "orange")
+            self._set_status(
+                "Status: Resetting machine layout...", "orange", error_code=OK
+            )
 
             def persist(topology):
                 if self.server is not server:
@@ -1629,13 +1716,16 @@ class ConduitGUI(ctk.CTk):
             return False
         try:
             self.preferences.save_active_topology(candidate)
-            self._set_status("Status: Machine layout reset", "green")
+            self._set_status(
+                "Status: Machine layout reset", "green", error_code=OK
+            )
             return True
         except Exception as error:
             logger.error("Could not apply topology (%s)", error_name(error))
             self._set_status(
                 "Status: Layout could not be applied. The previous layout is still active.",
                 "red",
+                error_code=TOPOLOGY_LOCAL_APPLY_FAILED,
             )
             return False
 
@@ -1650,6 +1740,8 @@ class ConduitGUI(ctk.CTk):
             self._set_status(
                 "Status: Client did not accept the layout. The previous layout is still active.",
                 "red",
+                error_code=CLIENT_TOPOLOGY_REJECTED,
+                client_specific=True,
             )
             return
         self.topology_editor.state.commit(candidate)
@@ -1677,7 +1769,9 @@ class ConduitGUI(ctk.CTk):
                 self.server,
                 {'type': 'topology_applied'},
             )
-        self._set_status("Status: Machine layout reset", "green")
+        self._set_status(
+            "Status: Machine layout reset", "green", error_code=OK
+        )
         if not reload_auto_applying:
             notice = self.__dict__.get("display_warning_toast")
             show_notice = (
@@ -1705,7 +1799,9 @@ class ConduitGUI(ctk.CTk):
                 server,
                 {'type': 'topology_cancelled'},
             )
-        self._set_status("Status: Layout changes cancelled", "gray")
+        self._set_status(
+            "Status: Layout changes cancelled", "gray", error_code=OK
+        )
 
     def _set_topology_action_mode(self, mode):
         editor = self.__dict__.get("topology_editor")
@@ -1795,6 +1891,7 @@ class ConduitGUI(ctk.CTk):
     def _on_server_client_disconnected(self, data):
         source = self.server
         session_id = data.get("session_id")
+        windows_name = data.get("windows_name")
         intentional_disconnect = bool(
             self.__dict__.get("_server_stopping", False)
             or (
@@ -1807,7 +1904,6 @@ class ConduitGUI(ctk.CTk):
         editor = self.__dict__.get("topology_editor")
         if editor is not None:
             machine_id = data.get("peer_identity")
-            windows_name = data.get("windows_name")
             if machine_id and not windows_name:
                 windows_name = next(
                     (
@@ -1840,14 +1936,38 @@ class ConduitGUI(ctk.CTk):
                     self._set_status(
                         "Status: Client disconnected. Mouse routing is paused; reconnect the layout and press Reset.",
                         "orange",
+                        error_code=CLIENT_TOPOLOGY_DISCONNECTED,
+                        client_name=windows_name,
+                        client_specific=True,
                     )
 
             self.after(0, show_reset_required_if_active)
         self.ensure_visible()
 
-    def _set_status(self, message, color="gray", white_text=None, show_ip=None):
+    def _set_status(
+        self,
+        message,
+        color="gray",
+        white_text=None,
+        show_ip=None,
+        error_code="XX",
+        client_name=None,
+        client_specific=False,
+    ):
         if show_ip is None:
             show_ip = message in ("Status: Idle", "Status: Server stopped", "Status: Disconnected")
+        formatted_code = format_error_code(
+            error_code,
+            client_name=client_name,
+            client_specific=client_specific,
+        )
+        code_line = f"Error Code {formatted_code}"
+        if (
+            color in {"red", "orange"}
+            and formatted_code != OK
+            and code_line not in message.splitlines()
+        ):
+            message = f"{message}\n{code_line}"
         write_status_message(
             self.status_text,
             message,
@@ -2067,11 +2187,12 @@ class ConduitGUI(ctk.CTk):
                 store = PeerTrustStore()
             cleared = store.clear(store.peer_id(host, port))
             message = "Saved identity cleared. Connect again to re-pair." if cleared else "No saved identity existed for this server."
-            self._set_status(message, "orange")
+            self._set_status(message, "orange", error_code=OK)
         except Exception as error:
             self._set_status(
                 public_error_message(error, "could not clear saved identity"),
                 "red",
+                error_code=PAIRING_IDENTITY_CLEAR_FAILED,
             )
 
     def _on_client_disconnected_event(self, source, data):
