@@ -917,7 +917,7 @@ class FixedWindowConfigurationTests(unittest.TestCase):
 
         configure_main_window(window)
 
-        self.assertEqual(window.title_value, "Conduit 7.2.1")
+        self.assertEqual(window.title_value, "Conduit 7.2.2")
         self.assertEqual(window.geometry_value, "400x650")
         self.assertEqual(window.resizable_value, (False, False))
 
