@@ -2,6 +2,9 @@
 
 from app.firewall import (
     CONDUIT_FIREWALL_RULE_NAME,
+    CONDUIT_FIREWALL_RULE_NAMES,
+    CONDUIT_FIREWALL_TCP_RULE_NAME,
+    CONDUIT_FIREWALL_UDP_RULE_NAME,
     FirewallInspection,
     FirewallState,
     ObservedFirewallRule,
@@ -16,6 +19,7 @@ _NET_FW_RULE_DIR_IN = 1
 _NET_FW_ACTION_BLOCK = 0
 _NET_FW_ACTION_ALLOW = 1
 _NET_FW_IP_PROTOCOL_TCP = 6
+_NET_FW_IP_PROTOCOL_UDP = 17
 _NET_FW_IP_PROTOCOL_ANY = 256
 _NET_FW_PROFILE2_DOMAIN = 1
 _NET_FW_PROFILE2_PRIVATE = 2
@@ -90,6 +94,8 @@ def _address_set(value):
 def _protocol_name(value):
     if value == _NET_FW_IP_PROTOCOL_TCP:
         return "tcp"
+    if value == _NET_FW_IP_PROTOCOL_UDP:
+        return "udp"
     if value == _NET_FW_IP_PROTOCOL_ANY:
         return "any"
     return str(value)
@@ -126,7 +132,7 @@ def _observed_block_rule(rule, spec):
     if rule.Action != _NET_FW_ACTION_BLOCK:
         return None
     protocol = _protocol_name(rule.Protocol)
-    if protocol not in {"tcp", "any"}:
+    if protocol not in {"tcp", "udp", "any"}:
         return None
     if not executable_paths_match(
         rule.ApplicationName,
@@ -169,24 +175,72 @@ class WindowsFirewallBackend:
         self.policy_factory = policy_factory or _default_policy_factory
         self.rule_factory = rule_factory or _default_rule_factory
 
+    def _inspect_allow_rules(self, rules, spec):
+        try:
+            tcp_rule = rules.Item(CONDUIT_FIREWALL_TCP_RULE_NAME)
+        except Exception as error:
+            if _is_missing(error):
+                tcp_inspection = FirewallInspection(
+                    FirewallState.MISSING,
+                    "rule_missing",
+                )
+            else:
+                return None, None, _failure_inspection(error, "inspection_failed")
+        else:
+            tcp_inspection = compare_firewall_rule(
+                spec,
+                _observed_rule(tcp_rule),
+                protocol="tcp",
+            )
+
+        try:
+            udp_rule = rules.Item(CONDUIT_FIREWALL_UDP_RULE_NAME)
+        except Exception as error:
+            if _is_missing(error):
+                udp_inspection = FirewallInspection(
+                    FirewallState.MISSING,
+                    "rule_missing",
+                )
+            else:
+                return None, None, _failure_inspection(error, "inspection_failed")
+        else:
+            udp_inspection = compare_firewall_rule(
+                spec,
+                _observed_rule(udp_rule),
+                protocol="udp",
+            )
+
+        if (
+            tcp_inspection.state is FirewallState.MISSING
+            or udp_inspection.state is FirewallState.MISSING
+        ):
+            combined = FirewallInspection(FirewallState.MISSING, "rule_missing")
+        elif (
+            tcp_inspection.state is FirewallState.STALE
+            or udp_inspection.state is FirewallState.STALE
+        ):
+            reason = (
+                tcp_inspection.reason_code
+                if tcp_inspection.state is FirewallState.STALE
+                else udp_inspection.reason_code
+            )
+            combined = FirewallInspection(FirewallState.STALE, reason)
+        elif (
+            tcp_inspection.state is FirewallState.DEVELOPMENT
+            or udp_inspection.state is FirewallState.DEVELOPMENT
+        ):
+            combined = FirewallInspection(FirewallState.DEVELOPMENT, "python_scope")
+        else:
+            combined = FirewallInspection(FirewallState.READY, "rule_ready")
+
+        return tcp_inspection, udp_inspection, combined
+
     def inspect(self, spec):
         try:
             policy = self.policy_factory()
             rules = policy.Rules
-            try:
-                rule = rules.Item(CONDUIT_FIREWALL_RULE_NAME)
-            except Exception as error:
-                if _is_missing(error):
-                    return FirewallInspection(
-                        FirewallState.MISSING,
-                        "rule_missing",
-                    )
-                return _failure_inspection(error, "inspection_failed")
-            allow_inspection = compare_firewall_rule(
-                spec,
-                _observed_rule(rule),
-            )
-            if allow_inspection.state not in {
+            _, _, allow_inspection = self._inspect_allow_rules(rules, spec)
+            if allow_inspection is None or allow_inspection.state not in {
                 FirewallState.READY,
                 FirewallState.DEVELOPMENT,
             }:
@@ -207,7 +261,7 @@ class WindowsFirewallBackend:
             if removal is not None:
                 return removal
 
-            self._add_allow_rule(rules, spec)
+            self._add_allow_rules(rules, spec)
         except Exception as error:
             self._cleanup_after_failure()
             return _failure_inspection(error, "configuration_failed")
@@ -230,9 +284,9 @@ class WindowsFirewallBackend:
     def repair(self, spec):
         """Disable exact conflicting objects and verify the effective policy."""
         disabled_rules = []
-        allow_created = False
-        allow_rule = None
-        allow_snapshot = None
+        created_rules = []
+        tcp_snapshot = None
+        udp_snapshot = None
         try:
             policy = self.policy_factory()
             rules = policy.Rules
@@ -241,35 +295,29 @@ class WindowsFirewallBackend:
             )
             private_active = "private" in active_profiles
 
-            try:
-                allow_rule = rules.Item(CONDUIT_FIREWALL_RULE_NAME)
-            except Exception as error:
-                if _is_missing(error):
-                    allow_inspection = FirewallInspection(
-                        FirewallState.MISSING,
-                        "rule_missing",
-                    )
-                else:
-                    return _failure_inspection(error, "inspection_failed")
-            else:
-                allow_inspection = compare_firewall_rule(
-                    spec,
-                    _observed_rule(allow_rule),
-                )
-
-            if allow_inspection.state not in {
+            tcp_inspection, udp_inspection, combined = self._inspect_allow_rules(
+                rules, spec
+            )
+            if combined is None or combined.state not in {
                 FirewallState.MISSING,
                 FirewallState.READY,
                 FirewallState.DEVELOPMENT,
                 FirewallState.STALE,
             }:
-                return allow_inspection
+                return combined
 
             conflicts = (
                 list(_matching_block_rule_objects(rules, spec))
                 if private_active
                 else []
             )
+
+            needs_allow_fix = combined.state in {
+                FirewallState.MISSING,
+                FirewallState.STALE,
+            }
+            if not needs_allow_fix and not conflicts:
+                return self.inspect(spec)
         except (AttributeError, TypeError, ValueError):
             return FirewallInspection(
                 FirewallState.UNAVAILABLE,
@@ -278,23 +326,39 @@ class WindowsFirewallBackend:
         except Exception as error:
             return _failure_inspection(error, "inspection_failed")
 
+        snapshots = []
         try:
             for rule in conflicts:
                 rule.Enabled = False
                 disabled_rules.append(rule)
-            if allow_inspection.state is FirewallState.MISSING:
-                allow_created = True
-                self._add_allow_rule(rules, spec)
-            elif allow_inspection.state is FirewallState.STALE:
-                allow_snapshot = self._snapshot_allow_rule(allow_rule)
-                self._configure_allow_rule(allow_rule, spec)
+
+            if tcp_inspection.state is FirewallState.MISSING:
+                rule = self.rule_factory()
+                self._configure_tcp_rule(rule, spec)
+                rules.Add(rule)
+                created_rules.append(CONDUIT_FIREWALL_TCP_RULE_NAME)
+            elif tcp_inspection.state is FirewallState.STALE:
+                tcp_rule = rules.Item(CONDUIT_FIREWALL_TCP_RULE_NAME)
+                tcp_snapshot = self._snapshot_allow_rule(tcp_rule)
+                snapshots.append((CONDUIT_FIREWALL_TCP_RULE_NAME, tcp_snapshot))
+                self._configure_tcp_rule(tcp_rule, spec)
+
+            if udp_inspection.state is FirewallState.MISSING:
+                rule = self.rule_factory()
+                self._configure_udp_rule(rule, spec)
+                rules.Add(rule)
+                created_rules.append(CONDUIT_FIREWALL_UDP_RULE_NAME)
+            elif udp_inspection.state is FirewallState.STALE:
+                udp_rule = rules.Item(CONDUIT_FIREWALL_UDP_RULE_NAME)
+                udp_snapshot = self._snapshot_allow_rule(udp_rule)
+                snapshots.append((CONDUIT_FIREWALL_UDP_RULE_NAME, udp_snapshot))
+                self._configure_udp_rule(udp_rule, spec)
         except Exception as error:
             if not self._rollback_repair(
                 rules,
                 disabled_rules,
-                allow_created,
-                allow_rule,
-                allow_snapshot,
+                created_rules,
+                snapshots=snapshots,
             ):
                 return FirewallInspection(
                     FirewallState.UNAVAILABLE,
@@ -302,7 +366,17 @@ class WindowsFirewallBackend:
                 )
             return _failure_inspection(error, "configuration_failed")
 
-        result = self.inspect(spec)
+        try:
+            result = self.inspect(spec)
+        except Exception as error:
+            self._rollback_repair(
+                rules,
+                disabled_rules,
+                created_rules,
+                snapshots=snapshots,
+            )
+            return _failure_inspection(error, "configuration_failed")
+
         if result.state in {
             FirewallState.READY,
             FirewallState.DEVELOPMENT,
@@ -315,17 +389,20 @@ class WindowsFirewallBackend:
         if not self._rollback_repair(
             rules,
             disabled_rules,
-            allow_created,
-            allow_rule,
-            allow_snapshot,
+            created_rules,
+            snapshots=snapshots,
         ):
             return FirewallInspection(
                 FirewallState.UNAVAILABLE,
                 "rollback_failed",
             )
-        return FirewallInspection(
-            FirewallState.UNAVAILABLE,
-            "verification_failed",
+        return (
+            result
+            if result.state is FirewallState.CONFLICT
+            else FirewallInspection(
+                FirewallState.UNAVAILABLE,
+                "verification_failed",
+            )
         )
 
     def remove(self):
@@ -340,18 +417,25 @@ class WindowsFirewallBackend:
 
     @staticmethod
     def _remove_from(rules):
-        try:
-            rules.Remove(CONDUIT_FIREWALL_RULE_NAME)
-        except Exception as error:
-            if _is_missing(error):
-                return None
-            return _failure_inspection(error, "removal_failed")
+        for name in CONDUIT_FIREWALL_RULE_NAMES:
+            try:
+                rules.Remove(name)
+            except Exception as error:
+                if _is_missing(error):
+                    continue
+                return _failure_inspection(error, "removal_failed")
         return None
 
-    def _add_allow_rule(self, rules, spec):
-        rule = self.rule_factory()
-        self._configure_allow_rule(rule, spec)
-        rules.Add(rule)
+    def _add_allow_rules(self, rules, spec):
+        tcp_rule = self.rule_factory()
+        self._configure_tcp_rule(tcp_rule, spec)
+        rules.Add(tcp_rule)
+
+        udp_rule = self.rule_factory()
+        self._configure_udp_rule(udp_rule, spec)
+        rules.Add(udp_rule)
+
+    _add_allow_rule = _add_allow_rules
 
     @staticmethod
     def _snapshot_allow_rule(rule):
@@ -371,15 +455,35 @@ class WindowsFirewallBackend:
         return tuple((field, getattr(rule, field)) for field in fields)
 
     @staticmethod
-    def _configure_allow_rule(rule, spec):
-        rule.Name = CONDUIT_FIREWALL_RULE_NAME
+    def _configure_tcp_rule(rule, spec):
+        rule.Name = CONDUIT_FIREWALL_TCP_RULE_NAME
         rule.Description = (
             f"Allow Conduit Server on private local networks "
-            f"(TCP {spec.local_ports})."
+            f"(TCP {spec.tcp_ports})."
         )
         rule.Grouping = "Conduit"
         rule.Protocol = _NET_FW_IP_PROTOCOL_TCP
-        rule.LocalPorts = spec.local_ports
+        rule.LocalPorts = spec.tcp_ports
+        rule.ApplicationName = spec.executable_path
+        rule.Profiles = _NET_FW_PROFILE2_PRIVATE
+        rule.RemoteAddresses = "LocalSubnet"
+        rule.Direction = _NET_FW_RULE_DIR_IN
+        rule.Action = _NET_FW_ACTION_ALLOW
+        rule.EdgeTraversal = False
+        rule.Enabled = True
+
+    _configure_allow_rule = _configure_tcp_rule
+
+    @staticmethod
+    def _configure_udp_rule(rule, spec):
+        rule.Name = CONDUIT_FIREWALL_UDP_RULE_NAME
+        rule.Description = (
+            f"Allow Conduit Streamer on private local networks "
+            f"(UDP {spec.udp_ports})."
+        )
+        rule.Grouping = "Conduit"
+        rule.Protocol = _NET_FW_IP_PROTOCOL_UDP
+        rule.LocalPorts = spec.udp_ports
         rule.ApplicationName = spec.executable_path
         rule.Profiles = _NET_FW_PROFILE2_PRIVATE
         rule.RemoteAddresses = "LocalSubnet"
@@ -395,13 +499,30 @@ class WindowsFirewallBackend:
         allow_created,
         allow_rule=None,
         allow_snapshot=None,
+        snapshots=None,
     ):
         complete = True
-        if allow_created:
+        if isinstance(allow_created, (list, tuple, set)):
+            for name in allow_created:
+                try:
+                    rules.Remove(name)
+                except Exception as error:
+                    if not _is_missing(error):
+                        complete = False
+        elif allow_created:
             removal = self._remove_from(rules)
             if removal is not None:
                 complete = False
-        if allow_snapshot is not None:
+        if snapshots is not None:
+            for name, snapshot in snapshots:
+                if snapshot is not None:
+                    try:
+                        rule = rules.Item(name)
+                        for field, value in snapshot:
+                            setattr(rule, field, value)
+                    except Exception:
+                        complete = False
+        elif allow_snapshot is not None and allow_rule is not None:
             for field, value in allow_snapshot:
                 try:
                     setattr(allow_rule, field, value)

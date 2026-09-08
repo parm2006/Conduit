@@ -9,7 +9,13 @@ import re
 import sys
 
 
-CONDUIT_FIREWALL_RULE_NAME = "Conduit Server - Private LAN"
+CONDUIT_FIREWALL_TCP_RULE_NAME = "Conduit Server - Private LAN"
+CONDUIT_FIREWALL_UDP_RULE_NAME = "Conduit Streamer - Private LAN (UDP)"
+CONDUIT_FIREWALL_RULE_NAME = CONDUIT_FIREWALL_TCP_RULE_NAME
+CONDUIT_FIREWALL_RULE_NAMES = (
+    CONDUIT_FIREWALL_TCP_RULE_NAME,
+    CONDUIT_FIREWALL_UDP_RULE_NAME,
+)
 
 
 def current_process_executable():
@@ -53,14 +59,26 @@ class FirewallRuleSpec:
         if (
             isinstance(self.base_port, bool)
             or not isinstance(self.base_port, int)
-            or not 1 <= self.base_port <= 65533
+            or not 1 <= self.base_port <= 65532
         ):
-            raise ValueError("base port must be an integer from 1 through 65533")
+            raise ValueError("base port must be an integer from 1 through 65532")
         object.__setattr__(self, "executable_path", ntpath.normpath(path))
 
     @property
-    def local_ports(self):
+    def tcp_ports(self):
         return f"{self.base_port}-{self.base_port + 2}"
+
+    @property
+    def udp_ports(self):
+        return str(self.base_port + 3)
+
+    @property
+    def local_ports(self):
+        return self.tcp_ports
+
+    @property
+    def stream_port(self):
+        return self.base_port + 3
 
     @property
     def development_scope(self):
@@ -149,7 +167,8 @@ def block_rule_conflicts(spec, observed):
         return False
     if str(observed.action).casefold() != "block":
         return False
-    if str(observed.protocol).casefold() not in {"tcp", "any", "6", "256"}:
+    protocol = str(observed.protocol).casefold()
+    if protocol not in {"tcp", "udp", "any", "6", "17", "256"}:
         return False
     if not executable_paths_match(
         observed.application_name,
@@ -164,12 +183,16 @@ def block_rule_conflicts(spec, observed):
     ):
         return False
 
-    conduit_start = spec.base_port
-    conduit_end = spec.base_port + 2
-    return any(
-        start <= conduit_end and end >= conduit_start
-        for start, end in _port_intervals(observed.local_ports)
+    intervals = _port_intervals(observed.local_ports)
+    tcp_match = protocol in {"tcp", "any", "6", "256"} and any(
+        start <= spec.base_port + 2 and end >= spec.base_port
+        for start, end in intervals
     )
+    udp_match = protocol in {"udp", "any", "17", "256"} and any(
+        start <= spec.stream_port and end >= spec.stream_port
+        for start, end in intervals
+    )
+    return tcp_match or udp_match
 
 
 def evaluate_effective_firewall(
@@ -214,17 +237,25 @@ def evaluate_effective_firewall(
     )
 
 
-def compare_firewall_rule(spec, observed):
+def compare_firewall_rule(spec, observed, protocol="tcp"):
     if observed is None:
         return FirewallInspection(FirewallState.MISSING, "rule_missing")
 
+    proto = protocol.strip().casefold()
+    expected_name = (
+        CONDUIT_FIREWALL_TCP_RULE_NAME
+        if proto == "tcp"
+        else CONDUIT_FIREWALL_UDP_RULE_NAME
+    )
+    expected_ports = spec.tcp_ports if proto == "tcp" else spec.udp_ports
+
     comparisons = (
-        ("name", observed.name == CONDUIT_FIREWALL_RULE_NAME),
+        ("name", observed.name == expected_name),
         ("enabled", observed.enabled is True),
         ("direction", observed.direction.casefold() == "inbound"),
         ("action", observed.action.casefold() == "allow"),
-        ("protocol", observed.protocol.casefold() == "tcp"),
-        ("local_ports", observed.local_ports == spec.local_ports),
+        ("protocol", observed.protocol.casefold() == proto),
+        ("local_ports", observed.local_ports == expected_ports),
         (
             "application_name",
             executable_paths_match(

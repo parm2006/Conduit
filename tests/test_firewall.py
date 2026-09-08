@@ -6,6 +6,8 @@ import app.firewall as firewall
 
 from app.firewall import (
     CONDUIT_FIREWALL_RULE_NAME,
+    CONDUIT_FIREWALL_TCP_RULE_NAME,
+    CONDUIT_FIREWALL_UDP_RULE_NAME,
     FirewallInspection,
     FirewallRuleSpec,
     FirewallState,
@@ -15,14 +17,20 @@ from app.firewall import (
 )
 
 
-def matching_rule(spec, **changes):
+def matching_rule(spec, rule_protocol="tcp", **changes):
+    rule_name = (
+        CONDUIT_FIREWALL_TCP_RULE_NAME
+        if rule_protocol == "tcp"
+        else CONDUIT_FIREWALL_UDP_RULE_NAME
+    )
+    ports = spec.tcp_ports if rule_protocol == "tcp" else spec.udp_ports
     values = {
-        "name": CONDUIT_FIREWALL_RULE_NAME,
+        "name": rule_name,
         "enabled": True,
         "direction": "inbound",
         "action": "allow",
-        "protocol": "tcp",
-        "local_ports": spec.local_ports,
+        "protocol": rule_protocol,
+        "local_ports": ports,
         "application_name": spec.executable_path,
         "profiles": frozenset({"private"}),
         "remote_addresses": frozenset({"localsubnet"}),
@@ -49,13 +57,17 @@ class FirewallRuleSpecTests(unittest.TestCase):
 
     def test_accepts_boundary_base_ports_and_derives_three_port_range(self):
         low = FirewallRuleSpec(r"C:\Program Files\Conduit\Conduit.exe", 1)
-        high = FirewallRuleSpec(r"C:\Program Files\Conduit\Conduit.exe", 65533)
+        high = FirewallRuleSpec(r"C:\Program Files\Conduit\Conduit.exe", 65532)
 
         self.assertEqual(low.local_ports, "1-3")
-        self.assertEqual(high.local_ports, "65533-65535")
+        self.assertEqual(low.tcp_ports, "1-3")
+        self.assertEqual(low.udp_ports, "4")
+        self.assertEqual(high.local_ports, "65532-65534")
+        self.assertEqual(high.tcp_ports, "65532-65534")
+        self.assertEqual(high.udp_ports, "65535")
 
     def test_rejects_invalid_base_ports(self):
-        invalid = (True, False, "5000", 1.5, 0, -1, 65534, 65535)
+        invalid = (True, False, "5000", 1.5, 0, -1, 65533, 65534, 65535)
 
         for value in invalid:
             with self.subTest(value=value):
@@ -102,6 +114,16 @@ class FirewallRuleComparisonTests(unittest.TestCase):
 
     def test_exact_packaged_rule_is_ready(self):
         result = compare_firewall_rule(self.spec, matching_rule(self.spec))
+
+        self.assertEqual(result.state, FirewallState.READY)
+        self.assertEqual(result.reason_code, "rule_ready")
+
+    def test_exact_udp_rule_is_ready(self):
+        result = compare_firewall_rule(
+            self.spec,
+            matching_rule(self.spec, rule_protocol="udp"),
+            protocol="udp",
+        )
 
         self.assertEqual(result.state, FirewallState.READY)
         self.assertEqual(result.reason_code, "rule_ready")
@@ -174,7 +196,7 @@ class EffectiveFirewallContractTests(unittest.TestCase):
         self.assertTrue(hasattr(firewall, "block_rule_conflicts"))
         self.assertTrue(hasattr(firewall, "evaluate_effective_firewall"))
 
-    def test_tcp_and_any_protocol_port_expressions_overlap(self):
+    def test_tcp_udp_and_any_protocol_port_expressions_overlap(self):
         overlapping = (
             ("tcp", ""),
             ("tcp", "*"),
@@ -182,6 +204,8 @@ class EffectiveFirewallContractTests(unittest.TestCase):
             ("tcp", "5000"),
             ("tcp", "4999-5001"),
             ("tcp", "80, 443, 5002"),
+            ("udp", "5003"),
+            ("udp", "5000-5005"),
             ("any", "5000-5002"),
         )
 
@@ -199,7 +223,8 @@ class EffectiveFirewallContractTests(unittest.TestCase):
             {"enabled": False},
             {"direction": "outbound"},
             {"action": "allow"},
-            {"protocol": "udp"},
+            {"protocol": "icmpv4"},
+            {"protocol": "udp", "local_ports": "4990-4999"},
             {"local_ports": "4990-4999"},
             {"application_name": r"C:\Other\Conduit.exe"},
             {"profiles": frozenset({"public"})},

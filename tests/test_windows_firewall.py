@@ -2,6 +2,8 @@ import unittest
 
 from app.firewall import (
     CONDUIT_FIREWALL_RULE_NAME,
+    CONDUIT_FIREWALL_TCP_RULE_NAME,
+    CONDUIT_FIREWALL_UDP_RULE_NAME,
     FirewallRuleSpec,
     FirewallState,
 )
@@ -88,13 +90,25 @@ class WindowsFirewallBackendTests(unittest.TestCase):
         )
 
     def add_matching_allow(self):
-        self.rules.items[CONDUIT_FIREWALL_RULE_NAME] = FakeRule(
-            Name=CONDUIT_FIREWALL_RULE_NAME,
+        self.rules.items[CONDUIT_FIREWALL_TCP_RULE_NAME] = FakeRule(
+            Name=CONDUIT_FIREWALL_TCP_RULE_NAME,
             Enabled=True,
             Direction=1,
             Action=1,
             Protocol=6,
             LocalPorts="5000-5002",
+            ApplicationName=r"C:\Program Files\Conduit\Conduit.exe",
+            Profiles=2,
+            RemoteAddresses="LocalSubnet",
+            EdgeTraversal=False,
+        )
+        self.rules.items[CONDUIT_FIREWALL_UDP_RULE_NAME] = FakeRule(
+            Name=CONDUIT_FIREWALL_UDP_RULE_NAME,
+            Enabled=True,
+            Direction=1,
+            Action=1,
+            Protocol=17,
+            LocalPorts="5003",
             ApplicationName=r"C:\Program Files\Conduit\Conduit.exe",
             Profiles=2,
             RemoteAddresses="LocalSubnet",
@@ -285,13 +299,25 @@ class WindowsFirewallBackendTests(unittest.TestCase):
             policy_factory=lambda: policy,
             rule_factory=FakeRule,
         )
-        rules.items[CONDUIT_FIREWALL_RULE_NAME] = FakeRule(
-            Name=CONDUIT_FIREWALL_RULE_NAME,
+        rules.items[CONDUIT_FIREWALL_TCP_RULE_NAME] = FakeRule(
+            Name=CONDUIT_FIREWALL_TCP_RULE_NAME,
             Enabled=True,
             Direction=1,
             Action=1,
             Protocol=6,
             LocalPorts="5000-5002",
+            ApplicationName=r"C:\Program Files\Conduit\Conduit.exe",
+            Profiles=2,
+            RemoteAddresses="LocalSubnet",
+            EdgeTraversal=False,
+        )
+        rules.items[CONDUIT_FIREWALL_UDP_RULE_NAME] = FakeRule(
+            Name=CONDUIT_FIREWALL_UDP_RULE_NAME,
+            Enabled=True,
+            Direction=1,
+            Action=1,
+            Protocol=17,
+            LocalPorts="5003",
             ApplicationName=r"C:\Program Files\Conduit\Conduit.exe",
             Profiles=2,
             RemoteAddresses="LocalSubnet",
@@ -307,27 +333,45 @@ class WindowsFirewallBackendTests(unittest.TestCase):
         result = self.backend.install_or_replace(self.spec)
 
         self.assertEqual(result.state, FirewallState.READY)
-        self.assertEqual(len(self.rules.added), 1)
-        rule = self.rules.added[0]
-        self.assertEqual(rule.Name, CONDUIT_FIREWALL_RULE_NAME)
-        self.assertTrue(rule.Enabled)
-        self.assertEqual(rule.Direction, 1)
-        self.assertEqual(rule.Action, 1)
-        self.assertEqual(rule.Protocol, 6)
-        self.assertEqual(rule.LocalPorts, "5000-5002")
+        self.assertEqual(len(self.rules.added), 2)
+        tcp_rule = self.rules.added[0]
+        self.assertEqual(tcp_rule.Name, CONDUIT_FIREWALL_TCP_RULE_NAME)
+        self.assertTrue(tcp_rule.Enabled)
+        self.assertEqual(tcp_rule.Direction, 1)
+        self.assertEqual(tcp_rule.Action, 1)
+        self.assertEqual(tcp_rule.Protocol, 6)
+        self.assertEqual(tcp_rule.LocalPorts, "5000-5002")
         self.assertEqual(
-            rule.ApplicationName,
+            tcp_rule.ApplicationName,
             r"C:\Program Files\Conduit\Conduit.exe",
         )
-        self.assertEqual(rule.Profiles, 2)
-        self.assertEqual(rule.RemoteAddresses, "LocalSubnet")
-        self.assertFalse(rule.EdgeTraversal)
-        self.assertEqual(rule.Grouping, "Conduit")
+        self.assertEqual(tcp_rule.Profiles, 2)
+        self.assertEqual(tcp_rule.RemoteAddresses, "LocalSubnet")
+        self.assertFalse(tcp_rule.EdgeTraversal)
+        self.assertEqual(tcp_rule.Grouping, "Conduit")
+
+        udp_rule = self.rules.added[1]
+        self.assertEqual(udp_rule.Name, CONDUIT_FIREWALL_UDP_RULE_NAME)
+        self.assertTrue(udp_rule.Enabled)
+        self.assertEqual(udp_rule.Direction, 1)
+        self.assertEqual(udp_rule.Action, 1)
+        self.assertEqual(udp_rule.Protocol, 17)
+        self.assertEqual(udp_rule.LocalPorts, "5003")
+        self.assertEqual(
+            udp_rule.ApplicationName,
+            r"C:\Program Files\Conduit\Conduit.exe",
+        )
+        self.assertEqual(udp_rule.Profiles, 2)
+        self.assertEqual(udp_rule.RemoteAddresses, "LocalSubnet")
+        self.assertFalse(udp_rule.EdgeTraversal)
+        self.assertEqual(udp_rule.Grouping, "Conduit")
 
     def test_install_replaces_only_the_stable_conduit_rule(self):
-        old = FakeRule(Name=CONDUIT_FIREWALL_RULE_NAME)
+        old_tcp = FakeRule(Name=CONDUIT_FIREWALL_TCP_RULE_NAME)
+        old_udp = FakeRule(Name=CONDUIT_FIREWALL_UDP_RULE_NAME)
         unrelated = FakeRule(Name="Unrelated application")
-        self.rules.items[old.Name] = old
+        self.rules.items[old_tcp.Name] = old_tcp
+        self.rules.items[old_udp.Name] = old_udp
         self.rules.items[unrelated.Name] = unrelated
 
         result = self.backend.install_or_replace(self.spec)
@@ -335,7 +379,7 @@ class WindowsFirewallBackendTests(unittest.TestCase):
         self.assertEqual(result.state, FirewallState.READY)
         self.assertEqual(
             self.rules.removed,
-            [CONDUIT_FIREWALL_RULE_NAME],
+            [CONDUIT_FIREWALL_TCP_RULE_NAME, CONDUIT_FIREWALL_UDP_RULE_NAME],
         )
         self.assertIs(
             self.rules.items["Unrelated application"],
@@ -348,8 +392,10 @@ class WindowsFirewallBackendTests(unittest.TestCase):
         result = self.backend.install_or_replace(self.spec)
 
         self.assertEqual(result.state, FirewallState.UNAVAILABLE)
-        self.assertNotIn(CONDUIT_FIREWALL_RULE_NAME, self.rules.items)
-        self.assertIn(CONDUIT_FIREWALL_RULE_NAME, self.rules.removed)
+        self.assertNotIn(CONDUIT_FIREWALL_TCP_RULE_NAME, self.rules.items)
+        self.assertNotIn(CONDUIT_FIREWALL_UDP_RULE_NAME, self.rules.items)
+        self.assertIn(CONDUIT_FIREWALL_TCP_RULE_NAME, self.rules.removed)
+        self.assertIn(CONDUIT_FIREWALL_UDP_RULE_NAME, self.rules.removed)
 
     def test_failed_verification_removes_the_partial_rule(self):
         self.rules.mutate_on_add = lambda rule: setattr(
@@ -362,7 +408,8 @@ class WindowsFirewallBackendTests(unittest.TestCase):
 
         self.assertEqual(result.state, FirewallState.UNAVAILABLE)
         self.assertEqual(result.reason_code, "verification_failed")
-        self.assertNotIn(CONDUIT_FIREWALL_RULE_NAME, self.rules.items)
+        self.assertNotIn(CONDUIT_FIREWALL_TCP_RULE_NAME, self.rules.items)
+        self.assertNotIn(CONDUIT_FIREWALL_UDP_RULE_NAME, self.rules.items)
 
     def test_install_preserves_exact_allow_when_effective_block_remains(self):
         conflict = self.add_matching_block()
@@ -371,7 +418,8 @@ class WindowsFirewallBackendTests(unittest.TestCase):
 
         self.assertEqual(result.state, FirewallState.CONFLICT)
         self.assertTrue(conflict.Enabled)
-        self.assertIn(CONDUIT_FIREWALL_RULE_NAME, self.rules.items)
+        self.assertIn(CONDUIT_FIREWALL_TCP_RULE_NAME, self.rules.items)
+        self.assertIn(CONDUIT_FIREWALL_UDP_RULE_NAME, self.rules.items)
 
     def test_install_preserves_private_allow_but_never_starts_on_public(self):
         self.policy.CurrentProfileTypes = 4
@@ -379,18 +427,23 @@ class WindowsFirewallBackendTests(unittest.TestCase):
         result = self.backend.install_or_replace(self.spec)
 
         self.assertEqual(result.state, FirewallState.PUBLIC_ONLY)
-        self.assertIn(CONDUIT_FIREWALL_RULE_NAME, self.rules.items)
+        self.assertIn(CONDUIT_FIREWALL_TCP_RULE_NAME, self.rules.items)
+        self.assertIn(CONDUIT_FIREWALL_UDP_RULE_NAME, self.rules.items)
 
     def test_remove_is_idempotent(self):
         first = self.backend.remove()
-        self.rules.items[CONDUIT_FIREWALL_RULE_NAME] = FakeRule(
-            Name=CONDUIT_FIREWALL_RULE_NAME
+        self.rules.items[CONDUIT_FIREWALL_TCP_RULE_NAME] = FakeRule(
+            Name=CONDUIT_FIREWALL_TCP_RULE_NAME
+        )
+        self.rules.items[CONDUIT_FIREWALL_UDP_RULE_NAME] = FakeRule(
+            Name=CONDUIT_FIREWALL_UDP_RULE_NAME
         )
         second = self.backend.remove()
 
         self.assertEqual(first.state, FirewallState.MISSING)
         self.assertEqual(second.state, FirewallState.MISSING)
-        self.assertNotIn(CONDUIT_FIREWALL_RULE_NAME, self.rules.items)
+        self.assertNotIn(CONDUIT_FIREWALL_TCP_RULE_NAME, self.rules.items)
+        self.assertNotIn(CONDUIT_FIREWALL_UDP_RULE_NAME, self.rules.items)
 
     def test_access_denied_is_mapped_to_managed_without_private_text(self):
         class DeniedRules(FakeRules):
@@ -425,7 +478,8 @@ class WindowsFirewallBackendTests(unittest.TestCase):
 
     def test_repair_disables_exact_conflict_object_and_preserves_allow(self):
         self.add_matching_allow()
-        allow_rule = self.rules.items[CONDUIT_FIREWALL_RULE_NAME]
+        tcp_allow = self.rules.items[CONDUIT_FIREWALL_TCP_RULE_NAME]
+        udp_allow = self.rules.items[CONDUIT_FIREWALL_UDP_RULE_NAME]
         conflict = self.add_matching_block()
         unrelated = FakeRule(Name="Unrelated", Enabled=True)
         self.rules.items[unrelated.Name] = unrelated
@@ -436,8 +490,12 @@ class WindowsFirewallBackendTests(unittest.TestCase):
         self.assertFalse(conflict.Enabled)
         self.assertTrue(unrelated.Enabled)
         self.assertIs(
-            self.rules.items[CONDUIT_FIREWALL_RULE_NAME],
-            allow_rule,
+            self.rules.items[CONDUIT_FIREWALL_TCP_RULE_NAME],
+            tcp_allow,
+        )
+        self.assertIs(
+            self.rules.items[CONDUIT_FIREWALL_UDP_RULE_NAME],
+            udp_allow,
         )
         self.assertNotIn(conflict.Name, self.rules.removed)
 
@@ -448,28 +506,37 @@ class WindowsFirewallBackendTests(unittest.TestCase):
 
         self.assertEqual(result.state, FirewallState.READY)
         self.assertFalse(conflict.Enabled)
-        self.assertIn(CONDUIT_FIREWALL_RULE_NAME, self.rules.items)
-        self.assertEqual(len(self.rules.added), 1)
+        self.assertIn(CONDUIT_FIREWALL_TCP_RULE_NAME, self.rules.items)
+        self.assertIn(CONDUIT_FIREWALL_UDP_RULE_NAME, self.rules.items)
+        self.assertEqual(len(self.rules.added), 2)
 
     def test_repair_updates_stale_conduit_rule_for_packaged_executable(self):
         self.add_matching_allow()
-        stale = self.rules.items[CONDUIT_FIREWALL_RULE_NAME]
-        stale.ApplicationName = r"C:\Python314\python.exe"
+        stale_tcp = self.rules.items[CONDUIT_FIREWALL_TCP_RULE_NAME]
+        stale_tcp.ApplicationName = r"C:\Python314\python.exe"
+        stale_udp = self.rules.items[CONDUIT_FIREWALL_UDP_RULE_NAME]
+        stale_udp.ApplicationName = r"C:\Python314\python.exe"
 
         result = self.backend.repair(self.spec)
 
         self.assertEqual(result.state, FirewallState.READY)
         self.assertIs(
-            self.rules.items[CONDUIT_FIREWALL_RULE_NAME],
-            stale,
+            self.rules.items[CONDUIT_FIREWALL_TCP_RULE_NAME],
+            stale_tcp,
         )
-        self.assertEqual(stale.ApplicationName, self.spec.executable_path)
-        self.assertEqual(stale.LocalPorts, self.spec.local_ports)
+        self.assertIs(
+            self.rules.items[CONDUIT_FIREWALL_UDP_RULE_NAME],
+            stale_udp,
+        )
+        self.assertEqual(stale_tcp.ApplicationName, self.spec.executable_path)
+        self.assertEqual(stale_tcp.LocalPorts, self.spec.tcp_ports)
+        self.assertEqual(stale_udp.ApplicationName, self.spec.executable_path)
+        self.assertEqual(stale_udp.LocalPorts, self.spec.udp_ports)
         self.assertEqual(self.rules.removed, [])
 
     def test_stale_rule_is_restored_when_repair_verification_fails(self):
         self.add_matching_allow()
-        stale = self.rules.items[CONDUIT_FIREWALL_RULE_NAME]
+        stale = self.rules.items[CONDUIT_FIREWALL_TCP_RULE_NAME]
         stale.ApplicationName = r"C:\Python314\python.exe"
         stale.LocalPorts = "5000"
         calls = 0
@@ -495,7 +562,7 @@ class WindowsFirewallBackendTests(unittest.TestCase):
 
     def test_stale_rule_restore_failure_is_reported(self):
         self.add_matching_allow()
-        stale = self.rules.items[CONDUIT_FIREWALL_RULE_NAME]
+        stale = self.rules.items[CONDUIT_FIREWALL_TCP_RULE_NAME]
         stale.ApplicationName = r"C:\Python314\python.exe"
         stale._enabled = False
         stale.enabled_set_errors = [None, RuntimeError("private")]
@@ -526,8 +593,9 @@ class WindowsFirewallBackendTests(unittest.TestCase):
 
         self.assertEqual(result.state, FirewallState.PUBLIC_ONLY)
         self.assertTrue(conflict.Enabled)
-        self.assertEqual(len(self.rules.added), 1)
-        self.assertIn(CONDUIT_FIREWALL_RULE_NAME, self.rules.items)
+        self.assertEqual(len(self.rules.added), 2)
+        self.assertIn(CONDUIT_FIREWALL_TCP_RULE_NAME, self.rules.items)
+        self.assertIn(CONDUIT_FIREWALL_UDP_RULE_NAME, self.rules.items)
 
     def test_second_disable_failure_rolls_back_first_exact_object(self):
         self.add_matching_allow()
@@ -573,7 +641,8 @@ class WindowsFirewallBackendTests(unittest.TestCase):
         self.assertEqual(result.state, FirewallState.UNAVAILABLE)
         self.assertEqual(result.reason_code, "verification_failed")
         self.assertTrue(conflict.Enabled)
-        self.assertNotIn(CONDUIT_FIREWALL_RULE_NAME, self.rules.items)
+        self.assertNotIn(CONDUIT_FIREWALL_TCP_RULE_NAME, self.rules.items)
+        self.assertNotIn(CONDUIT_FIREWALL_UDP_RULE_NAME, self.rules.items)
 
     def test_incomplete_reenable_reports_distinct_rollback_failure(self):
         self.add_matching_allow()

@@ -48,7 +48,7 @@ Use these on the physical Server keyboard:
 
 ## 🔒 Network & Firewall
 
-Conduit uses TCP ports 28903-28905. The installer creates a managed firewall rule restricted to Private networks and the local subnet. Choosing No cancels installation. Uninstall cleanly removes Conduit's firewall rule.
+Conduit uses TCP ports 28903-28905 and UDP port 28906. The installer creates managed firewall rules restricted to Private networks and the local subnet. Choosing No cancels installation. Uninstall cleanly removes Conduit's firewall rules.
 
 Run only one Server instance per port range. Close the installed Conduit app before testing the source version through `run.bat`, including any copy hidden in background mode. Windows listeners reserve their ports exclusively; a second instance reports a startup error instead of sharing connections with the first.
 

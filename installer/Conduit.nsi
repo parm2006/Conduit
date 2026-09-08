@@ -218,7 +218,7 @@ Function FirewallConsentPage
   ${EndIf}
 
   ${NSD_CreateLabel} 0 0 100% 70u \
-    "Allow Conduit Server on private local networks (TCP ports 28903-28905).$\r$\n$\r$\nOnly this Conduit executable may receive connections from the local subnet. If Windows has a matching block, setup may disable only that exact executable rule. Public networks remain blocked."
+    "Allow Conduit Server on private local networks (TCP ports 28903-28905, UDP port 28906).$\r$\n$\r$\nOnly this Conduit executable may receive connections from the local subnet. If Windows has a matching block, setup may disable only that exact executable rule. Public networks remain blocked."
   Pop $0
 
   ${NSD_CreateButton} 8% 85u 84% 22u "Yes - Continue"

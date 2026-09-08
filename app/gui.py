@@ -104,9 +104,10 @@ def write_status_message(widget, message, color="gray", white_text=None, show_ip
 def _firewall_scope_text(spec):
     message = (
         "Allow Conduit Server on private local networks?\n\n"
-        "Windows will allow this Conduit executable to receive TCP "
-        f"connections on ports {spec.local_ports} from devices on your local "
-        "network. Public networks remain blocked."
+        f"Windows will allow this Conduit executable to receive TCP "
+        f"connections on ports {spec.tcp_ports} and UDP video streaming on "
+        f"port {spec.udp_ports} from devices on your local network. Public "
+        "networks remain blocked."
     )
     if spec.development_scope:
         message += (
@@ -124,7 +125,8 @@ def _firewall_conflict_text(spec):
         "Repair will disable only the conflicting firewall rule for this "
         "exact executable, then verify Conduit's restricted rule.\n\n"
         f"Executable: {spec.executable_path}\n"
-        f"TCP ports: {spec.local_ports}\n"
+        f"TCP ports: {spec.tcp_ports}\n"
+        f"UDP stream port: {spec.udp_ports}\n"
         "Scope: Private networks and LocalSubnet only. Public networks remain "
         "blocked."
     )
