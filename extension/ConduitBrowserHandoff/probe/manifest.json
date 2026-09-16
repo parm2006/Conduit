@@ -1,0 +1,8 @@
+{
+  "manifest_version": 3,
+  "name": "Conduit Browser Handoff Correlation Probe",
+  "version": "0.1.0",
+  "description": "Disposable URL-free metadata probe; not the shipping extension.",
+  "permissions": ["windows", "nativeMessaging"],
+  "background": {"service_worker": "probe_worker.js"}
+}

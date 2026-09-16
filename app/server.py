@@ -1,6 +1,7 @@
 import logging
 import os
 import threading
+import time
 from pathlib import Path
 from app.network import NetworkServer
 from app.crypto import load_identity
@@ -30,6 +31,8 @@ from app.global_hotkey import GlobalHotkeyMonitor
 from app.ports import DEFAULT_BASE_PORT
 from app.input_router import InputRouter, LocalServer
 from app.machine_identity import windows_machine_id
+from app.browser_handoff.desktop import BrowserHandoffDesktop
+from app.browser_handoff.cluster_router import ClusterBrowserRouter
 
 logger = logging.getLogger(__name__)
 
@@ -129,6 +132,18 @@ class ConduitServer:
             coordinator=self.session_registry,
         )
         self.server_machine_id = windows_machine_id()
+        # The bridge is local-only and does not start a browser or retain URLs.
+        self.browser_handoff_desktop = BrowserHandoffDesktop(
+            start_bridge=False,
+            on_capability=self._on_server_browser_capability,
+            on_result=self._on_server_browser_result,
+        )
+        self.cluster_browser_router = ClusterBrowserRouter(
+            server_session_id=self.server_machine_id,
+            endpoint_available=self._browser_endpoint_available,
+            send=self._send_browser_control,
+            now=time.monotonic,
+        )
         self.clipboard_hub = ClipboardHub(self.server_machine_id)
         self.cluster_file_router = ClusterFileRouter(
             self.server_machine_id,
@@ -195,6 +210,15 @@ class ConduitServer:
         self.control_network.register_callback('disconnected', lambda d: self._on_socket_disconnected('control', d))
         self.control_network.register_callback('switch_back', self.on_switch_back)
         self.control_network.register_callback('switch_ack', self.on_switch_ack)
+        self.control_network.register_callback(
+            'browser_handoff_capabilities', self.on_browser_handoff_capabilities,
+        )
+        self.control_network.register_callback(
+            'browser_handoff_request', self.on_browser_handoff_request,
+        )
+        self.control_network.register_callback(
+            'browser_handoff_result', self.on_browser_handoff_result,
+        )
         self.control_network.register_callback('topology_ack', self.on_topology_ack)
         self.control_network.register_callback(
             'topology_commit_ack',
@@ -281,6 +305,7 @@ class ConduitServer:
         d_success = self.data_network.start()
         f_success = self.file_network.start()
         if c_success and d_success and f_success:
+            self.browser_handoff_desktop.start()
             self.global_hotkey_monitor.start()
             return True
         self.stop()
@@ -290,6 +315,8 @@ class ConduitServer:
         self._abort_topology_transaction(shutdown=True)
         self.global_hotkey_monitor.stop()
         self.cluster_file_router.stop()
+        self.cluster_browser_router.stop()
+        self.browser_handoff_desktop.stop()
         self.session_registry.close()
         self.control_network.stop()
         self.data_network.stop()
@@ -419,6 +446,61 @@ class ConduitServer:
                 )
             ),
             None,
+        )
+
+    def _browser_endpoint_available(self, session_id):
+        if session_id == self.server_machine_id:
+            return True
+        session = self.session_registry.get(session_id)
+        return bool(
+            session is not None and session.ready and session.control_lane is not None
+        )
+
+    def _send_browser_control(self, session_id, message):
+        if session_id == self.server_machine_id:
+            instance = message.get("browser_instance_id")
+            request = message.get("request")
+            return bool(
+                isinstance(instance, str)
+                and isinstance(request, dict)
+                and self.browser_handoff_desktop.submit_receiver_request(instance, request)
+            )
+        try:
+            return bool(self.control_network.send_message(message, session_id=session_id))
+        except Exception:
+            return False
+
+    def on_browser_handoff_capabilities(self, data):
+        if not isinstance(data, dict):
+            return False
+        return self.cluster_browser_router.register_capability(
+            data.get("session_id"),
+            data.get("peer_identity"),
+            data.get("receiver_epoch"),
+            data.get("browser_instance_id"),
+        )
+
+    def on_browser_handoff_request(self, data):
+        if not isinstance(data, dict):
+            return False
+        return self.cluster_browser_router.accept_request(data.get("session_id"), data)
+
+    def on_browser_handoff_result(self, data):
+        if not isinstance(data, dict):
+            return False
+        return self.cluster_browser_router.accept_result(data.get("session_id"), data)
+
+    def _on_server_browser_capability(self, browser_instance_id, receiver_epoch):
+        return self.cluster_browser_router.register_capability(
+            self.server_machine_id,
+            self.server_machine_id,
+            receiver_epoch,
+            browser_instance_id,
+        )
+
+    def _on_server_browser_result(self, _browser_instance_id, message):
+        return self.cluster_browser_router.accept_result(
+            self.server_machine_id, message,
         )
 
     def _restore_topology(self, topology):

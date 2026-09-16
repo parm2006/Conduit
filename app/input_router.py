@@ -60,6 +60,7 @@ class InputRouter:
         handoff_timeout=0.75,
         handoff_failed=None,
         ownership_changed=None,
+        accepted_edge=None,
         remote_viewport=None,
     ):
         if remote_viewport is not None:
@@ -83,6 +84,7 @@ class InputRouter:
         self._handoff_timeout = float(handoff_timeout)
         self._handoff_failed = handoff_failed
         self._ownership_changed = ownership_changed
+        self._accepted_edge = accepted_edge
         self.remote_viewport = remote_viewport
         self._pending_deadline = None
         self._dispatch_machines = {}
@@ -130,6 +132,7 @@ class InputRouter:
         if self._pause_requested.is_set():
             logger.warning("[cursor] Rejected edge while pause is pending")
             return False
+        accepted_event = None
         with self._lock:
             if self._pause_requested.is_set():
                 logger.warning("[cursor] Rejected edge while pause is pending")
@@ -197,7 +200,36 @@ class InputRouter:
                 edge.destination_position,
                 self.topology.version,
             )
-            return self._transition(edge)
+            prior_state = self.state
+            accepted = self._transition(edge)
+            if accepted:
+                destination_session = (
+                    self._session_for_machine(edge.mapping.destination_machine_id)
+                    if edge.mapping.destination_machine_id != self.topology.server_id
+                    else None
+                )
+                accepted_event = {
+                    "source_machine_id": edge.mapping.source_machine_id,
+                    "source_session_id": (
+                        prior_state.session_id
+                        if isinstance(prior_state, RemoteClient) else None
+                    ),
+                    "destination_machine_id": edge.mapping.destination_machine_id,
+                    "destination_session_id": (
+                        getattr(destination_session, "session_id", None)
+                        if edge.mapping.destination_machine_id != self.topology.server_id
+                        else None
+                    ),
+                    "topology_version": self.topology.version,
+                }
+        if accepted_event is not None and self._accepted_edge is not None:
+            threading.Thread(
+                target=self._notify_accepted_edge,
+                args=(accepted_event,),
+                name="browser-handoff-edge",
+                daemon=True,
+            ).start()
+        return accepted
 
     def forward_mouse_move(self, dx, dy):
         state = self._active_remote_snapshot()
@@ -578,6 +610,12 @@ class InputRouter:
             str(pending.destination_session_id)[:8],
         )
         self._fail_handoff(pending.handoff_id, "switch send failed")
+
+    def _notify_accepted_edge(self, event):
+        try:
+            self._accepted_edge(dict(event))
+        except Exception as error:
+            logger.warning("[cursor] Accepted-edge observer failed (%s)", type(error).__name__)
 
     def _fail_handoff(self, handoff_id, reason):
         callback = None

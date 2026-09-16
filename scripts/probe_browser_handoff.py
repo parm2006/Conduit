@@ -1,0 +1,304 @@
+"""Opt-in, URL-free diagnostic harness for browser-window correlation.
+
+Run ``python scripts/probe_browser_handoff.py --help`` before use.  The normal
+observer starts only with ``--observe``; ``--native-host`` is reserved for the
+disposable Chromium probe's binary stdio connection.
+"""
+
+import argparse
+import json
+import os
+from pathlib import Path
+import re
+import struct
+import sys
+import threading
+import time
+
+from app.browser_handoff.window_match import BrowserWindowCandidate
+
+
+MAX_NATIVE_FRAME_BYTES = 64 * 1024
+NATIVE_HOST_NAME = "com.conduit.browser_handoff_probe"
+_EXTENSION_ID = re.compile(r"^[a-p]{32}$")
+
+
+class FrameError(ValueError):
+    pass
+
+
+def host_ready_message(instance_id, host_pid, browser_process_id, browser_process_created):
+    """Build the URL-free connection identity reported to the probe worker."""
+    return {
+        "type": "probe_host_ready",
+        "host_pid": host_pid,
+        "browser_process_id": browser_process_id,
+        "browser_process_created": browser_process_created,
+        "received_instance_id": instance_id,
+    }
+
+
+def native_host_manifest(host_path, extension_id):
+    """Return a Windows host manifest bound to exactly one extension origin."""
+    if not isinstance(host_path, str) or not host_path:
+        raise ValueError("host_path must be a non-empty string")
+    if not isinstance(extension_id, str) or not _EXTENSION_ID.fullmatch(extension_id):
+        raise ValueError("extension_id must be a 32-character Chromium extension ID")
+    return {
+        "name": NATIVE_HOST_NAME,
+        "description": "Conduit browser-window correlation diagnostic probe",
+        "path": host_path,
+        "type": "stdio",
+        "allowed_origins": [f"chrome-extension://{extension_id}/"],
+    }
+
+
+def candidates_from_metadata(message, *, received_at, to_physical):
+    """Build candidates using local receipt time, never extension clock time."""
+    if type(message) is not dict or not isinstance(message.get("browser_instance_id"), str):
+        return []
+    windows = message.get("windows")
+    if type(windows) is not list:
+        return []
+    candidates = []
+    for item in windows:
+        if type(item) is not dict:
+            continue
+        window_id = item.get("window_id")
+        process_id = item.get("browser_process_id")
+        process_created = item.get("browser_process_created")
+        if any(type(value) is not int for value in (window_id, process_id, process_created)):
+            continue
+        try:
+            bounds = to_physical(item)
+        except (KeyError, TypeError, ValueError):
+            continue
+        candidates.append(
+            BrowserWindowCandidate(
+                browser_instance_id=message["browser_instance_id"],
+                window_id=window_id,
+                process_id=process_id,
+                process_created=process_created,
+                bounds=bounds,
+                focused=item.get("focused") is True,
+                observed_at=received_at,
+            )
+        )
+    return candidates
+
+
+class ProbeMetadataStore:
+    """Memory-only latest metadata snapshot for each diagnostic connection."""
+
+    def __init__(self):
+        self._snapshots = {}
+        self._lock = threading.Lock()
+
+    def record(self, message, *, received_at):
+        if type(message) is not dict or not isinstance(message.get("browser_instance_id"), str):
+            return False
+        with self._lock:
+            self._snapshots[message["browser_instance_id"]] = (dict(message), received_at)
+        return True
+
+    def candidates(self, *, to_physical):
+        with self._lock:
+            snapshots = tuple(self._snapshots.values())
+        candidates = []
+        for message, received_at in snapshots:
+            candidates.extend(candidates_from_metadata(message, received_at=received_at, to_physical=to_physical))
+        return candidates
+
+
+def _read_exact(stream, size):
+    chunks = []
+    remaining = size
+    while remaining:
+        chunk = stream.read(remaining)
+        if not chunk:
+            raise FrameError("truncated native-messaging frame")
+        chunks.append(chunk)
+        remaining -= len(chunk)
+    return b"".join(chunks)
+
+
+def read_native_message(stream):
+    """Read one Chromium native-messaging JSON object with a hard size bound."""
+    header = _read_exact(stream, 4)
+    size = struct.unpack("<I", header)[0]
+    if size > MAX_NATIVE_FRAME_BYTES:
+        raise FrameError("native-messaging frame exceeds diagnostic limit")
+    try:
+        message = json.loads(_read_exact(stream, size).decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise FrameError("invalid native-messaging JSON") from error
+    if type(message) is not dict:
+        raise FrameError("native-messaging payload must be an object")
+    return message
+
+
+def write_native_message(stream, message):
+    """Write one bounded Chromium native-messaging object without stdout logs."""
+    if type(message) is not dict:
+        raise FrameError("native-messaging payload must be an object")
+    encoded = json.dumps(message, separators=(",", ":"), ensure_ascii=True).encode("utf-8")
+    if len(encoded) > MAX_NATIVE_FRAME_BYTES:
+        raise FrameError("native-messaging frame exceeds diagnostic limit")
+    stream.write(struct.pack("<I", len(encoded)))
+    stream.write(encoded)
+    stream.flush()
+
+
+def _native_host_loop():
+    while True:
+        try:
+            message = read_native_message(sys.stdin.buffer)
+        except FrameError as error:
+            print(f"probe host stopped: {error}", file=sys.stderr)
+            return 1
+        except BrokenPipeError:
+            return 0
+        message_type = message.get("type")
+        if message_type == "probe_hello":
+            browser_process_id, browser_process_created = _parent_process_identity()
+            write_native_message(
+                sys.stdout.buffer,
+                host_ready_message(
+                    message.get("browser_instance_id"),
+                    os.getpid(),
+                    browser_process_id,
+                    browser_process_created,
+                ),
+            )
+        elif message_type == "window_metadata":
+            # The probe keeps metadata in memory only.  stdout stays protocol-only.
+            windows = message.get("windows", [])
+            print(f"probe metadata: {len(windows)} opaque windows", file=sys.stderr)
+        else:
+            write_native_message(
+                sys.stdout.buffer,
+                {"type": "probe_error", "reason": "unsupported_message"},
+            )
+
+
+def _parent_process_identity():
+    """Return the native host's parent PID and immutable Windows birth time."""
+    parent_pid = os.getppid()
+    if os.name != "nt":
+        return parent_pid, None
+    import ctypes
+    import ctypes.wintypes
+
+    kernel32 = ctypes.windll.kernel32
+    process = kernel32.OpenProcess(0x1000, False, parent_pid)
+    if not process:
+        return parent_pid, None
+    try:
+        created = ctypes.wintypes.FILETIME()
+        exited = ctypes.wintypes.FILETIME()
+        kernel = ctypes.wintypes.FILETIME()
+        user = ctypes.wintypes.FILETIME()
+        if not kernel32.GetProcessTimes(
+            process,
+            ctypes.byref(created),
+            ctypes.byref(exited),
+            ctypes.byref(kernel),
+            ctypes.byref(user),
+        ):
+            return parent_pid, None
+        return parent_pid, (created.dwHighDateTime << 32) | created.dwLowDateTime
+    finally:
+        kernel32.CloseHandle(process)
+
+
+def _observe():
+    if os.name != "nt":
+        print("This passive WinEvent harness is available only on Windows.", file=sys.stderr)
+        return 2
+    from app.browser_handoff.windows_drag import WinEventMoveObserver
+
+    observer = WinEventMoveObserver()
+    observer.start()
+    print("Observing opaque native move tokens. Press Ctrl+C to stop.")
+    try:
+        while True:
+            token = observer.tracker.consume_eligible_move(now=time.monotonic())
+            if token is not None:
+                print(
+                    json.dumps(
+                        {
+                            "hwnd": token.hwnd,
+                            "process_id": token.process_id,
+                            "process_created": token.process_created,
+                            "bounds": [
+                                token.bounds.left,
+                                token.bounds.top,
+                                token.bounds.right,
+                                token.bounds.bottom,
+                            ],
+                            "completed_monotonic": token.completed_at,
+                        }
+                    )
+                )
+            time.sleep(0.05)
+    except KeyboardInterrupt:
+        return 0
+    finally:
+        observer.stop()
+
+
+def _write_manifest(manifest_path, host_path, extension_id):
+    path = Path(manifest_path)
+    path.write_text(
+        json.dumps(native_host_manifest(host_path, extension_id), indent=2) + "\n",
+        encoding="utf-8",
+    )
+    print(path.resolve())
+
+
+def _register_manifest(manifest_path, browser):
+    if os.name != "nt":
+        raise RuntimeError("current-user native-host registration is only available on Windows")
+    import winreg
+
+    roots = {
+        "chrome": [r"Software\Google\Chrome\NativeMessagingHosts"],
+        "edge": [r"Software\Microsoft\Edge\NativeMessagingHosts"],
+        "all": [
+            r"Software\Google\Chrome\NativeMessagingHosts",
+            r"Software\Microsoft\Edge\NativeMessagingHosts",
+        ],
+    }[browser]
+    resolved = str(Path(manifest_path).resolve())
+    for root in roots:
+        with winreg.CreateKey(winreg.HKEY_CURRENT_USER, root + "\\" + NATIVE_HOST_NAME) as key:
+            winreg.SetValueEx(key, "", 0, winreg.REG_SZ, resolved)
+    print("registered " + ", ".join(roots))
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(description=__doc__)
+    mode = parser.add_mutually_exclusive_group(required=True)
+    mode.add_argument("--observe", action="store_true", help="passively observe native move tokens")
+    mode.add_argument("--native-host", action="store_true", help=argparse.SUPPRESS)
+    mode.add_argument("--write-native-manifest", metavar="PATH", help="write an exact-origin development host manifest")
+    mode.add_argument("--register-native-host", metavar="PATH", help="register an existing host manifest for the current Windows user")
+    parser.add_argument("--host-path", help="absolute path to the separately built probe-host executable")
+    parser.add_argument("--extension-id", help="unpacked extension ID shown by Chromium")
+    parser.add_argument("--browser", choices=("chrome", "edge", "all"), default="all")
+    args = parser.parse_args(argv)
+    if args.native_host:
+        return _native_host_loop()
+    if args.observe:
+        return _observe()
+    if args.write_native_manifest:
+        if not args.host_path or not args.extension_id:
+            parser.error("--write-native-manifest requires --host-path and --extension-id")
+        _write_manifest(args.write_native_manifest, args.host_path, args.extension_id)
+        return 0
+    _register_manifest(args.register_native_host, args.browser)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

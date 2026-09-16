@@ -26,6 +26,8 @@ from app.safe_errors import error_name, public_error_message
 from app.global_hotkey import GlobalHotkeyMonitor
 from app.machine_identity import windows_machine_id
 from app.ports import DEFAULT_FILE_PORT
+from app.browser_handoff.desktop import BrowserHandoffDesktop
+from app.browser_handoff.endpoint import BrowserHandoffEndpoint
 from app.windows_displays import (
     DisplayChangeMonitor,
     WindowsDisplayDiscovery,
@@ -57,6 +59,12 @@ class ConduitClient:
         self.on_app_shutdown = on_app_shutdown
         self.windows_name = socket.gethostname()
         self.machine_id = windows_machine_id()
+        self.browser_handoff_desktop = BrowserHandoffDesktop(start_bridge=False)
+        self.browser_handoff_endpoint = BrowserHandoffEndpoint(
+            machine_id=self.machine_id,
+            desktop=self.browser_handoff_desktop,
+            send_control=lambda message: self.control_network.send_message(message),
+        )
         self.display_discovery = WindowsDisplayDiscovery()
         self.display_group = None
         self.display_monitor = DisplayChangeMonitor(
@@ -146,6 +154,9 @@ class ConduitClient:
             'file_paste_intent', self.on_file_paste_intent
         )
         self.control_network.register_callback('reload_connection', lambda data: self.reload_connection())
+        self.control_network.register_callback(
+            'browser_handoff_request', self.browser_handoff_endpoint.on_control_message,
+        )
         
         # Setup data network callbacks
         # Setup input callbacks
@@ -280,6 +291,9 @@ class ConduitClient:
         self.input_handler.set_screen_size(w, h)
 
     def connect(self, host, port, callback):
+        browser_handoff = getattr(self, "browser_handoff_desktop", None)
+        if browser_handoff is not None:
+            browser_handoff.start()
         self.host = host
         self.port = port
         self.control_connected = False
@@ -377,6 +391,9 @@ class ConduitClient:
             self._ready_started = True
             try:
                 self.control_network.commit_peer_trust()
+                browser_handoff_endpoint = getattr(self, "browser_handoff_endpoint", None)
+                if browser_handoff_endpoint is not None:
+                    browser_handoff_endpoint.announce_all()
                 if not self._all_lanes_live():
                     raise ConnectionError(
                         "secure session disconnected while becoming ready"
@@ -474,6 +491,9 @@ class ConduitClient:
         )
 
     def disconnect(self, preserve_failure=False, error=None):
+        browser_handoff = getattr(self, "browser_handoff_desktop", None)
+        if browser_handoff is not None:
+            browser_handoff.stop()
         self._stop_native_sender()
         capture = getattr(self, 'video_capture', None)
         if capture is not None:
@@ -1313,4 +1333,3 @@ class ConduitClient:
                 sender.request_keyframe()
             except Exception as exc:
                 logger.debug("Failed to request keyframe on native sender: %s", exc)
-

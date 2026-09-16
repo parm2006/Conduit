@@ -212,6 +212,25 @@ class InputRouterTests(unittest.TestCase):
             release_callback.set()
             worker.join(1)
 
+    def test_accepted_edge_reports_authoritative_session_binding_outside_router_lock(self):
+        observed = []
+        delivered = threading.Event()
+        router = InputRouter(
+            active_chain(), session_for_machine=self.sessions.get,
+            input_effects=self.effects,
+            accepted_edge=lambda event: (observed.append(event), delivered.set()),
+        )
+        self.addCleanup(lambda: router.pause("test accepted-edge cleanup"))
+
+        self.assertTrue(router.handle_edge(
+            "server", "server-primary", "right", 0.5, topology_version=7,
+        ))
+        self.assertTrue(delivered.wait(0.2))
+        self.assertEqual(observed[0]["source_session_id"], None)
+        self.assertEqual(observed[0]["destination_session_id"], "session-1")
+        self.assertEqual(observed[0]["destination_machine_id"], "client-1")
+        self.assertEqual(observed[0]["topology_version"], 7)
+
     def test_pause_request_prevents_a_blocked_handoff_from_starting_capture(self):
         send_entered = threading.Event()
         release_send = threading.Event()
