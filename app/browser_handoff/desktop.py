@@ -4,6 +4,7 @@ import threading
 import time
 
 from .local_bridge import DesktopBridge
+from .window_match import BrowserWindowCandidate
 
 
 class BrowserHandoffDesktop:
@@ -107,6 +108,45 @@ class BrowserHandoffDesktop:
         with self._lock:
             item = self._metadata.get(browser_instance_id)
             return None if item is None else dict(item)
+
+    def browser_candidates(self, to_physical, *, received_at=None):
+        """Return only metadata bound to a live authenticated host process.
+
+        ``to_physical`` is deliberately injected: plan 001 must prove the
+        Chromium-DIP-to-Windows-physical conversion before production supplies
+        one.  A converter failure merely omits that candidate.
+        """
+        observed_at = time.monotonic() if received_at is None else received_at
+        with self._lock:
+            snapshots = tuple(
+                (instance, dict(message), self._connections.get(instance))
+                for instance, message in self._metadata.items()
+            )
+        candidates = []
+        for instance, message, connection in snapshots:
+            if connection is None:
+                continue
+            hello = connection.hello
+            for window in message.get("windows", ()):
+                if type(window) is not dict:
+                    continue
+                try:
+                    window_id = window["window_id"]
+                    if type(window_id) is not int:
+                        continue
+                    bounds = to_physical(dict(window))
+                    candidates.append(BrowserWindowCandidate(
+                        browser_instance_id=instance,
+                        window_id=window_id,
+                        process_id=hello.browser_process_id,
+                        process_created=hello.browser_process_created,
+                        bounds=bounds,
+                        focused=window.get("focused") is True,
+                        observed_at=observed_at,
+                    ))
+                except (KeyError, TypeError, ValueError):
+                    continue
+        return candidates
 
     def request_snapshot(self, browser_instance_id, window_id, request_id):
         if type(window_id) is not int or type(request_id) is not str or not request_id:

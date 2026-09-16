@@ -2,6 +2,7 @@ import unittest
 import threading
 
 from app.browser_handoff.desktop import BrowserHandoffDesktop
+from app.browser_handoff.window_match import PhysicalRect
 
 
 class FakeConnection:
@@ -16,9 +17,18 @@ class FakeConnection:
 
 
 class BrowserHandoffDesktopTests(unittest.TestCase):
+    @staticmethod
+    def _connection(instance="instance-a", epoch="bridge-1"):
+        hello = type("Hello", (), {
+            "browser_instance_id": instance,
+            "browser_process_id": 123,
+            "browser_process_created": 456,
+        })()
+        return FakeConnection(hello, epoch=epoch)
+
     def test_binds_metadata_to_authenticated_connection_and_never_persists_urls(self):
         desktop = BrowserHandoffDesktop(start_bridge=False)
-        connection = FakeConnection(type("Hello", (), {"browser_instance_id": "instance-a"})())
+        connection = self._connection()
         desktop.on_connected(connection)
 
         self.assertTrue(desktop.on_message(connection, {
@@ -30,7 +40,7 @@ class BrowserHandoffDesktopTests(unittest.TestCase):
 
     def test_rejects_spoofed_instance_and_clears_memory_on_disconnect(self):
         desktop = BrowserHandoffDesktop(start_bridge=False)
-        connection = FakeConnection(type("Hello", (), {"browser_instance_id": "instance-a"})())
+        connection = self._connection()
         desktop.on_connected(connection)
 
         self.assertFalse(desktop.on_message(connection, {
@@ -41,7 +51,7 @@ class BrowserHandoffDesktopTests(unittest.TestCase):
 
     def test_routes_snapshot_requests_only_to_live_matched_browser_instance(self):
         desktop = BrowserHandoffDesktop(start_bridge=False)
-        connection = FakeConnection(type("Hello", (), {"browser_instance_id": "instance-a"})())
+        connection = self._connection()
         desktop.on_connected(connection)
 
         self.assertTrue(desktop.request_snapshot("instance-a", 9, "f" * 32))
@@ -52,7 +62,7 @@ class BrowserHandoffDesktopTests(unittest.TestCase):
 
     def test_routes_receiver_request_to_exact_connected_browser_instance(self):
         desktop = BrowserHandoffDesktop(start_bridge=False)
-        connection = FakeConnection(type("Hello", (), {"browser_instance_id": "instance-a"})())
+        connection = self._connection()
         desktop.on_connected(connection)
         request = {"request_id": "a" * 32}
 
@@ -69,7 +79,7 @@ class BrowserHandoffDesktopTests(unittest.TestCase):
             start_bridge=False,
             on_capability=lambda instance, epoch: (announced.append((instance, epoch)), ready.set()),
         )
-        connection = FakeConnection(type("Hello", (), {"browser_instance_id": "instance-a"})(), epoch="bridge-1")
+        connection = self._connection()
         desktop.on_connected(connection)
 
         self.assertFalse(desktop.on_message(connection, {
@@ -80,3 +90,20 @@ class BrowserHandoffDesktopTests(unittest.TestCase):
         }))
         self.assertTrue(ready.wait(0.2))
         self.assertEqual(announced, [("instance-a", "bridge-1")])
+
+    def test_builds_candidates_only_with_the_authenticated_browser_process_identity(self):
+        desktop = BrowserHandoffDesktop(start_bridge=False)
+        connection = self._connection()
+        desktop.on_connected(connection)
+        desktop.on_message(connection, {
+            "type": "browser_handoff_metadata", "browser_instance_id": "instance-a",
+            "windows": [{"window_id": 7, "left": 1, "top": 2, "width": 3, "height": 4}],
+        })
+
+        candidates = desktop.browser_candidates(
+            lambda item: PhysicalRect(item["left"], item["top"], item["left"] + item["width"], item["top"] + item["height"]),
+            received_at=1.0,
+        )
+        self.assertEqual(len(candidates), 1)
+        self.assertEqual(candidates[0].process_id, 123)
+        self.assertEqual(candidates[0].process_created, 456)
