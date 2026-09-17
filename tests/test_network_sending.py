@@ -22,6 +22,65 @@ class OverlapDetectingSocket:
 
 
 class NetworkSendingTests(unittest.TestCase):
+    def test_disconnect_timeout_survives_blocked_send(self):
+        # Exercise both a heartbeat stuck in sendall and a heartbeat waiting
+        # behind an application send. Only socket shutdown releases the writer.
+        for application_send in (False, True):
+            with self.subTest(application_send=application_send):
+                class StalledSocket:
+                    def __init__(self):
+                        self.started = threading.Event()
+                        self.closed = threading.Event()
+
+                    def sendall(self, data):
+                        self.started.set()
+                        self.closed.wait()
+                        raise OSError("socket shut down")
+
+                    def shutdown(self, how):
+                        self.closed.set()
+
+                    def close(self):
+                        self.closed.set()
+
+                sock = StalledSocket()
+                node = NetworkNode(heartbeat_interval=0.02, heartbeat_timeout=0.1)
+                disconnected = threading.Event()
+                callbacks = []
+                def on_disconnect(data):
+                    callbacks.append(data)
+                    disconnected.set()
+                node.register_callback("disconnected", on_disconnect)
+                writer = None
+                try:
+                    node._attach_socket(sock)
+                    if application_send:
+                        writer = threading.Thread(
+                            target=lambda: node.send_message({"type": "clipboard_sync"}),
+                            daemon=True,
+                        )
+                        writer.start()
+                    self.assertTrue(sock.started.wait(1))
+                    self.assertTrue(
+                        disconnected.wait(1),
+                        "Blocked send prevented the disconnect watchdog from expiring",
+                    )
+                    self.assertFalse(node.connected)
+                    self.assertTrue(sock.closed.is_set())
+                    node._heartbeat_thread.join(1)
+                    node._watchdog_thread.join(1)
+                    self.assertFalse(node._heartbeat_thread.is_alive())
+                    self.assertFalse(node._watchdog_thread.is_alive())
+                    if writer is not None:
+                        writer.join(1)
+                        self.assertFalse(writer.is_alive())
+                    self.assertEqual(len(callbacks), 1)
+                finally:
+                    node.disconnect()
+                    sock.closed.set()
+                    if writer is not None:
+                        writer.join(1)
+
     def test_heartbeat_disconnects_when_peer_stops_responding(self):
         class Socket:
             def __init__(self):
