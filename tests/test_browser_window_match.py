@@ -213,6 +213,44 @@ class ProbeNativeFramingTests(unittest.TestCase):
         )
         self.assertIsNone(browser_probe.consume_probe_correlation(store, tracker, now=10.2))
 
+    def test_probe_emits_a_completed_move_without_waiting_for_an_idle_loop(self):
+        self.assertTrue(hasattr(browser_probe, "emit_probe_correlation"))
+        store = ProbeMetadataStore()
+        store.record(
+            {
+                "browser_instance_id": "opaque-instance",
+                "windows": [{
+                    "window_id": 7,
+                    "browser_process_id": 101,
+                    "browser_process_created": 1234,
+                    "left": 100,
+                    "top": 50,
+                    "width": 800,
+                    "height": 600,
+                }],
+            },
+            received_at=10.0,
+        )
+
+        class Tracker:
+            def consume_eligible_move(self, *, now):
+                return MoveToken(
+                    hwnd=42,
+                    process_id=101,
+                    process_created=1234,
+                    bounds=PhysicalRect(100, 50, 900, 650),
+                    completed_at=10.1,
+                )
+
+        emitted = []
+
+        self.assertTrue(
+            browser_probe.emit_probe_correlation(
+                store, Tracker(), emitted.append, now=10.2
+            )
+        )
+        self.assertEqual(emitted[0]["status"], "unique_raw_match")
+
     def test_probe_script_runs_directly_from_the_repository_root(self):
         root = Path(__file__).resolve().parents[1]
 

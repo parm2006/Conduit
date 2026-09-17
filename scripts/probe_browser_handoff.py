@@ -214,6 +214,15 @@ def consume_probe_correlation(store, tracker, *, now):
     return correlation_evidence(token, metadata, received_at=received_at, now=now)
 
 
+def emit_probe_correlation(store, tracker, emit, *, now):
+    """Emit one completed move immediately, even when messages keep arriving."""
+    evidence = consume_probe_correlation(store, tracker, now=now)
+    if evidence is None:
+        return False
+    emit(evidence)
+    return True
+
+
 def _raw_browser_bounds(item):
     return PhysicalRect(
         item["left"],
@@ -310,11 +319,12 @@ def _native_host_loop():
             try:
                 kind, payload = inbox.get(timeout=0.05)
             except queue.Empty:
-                evidence = consume_probe_correlation(
-                    store, observer.tracker, now=time.monotonic()
+                emit_probe_correlation(
+                    store,
+                    observer.tracker,
+                    lambda evidence: write_native_message(sys.stdout.buffer, evidence),
+                    now=time.monotonic(),
                 )
-                if evidence is not None:
-                    write_native_message(sys.stdout.buffer, evidence)
                 continue
             if kind == "closed":
                 return 0
@@ -348,6 +358,12 @@ def _native_host_loop():
                     sys.stdout.buffer,
                     {"type": "probe_error", "reason": "unsupported_message"},
                 )
+            emit_probe_correlation(
+                store,
+                observer.tracker,
+                lambda evidence: write_native_message(sys.stdout.buffer, evidence),
+                now=time.monotonic(),
+            )
     finally:
         observer.stop()
 
