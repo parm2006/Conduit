@@ -4,5 +4,6 @@
   "version": "0.1.0",
   "description": "Disposable URL-free metadata probe; not the shipping extension.",
   "permissions": ["windows", "nativeMessaging"],
-  "background": {"service_worker": "probe_worker.js"}
+  "background": {"service_worker": "probe_worker.js"},
+  "action": {"default_popup": "popup.html"}
 }

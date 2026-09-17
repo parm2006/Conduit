@@ -9,6 +9,7 @@ import argparse
 import json
 import os
 from pathlib import Path
+import queue
 import re
 import struct
 import sys
@@ -19,7 +20,13 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from app.browser_handoff.window_match import BrowserWindowCandidate
+from app.browser_handoff.window_match import (
+    BrowserWindowCandidate,
+    MAX_METADATA_AGE_SECONDS,
+    NativeWindowObservation,
+    PhysicalRect,
+    match_window,
+)
 
 
 MAX_NATIVE_FRAME_BYTES = 64 * 1024
@@ -99,7 +106,11 @@ class ProbeMetadataStore:
         self._lock = threading.Lock()
 
     def record(self, message, *, received_at):
-        if type(message) is not dict or not isinstance(message.get("browser_instance_id"), str):
+        if (
+            type(message) is not dict
+            or not isinstance(message.get("browser_instance_id"), str)
+            or _contains_url(message)
+        ):
             return False
         with self._lock:
             self._snapshots[message["browser_instance_id"]] = (dict(message), received_at)
@@ -112,6 +123,116 @@ class ProbeMetadataStore:
         for message, received_at in snapshots:
             candidates.extend(candidates_from_metadata(message, received_at=received_at, to_physical=to_physical))
         return candidates
+
+    def latest(self):
+        with self._lock:
+            if len(self._snapshots) != 1:
+                return None
+            message, received_at = next(iter(self._snapshots.values()))
+            return dict(message), received_at
+
+
+def correlation_evidence(token, metadata, *, received_at, now):
+    """Return URL-free raw-coordinate evidence for one native move token.
+
+    This is diagnostic data only.  It intentionally does not apply a DPI
+    conversion or choose a fallback candidate when raw bounds do not match.
+    """
+    native = NativeWindowObservation(
+        hwnd=token.hwnd,
+        process_id=token.process_id,
+        process_created=token.process_created,
+        bounds=token.bounds,
+        observed_at=token.completed_at,
+    )
+    result = {
+        "type": "probe_correlation",
+        "native": {
+            "process_id": token.process_id,
+            "process_created": token.process_created,
+            "bounds": _rect_values(token.bounds),
+        },
+        "metadata_age_ms": int(max(0, now - received_at) * 1000),
+        "candidates": [],
+    }
+    if not isinstance(metadata, dict) or _contains_url(metadata):
+        result["status"] = "no_metadata"
+        return result
+    if now - received_at > MAX_METADATA_AGE_SECONDS:
+        result["status"] = "stale_metadata"
+        return result
+
+    candidates = candidates_from_metadata(
+        metadata,
+        received_at=received_at,
+        to_physical=_raw_browser_bounds,
+    )
+    matching_identity = [
+        candidate
+        for candidate in candidates
+        if candidate.process_id == token.process_id
+        and candidate.process_created == token.process_created
+    ]
+    result["candidates"] = [
+        {
+            "window_id": candidate.window_id,
+            "same_process": candidate in matching_identity,
+            "bounds": _rect_values(candidate.bounds),
+            "edge_deltas": [
+                native_edge - browser_edge
+                for native_edge, browser_edge in zip(
+                    _rect_values(token.bounds), _rect_values(candidate.bounds)
+                )
+            ],
+        }
+        for candidate in candidates[:32]
+    ]
+    if not candidates:
+        result["status"] = "no_candidates"
+        return result
+    if not matching_identity:
+        result["status"] = "no_process_match"
+        return result
+    matched = match_window(native, candidates, now=now)
+    if matched is None:
+        result["status"] = "ambiguous_or_bounds_mismatch"
+        return result
+    result["status"] = "unique_raw_match"
+    result["matching_window_id"] = matched.window_id
+    return result
+
+
+def consume_probe_correlation(store, tracker, *, now):
+    """Consume at most one move token and correlate it with one probe peer."""
+    token = tracker.consume_eligible_move(now=now)
+    if token is None:
+        return None
+    latest = store.latest()
+    if latest is None:
+        return correlation_evidence(token, None, received_at=now, now=now)
+    metadata, received_at = latest
+    return correlation_evidence(token, metadata, received_at=received_at, now=now)
+
+
+def _raw_browser_bounds(item):
+    return PhysicalRect(
+        item["left"],
+        item["top"],
+        item["left"] + item["width"],
+        item["top"] + item["height"],
+    )
+
+
+def _rect_values(rect):
+    return [rect.left, rect.top, rect.right, rect.bottom]
+
+
+def _contains_url(value):
+    if type(value) is dict:
+        return "url" in value or any(_contains_url(item) for item in value.values())
+    if type(value) is list:
+        return any(_contains_url(item) for item in value)
+    return False
 
 
 def _read_exact(stream, size):
@@ -154,35 +275,81 @@ def write_native_message(stream, message):
 
 
 def _native_host_loop():
-    while True:
+    if os.name != "nt":
+        print("probe host is only available on Windows", file=sys.stderr)
+        return 2
+    from app.browser_handoff.windows_drag import WinEventMoveObserver
+
+    store = ProbeMetadataStore()
+    observer = WinEventMoveObserver()
+    try:
+        observer.start()
+    except Exception as error:
+        print(f"probe observer failed: {type(error).__name__}", file=sys.stderr)
+        return 1
+
+    inbox = queue.Queue()
+
+    def read_messages():
         try:
-            message = read_native_message(sys.stdin.buffer)
+            while True:
+                inbox.put(("message", read_native_message(sys.stdin.buffer)))
         except FrameError as error:
-            print(f"probe host stopped: {error}", file=sys.stderr)
-            return 1
+            inbox.put(("frame_error", error))
         except BrokenPipeError:
-            return 0
-        message_type = message.get("type")
-        if message_type == "probe_hello":
-            browser_process_id, browser_process_created = _parent_process_identity()
-            write_native_message(
-                sys.stdout.buffer,
-                host_ready_message(
-                    message.get("browser_instance_id"),
-                    os.getpid(),
-                    browser_process_id,
-                    browser_process_created,
-                ),
-            )
-        elif message_type == "window_metadata":
-            # The probe keeps metadata in memory only.  stdout stays protocol-only.
-            windows = message.get("windows", [])
-            print(f"probe metadata: {len(windows)} opaque windows", file=sys.stderr)
-        else:
-            write_native_message(
-                sys.stdout.buffer,
-                {"type": "probe_error", "reason": "unsupported_message"},
-            )
+            inbox.put(("closed", None))
+
+    reader = threading.Thread(
+        target=read_messages,
+        name="browser-handoff-probe-reader",
+        daemon=True,
+    )
+    reader.start()
+    try:
+        while True:
+            try:
+                kind, payload = inbox.get(timeout=0.05)
+            except queue.Empty:
+                evidence = consume_probe_correlation(
+                    store, observer.tracker, now=time.monotonic()
+                )
+                if evidence is not None:
+                    write_native_message(sys.stdout.buffer, evidence)
+                continue
+            if kind == "closed":
+                return 0
+            if kind == "frame_error":
+                print(f"probe host stopped: {payload}", file=sys.stderr)
+                return 1
+            message = payload
+            message_type = message.get("type")
+            if message_type == "probe_hello":
+                browser_process_id, browser_process_created = _parent_process_identity()
+                write_native_message(
+                    sys.stdout.buffer,
+                    host_ready_message(
+                        message.get("browser_instance_id"),
+                        os.getpid(),
+                        browser_process_id,
+                        browser_process_created,
+                    ),
+                )
+            elif message_type == "window_metadata":
+                if not store.record(message, received_at=time.monotonic()):
+                    write_native_message(
+                        sys.stdout.buffer,
+                        {"type": "probe_error", "reason": "invalid_metadata"},
+                    )
+                else:
+                    windows = message.get("windows", [])
+                    print(f"probe metadata: {len(windows)} opaque windows", file=sys.stderr)
+            else:
+                write_native_message(
+                    sys.stdout.buffer,
+                    {"type": "probe_error", "reason": "unsupported_message"},
+                )
+    finally:
+        observer.stop()
 
 
 def _parent_process_identity():

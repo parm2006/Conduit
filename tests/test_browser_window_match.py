@@ -14,8 +14,10 @@ from app.browser_handoff.windows_drag import (
     EVENT_OBJECT_LOCATIONCHANGE,
     EVENT_SYSTEM_MOVESIZEEND,
     EVENT_SYSTEM_MOVESIZESTART,
+    MoveToken,
     MoveTracker,
 )
+import scripts.probe_browser_handoff as browser_probe
 from scripts.probe_browser_handoff import (
     FrameError,
     candidates_from_metadata,
@@ -122,6 +124,95 @@ class MoveTrackerTests(unittest.TestCase):
 
 
 class ProbeNativeFramingTests(unittest.TestCase):
+    def test_probe_native_host_has_its_queue_dependency(self):
+        self.assertTrue(hasattr(browser_probe, "queue"))
+
+    def test_probe_correlation_reports_only_opaque_raw_match_evidence(self):
+        self.assertTrue(hasattr(browser_probe, "correlation_evidence"))
+
+        result = browser_probe.correlation_evidence(
+            MoveToken(
+                hwnd=42,
+                process_id=101,
+                process_created=1234,
+                bounds=PhysicalRect(100, 50, 900, 650),
+                completed_at=10.1,
+            ),
+            {
+                "browser_instance_id": "opaque-instance",
+                "windows": [{
+                    "window_id": 7,
+                    "browser_process_id": 101,
+                    "browser_process_created": 1234,
+                    "left": 100,
+                    "top": 50,
+                    "width": 800,
+                    "height": 600,
+                }],
+            },
+            received_at=10.0,
+            now=10.2,
+        )
+
+        self.assertEqual(result["type"], "probe_correlation")
+        self.assertEqual(result["status"], "unique_raw_match")
+        self.assertEqual(result["matching_window_id"], 7)
+        self.assertNotIn("url", repr(result).lower())
+
+    def test_probe_metadata_store_rejects_url_bearing_messages(self):
+        store = ProbeMetadataStore()
+
+        accepted = store.record(
+            {
+                "browser_instance_id": "opaque-id",
+                "windows": [{"window_id": 7, "url": "https://example.test"}],
+            },
+            received_at=10.0,
+        )
+
+        self.assertFalse(accepted)
+
+    def test_probe_consumes_each_native_move_token_once(self):
+        self.assertTrue(hasattr(browser_probe, "consume_probe_correlation"))
+        store = ProbeMetadataStore()
+        store.record(
+            {
+                "browser_instance_id": "opaque-instance",
+                "windows": [{
+                    "window_id": 7,
+                    "browser_process_id": 101,
+                    "browser_process_created": 1234,
+                    "left": 100,
+                    "top": 50,
+                    "width": 800,
+                    "height": 600,
+                }],
+            },
+            received_at=10.0,
+        )
+
+        class Tracker:
+            def __init__(self):
+                self.token = MoveToken(
+                    hwnd=42,
+                    process_id=101,
+                    process_created=1234,
+                    bounds=PhysicalRect(100, 50, 900, 650),
+                    completed_at=10.1,
+                )
+
+            def consume_eligible_move(self, *, now):
+                token, self.token = self.token, None
+                return token
+
+        tracker = Tracker()
+
+        self.assertEqual(
+            browser_probe.consume_probe_correlation(store, tracker, now=10.2)["status"],
+            "unique_raw_match",
+        )
+        self.assertIsNone(browser_probe.consume_probe_correlation(store, tracker, now=10.2))
+
     def test_probe_script_runs_directly_from_the_repository_root(self):
         root = Path(__file__).resolve().parents[1]
 
