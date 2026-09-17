@@ -37,7 +37,30 @@ test("keeps the latest URL-free correlation result in memory for the probe popup
     chrome.runtime.onMessage.listener({ type: "probe_status" }, null, (value) => { response = value; }),
     true,
   );
-  assert.deepEqual(response, { correlation: evidence });
+  assert.deepEqual(response, { connection: "connecting", correlation: evidence });
+});
+
+test("reports a disconnected native host instead of leaving the popup waiting", () => {
+  const port = {
+    onMessage: event(),
+    onDisconnect: event(),
+    postMessage() {},
+  };
+  const chrome = {
+    runtime: { connectNative() { return port; }, onMessage: event() },
+    windows: {
+      getAll: async () => [],
+      onCreated: event(), onRemoved: event(), onFocusChanged: event(), onBoundsChanged: event(),
+    },
+  };
+  const worker = installProbeWorker(chrome, { instanceId: "opaque-instance" });
+
+  port.onDisconnect.listener();
+
+  assert.deepEqual(worker.status(), {
+    connection: "disconnected",
+    correlation: { type: "probe_error", reason: "native_host_disconnected" },
+  });
 });
 
 test("probe manifest exposes a local status popup without tab or storage permission", async () => {

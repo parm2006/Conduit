@@ -6,6 +6,7 @@ export function installProbeWorker(chrome, {
   const nativePort = chrome.runtime.connectNative("com.conduit.browser_handoff_probe");
   let browserProcess = null;
   let lastCorrelation = null;
+  let connection = "connecting";
 
   function windowMetadata(window) {
     return {
@@ -42,6 +43,7 @@ export function installProbeWorker(chrome, {
 
   nativePort.onMessage.addListener((message) => {
     if (message?.type === "probe_host_ready") {
+      connection = "ready";
       browserProcess = {
         id: message.browser_process_id,
         created: message.browser_process_created,
@@ -53,10 +55,13 @@ export function installProbeWorker(chrome, {
       lastCorrelation = message;
     }
   });
-  nativePort.onDisconnect.addListener(() => {});
+  nativePort.onDisconnect.addListener(() => {
+    connection = "disconnected";
+    lastCorrelation = { type: "probe_error", reason: "native_host_disconnected" };
+  });
   chrome.runtime.onMessage.addListener((message, _sender, respond) => {
     if (message?.type !== "probe_status") return undefined;
-    respond({ correlation: lastCorrelation });
+    respond({ connection, correlation: lastCorrelation });
     return true;
   });
   for (const event of [
@@ -67,7 +72,10 @@ export function installProbeWorker(chrome, {
   ]) event.addListener(() => { void publishWindows("window_change"); });
   nativePort.postMessage({ type: "probe_hello", browser_instance_id: instanceId });
   void publishWindows("startup");
-  return { latestCorrelation: () => lastCorrelation };
+  return {
+    latestCorrelation: () => lastCorrelation,
+    status: () => ({ connection, correlation: lastCorrelation }),
+  };
 }
 
 if (typeof chrome !== "undefined" && chrome.runtime?.connectNative) {
