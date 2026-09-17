@@ -168,6 +168,7 @@ class NetworkNode:
         self._heartbeat_stop = threading.Event()
         self._last_received = 0.0
         self._heartbeat_thread = None
+        self._watchdog_thread = None
 
     def register_callback(self, event_type, callback):
         self.callbacks.setdefault(event_type, []).append(callback)
@@ -213,6 +214,12 @@ class NetworkNode:
             daemon=True,
         )
         self._heartbeat_thread.start()
+        self._watchdog_thread = threading.Thread(
+            target=self._watchdog_loop,
+            args=(conn, generation, heartbeat_stop),
+            daemon=True,
+        )
+        self._watchdog_thread.start()
         return generation
 
     def _is_current(self, conn, generation):
@@ -266,6 +273,15 @@ class NetworkNode:
 
     def _heartbeat_loop(self, conn, generation, stop_event):
         while not stop_event.wait(self._heartbeat_interval):
+            if not self._is_current(conn, generation):
+                return
+            if not self.send_message({"type": "__conduit_heartbeat__"}):
+                return
+
+    def _watchdog_loop(self, conn, generation, stop_event):
+        # Never send or acquire _send_lock here: a stalled TLS write must not
+        # prevent shutdown from releasing the writer and notifying the UI.
+        while not stop_event.wait(self._heartbeat_interval):
             with self._state_lock:
                 if not (
                     self.sock is conn
@@ -275,9 +291,8 @@ class NetworkNode:
                     return
                 last_received = self._last_received
             if time.monotonic() - last_received > self._heartbeat_timeout:
+                logger.warning("Peer heartbeat timed out; closing connection")
                 self._disconnect_socket(conn, generation)
-                return
-            if not self.send_message({"type": "__conduit_heartbeat__"}):
                 return
 
     def _disconnect_socket(self, conn, generation):
