@@ -1,3 +1,6 @@
+from pathlib import Path
+import subprocess
+import sys
 import unittest
 from io import BytesIO
 
@@ -119,6 +122,20 @@ class MoveTrackerTests(unittest.TestCase):
 
 
 class ProbeNativeFramingTests(unittest.TestCase):
+    def test_probe_script_runs_directly_from_the_repository_root(self):
+        root = Path(__file__).resolve().parents[1]
+
+        result = subprocess.run(
+            [sys.executable, "scripts/probe_browser_handoff.py", "--help"],
+            cwd=root,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("passively observe native move tokens", result.stdout)
+
     def test_round_trips_a_bounded_url_free_metadata_message(self):
         stream = BytesIO()
         message = {
