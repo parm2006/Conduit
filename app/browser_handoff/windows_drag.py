@@ -48,6 +48,7 @@ class _MoveSession:
     left_button_observed: bool
     moved: bool = False
     resized: bool = False
+    claimed: bool = False
 
 
 class MoveTracker:
@@ -125,7 +126,9 @@ class MoveTracker:
                 return
 
             self._sessions.pop(hwnd, None)
-            if session.resized:
+            if session.claimed:
+                self._last_decision = "token_already_claimed"
+            elif session.resized:
                 self._last_decision = "rejected_resize"
             elif not session.moved:
                 self._last_decision = "rejected_no_movement"
@@ -143,6 +146,32 @@ class MoveTracker:
                 )
                 self._tokens_created += 1
                 self._last_decision = "token_created"
+
+    def claim_active_move(self, *, now):
+        """Claim one qualifying in-progress move before injected button release.
+
+        The claim is metadata-only. It does not touch the cursor or browser and
+        marks the native session so its later move-end cannot create a second
+        token.
+        """
+        with self._lock:
+            eligible = [
+                session for session in self._sessions.values()
+                if session.moved and session.left_button_observed and not session.resized and not session.claimed
+            ]
+            if not eligible:
+                return None
+            session = max(eligible, key=lambda item: item.started_at)
+            session.claimed = True
+            self._tokens_created += 1
+            self._last_decision = "active_token_claimed"
+            return MoveToken(
+                hwnd=session.hwnd,
+                process_id=session.process_id,
+                process_created=session.process_created,
+                bounds=session.latest_bounds,
+                completed_at=now,
+            )
 
     def consume_eligible_move(self, *, now):
         """Consume the newest non-expired token exactly once."""

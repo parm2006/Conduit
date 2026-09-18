@@ -28,6 +28,8 @@ from app.machine_identity import windows_machine_id
 from app.ports import DEFAULT_FILE_PORT
 from app.browser_handoff.desktop import BrowserHandoffDesktop
 from app.browser_handoff.endpoint import BrowserHandoffEndpoint
+from app.browser_handoff.coordinator import BrowserHandoffCoordinator
+from app.browser_handoff.windows_drag import WinEventMoveObserver
 from app.windows_displays import (
     DisplayChangeMonitor,
     WindowsDisplayDiscovery,
@@ -47,6 +49,17 @@ def _message_rect(values):
         return None
     return NativeRect(left, top, right, bottom)
 
+
+def _browser_bounds_to_physical(window):
+    values = (
+        window.get("left"), window.get("top"),
+        window.get("left", 0) + window.get("width", 0),
+        window.get("top", 0) + window.get("height", 0),
+    )
+    if any(type(value) is not int for value in values):
+        raise ValueError("browser bounds are unavailable")
+    return NativeRect(*values)
+
 class ConduitClient:
     def __init__(
         self, password, on_transfer_status=None, fingerprint_approval=None,
@@ -64,6 +77,13 @@ class ConduitClient:
             machine_id=self.machine_id,
             desktop=self.browser_handoff_desktop,
             send_control=lambda message: self.control_network.send_message(message),
+        )
+        self.browser_move_observer = WinEventMoveObserver()
+        self.browser_handoff_coordinator = BrowserHandoffCoordinator(
+            desktop=self.browser_handoff_desktop,
+            move_tracker=self.browser_move_observer.tracker,
+            to_physical=_browser_bounds_to_physical,
+            send_candidate=self._send_browser_candidate,
         )
         self.display_discovery = WindowsDisplayDiscovery()
         self.display_group = None
@@ -294,6 +314,10 @@ class ConduitClient:
         browser_handoff = getattr(self, "browser_handoff_desktop", None)
         if browser_handoff is not None:
             browser_handoff.start()
+        try:
+            self.browser_move_observer.start()
+        except Exception as error:
+            logger.warning("Browser move observer unavailable (%s)", type(error).__name__)
         self.host = host
         self.port = port
         self.control_connected = False
@@ -491,6 +515,12 @@ class ConduitClient:
         )
 
     def disconnect(self, preserve_failure=False, error=None):
+        observer = getattr(self, "browser_move_observer", None)
+        if observer is not None:
+            observer.stop()
+        coordinator = getattr(self, "browser_handoff_coordinator", None)
+        if coordinator is not None:
+            coordinator.cancel()
         browser_handoff = getattr(self, "browser_handoff_desktop", None)
         if browser_handoff is not None:
             browser_handoff.stop()
@@ -564,6 +594,9 @@ class ConduitClient:
             self._maybe_finish_connect()
 
     def on_layout_config(self, data):
+        coordinator = getattr(self, "browser_handoff_coordinator", None)
+        if coordinator is not None:
+            coordinator.cancel()
         server_pos = data.get('position', 'right')
         server_w = data.get('server_width', 1920)
         server_h = data.get('server_height', 1080)
@@ -624,6 +657,9 @@ class ConduitClient:
         self.active_topology_config = dict(data)
 
     def on_topology_apply(self, data):
+        coordinator = getattr(self, "browser_handoff_coordinator", None)
+        if coordinator is not None:
+            coordinator.cancel()
         self._release_all_injected_input()
         self.is_active = False
         version = data.get('version')
@@ -986,6 +1022,25 @@ class ConduitClient:
                 logger.info(f"Hit {direction} edge. Sending switch_back to server.")
                 self.is_active = False
                 self._stop_native_sender()
+                browser_gesture_id = None
+                if region is not None:
+                    try:
+                        from app.browser_handoff.edge_band import configured_edge_region
+                        browser_gesture_id = self.browser_handoff_coordinator.claim_edge(
+                            display_rect=region.source_rect,
+                            edge_region=configured_edge_region(
+                                region.source_rect,
+                                region.source_side,
+                            ),
+                            source_display_id=region.source_display_id,
+                            source_side=region.source_side,
+                            topology_version=(
+                                (getattr(self, "active_topology_config", None) or {}).get("version")
+                                or (getattr(self, "active_topology_config", None) or {}).get("topology_version")
+                            ),
+                        )
+                    except Exception:
+                        browser_gesture_id = None
                 coordinator = getattr(self, "paste_coordinator", None)
                 if coordinator is not None:
                     coordinator.set_route(None, "client")
@@ -1014,7 +1069,13 @@ class ConduitClient:
                 version = topology.get('topology_version', topology.get('version'))
                 if type(version) is int:
                     message['topology_version'] = version
+                if browser_gesture_id is not None:
+                    message['gesture_id'] = browser_gesture_id
                 self.control_network.send_message(message)
+
+    def _send_browser_candidate(self, candidate):
+        message = {"type": "browser_handoff_candidate", "candidate": dict(candidate)}
+        return bool(self.control_network.send_message(message))
 
     def on_local_copy(self, snapshot):
         work = {"snapshot": snapshot}

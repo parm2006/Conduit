@@ -12,14 +12,16 @@ class BrowserHandoffDesktop:
 
     def __init__(
         self, *, start_bridge=True, identity_verifier=None,
-        on_capability=None, on_result=None,
+        on_capability=None, on_result=None, on_snapshot=None,
     ):
         self._lock = threading.RLock()
         self._connections = {}
         self._metadata = {}
+        self._metadata_received_at = {}
         self._snapshots = {}
         self.on_capability = on_capability or (lambda instance, epoch: None)
         self.on_result = on_result or (lambda instance, message: None)
+        self.on_snapshot = on_snapshot or (lambda instance, message: None)
         self.bridge = DesktopBridge(
             on_message=self.on_message,
             identity_verifier=identity_verifier or verify_native_host_parent,
@@ -42,6 +44,7 @@ class BrowserHandoffDesktop:
             self._started = False
             self._connections.clear()
             self._metadata.clear()
+            self._metadata_received_at.clear()
             self._snapshots.clear()
         self.bridge.stop()
 
@@ -59,6 +62,7 @@ class BrowserHandoffDesktop:
             if self._connections.get(instance) is connection:
                 self._connections.pop(instance, None)
                 self._metadata.pop(instance, None)
+                self._metadata_received_at.pop(instance, None)
                 self._snapshots.pop(instance, None)
 
     def on_message(self, connection, message):
@@ -76,6 +80,7 @@ class BrowserHandoffDesktop:
                 if self._connections.get(instance) is not connection:
                     return False
                 self._metadata[instance] = dict(message)
+                self._metadata_received_at[instance] = time.monotonic()
             return True
         if message.get("type") == "browser_handoff_snapshot":
             request_id = message.get("request_id")
@@ -85,6 +90,9 @@ class BrowserHandoffDesktop:
                 if self._connections.get(instance) is not connection:
                     return False
                 self._snapshots[(instance, request_id)] = (dict(message), time.monotonic())
+            callback_message = dict(message)
+            callback_message["_bridge_epoch"] = connection.epoch
+            self._notify(self.on_snapshot, instance, callback_message)
             return True
         if message.get("type") == "browser_handoff_capabilities":
             if (
@@ -109,6 +117,11 @@ class BrowserHandoffDesktop:
             item = self._metadata.get(browser_instance_id)
             return None if item is None else dict(item)
 
+    def snapshot(self, browser_instance_id, request_id):
+        with self._lock:
+            item = self._snapshots.get((browser_instance_id, request_id))
+            return None if item is None else dict(item[0])
+
     def browser_candidates(self, to_physical, *, received_at=None):
         """Return only metadata bound to a live authenticated host process.
 
@@ -119,11 +132,16 @@ class BrowserHandoffDesktop:
         observed_at = time.monotonic() if received_at is None else received_at
         with self._lock:
             snapshots = tuple(
-                (instance, dict(message), self._connections.get(instance))
+                (
+                    instance,
+                    dict(message),
+                    self._connections.get(instance),
+                    self._metadata_received_at.get(instance),
+                )
                 for instance, message in self._metadata.items()
             )
         candidates = []
-        for instance, message, connection in snapshots:
+        for instance, message, connection, metadata_received_at in snapshots:
             if connection is None:
                 continue
             hello = connection.hello
@@ -142,7 +160,13 @@ class BrowserHandoffDesktop:
                         process_created=hello.browser_process_created,
                         bounds=bounds,
                         focused=window.get("focused") is True,
-                        observed_at=observed_at,
+                        observed_at=(
+                            observed_at
+                            if received_at is not None
+                            else (metadata_received_at if metadata_received_at is not None else observed_at)
+                        ),
+                        metadata_revision=message.get("revision") if type(message.get("revision")) is int else None,
+                        bridge_epoch=connection.epoch,
                     ))
                 except (KeyError, TypeError, ValueError):
                     continue

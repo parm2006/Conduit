@@ -16,6 +16,7 @@ from .protocol import (
     OPERATION_DEADLINE_SECONDS,
     RESULT_RETENTION_SECONDS,
     ROUTE_TICKET_TTL_SECONDS,
+    validate_candidate,
     validate_request,
     validate_result,
 )
@@ -38,6 +39,9 @@ class BrowserRoute:
     destination_machine_id: str
     topology_version: int
     expires_at: float
+    gesture_id: str | None = None
+    source_display_id: str | None = None
+    source_side: str | None = None
     request_id: str | None = None
     deadline_at: float | None = None
 
@@ -69,6 +73,7 @@ class ClusterBrowserRouter:
         self.max_results = max_results
         self._capabilities = {}
         self._routes = {}
+        self._candidates = {}
         self._active = {}
         self._terminal = {}
         self._topology_version = None
@@ -80,6 +85,7 @@ class ClusterBrowserRouter:
             return False
         if any(len(value) > 256 for value in (session_id, machine_id, receiver_epoch, browser_instance_id)):
             return False
+        dispatches = []
         with self._lock:
             if self._stopped:
                 return False
@@ -87,16 +93,33 @@ class ClusterBrowserRouter:
             self._capabilities[session_id] = BrowserCapability(session_id, machine_id, receiver_epoch, browser_instance_id)
             if previous is not None and previous != self._capabilities[session_id]:
                 self._invalidate_session_locked(session_id)
+            for route in tuple(self._routes.values()):
+                if route.destination_session_id != session_id or route.gesture_id is None:
+                    continue
+                record = self._candidates.get((route.source_session_id, route.gesture_id))
+                dispatch = self._dispatch_candidate_locked(route, record) if record is not None else None
+                if dispatch is not None:
+                    dispatches.append(dispatch)
+        for route, outbound in dispatches:
+            self.enqueue(lambda route=route, outbound=outbound: self._deliver_request(route, outbound))
         return True
 
     def authorize_edge(
         self, source_session_id, source_machine_id,
         destination_session_id, destination_machine_id, topology_version,
+        *, gesture_id=None, source_display_id=None, source_side=None,
     ):
         if not all(isinstance(value, str) and value for value in (
             source_session_id, source_machine_id, destination_session_id, destination_machine_id,
         )) or type(topology_version) is not int or topology_version < 0:
             return None
+        if gesture_id is not None and (type(gesture_id) is not str or not gesture_id):
+            return None
+        if source_display_id is not None and (type(source_display_id) is not str or not source_display_id):
+            return None
+        if source_side is not None and source_side not in {"left", "right", "top", "bottom"}:
+            return None
+        dispatch = None
         with self._lock:
             if self._stopped or not self.endpoint_available(destination_session_id):
                 return None
@@ -113,8 +136,55 @@ class ClusterBrowserRouter:
                 ticket, source_session_id, source_machine_id,
                 destination_session_id, destination_machine_id, topology_version,
                 self.now() + ROUTE_TICKET_TTL_SECONDS,
+                gesture_id=gesture_id,
+                source_display_id=source_display_id,
+                source_side=source_side,
             )
-            return ticket
+            if gesture_id is not None:
+                record = self._candidates.get((source_session_id, gesture_id))
+                if record is not None:
+                    dispatch = self._dispatch_candidate_locked(self._routes[ticket], record)
+        if dispatch is not None:
+            route, outbound = dispatch
+            self.enqueue(lambda: self._deliver_request(route, outbound))
+        return ticket
+
+    def stage_candidate(self, source_session_id, source_machine_id, message):
+        """Stage one authenticated source snapshot and join it to an edge when available."""
+        try:
+            candidate = validate_candidate(message)
+        except BrowserHandoffProtocolError:
+            return False
+        dispatch = None
+        with self._lock:
+            if self._stopped or (
+                self._topology_version is not None
+                and candidate.topology_version != self._topology_version
+            ):
+                return False
+            if source_session_id != self.server_session_id:
+                capability = self._capabilities.get(source_session_id)
+                if capability is None or capability.machine_id != source_machine_id:
+                    return False
+            key = (source_session_id, candidate.gesture_id)
+            if key in self._candidates:
+                return False
+            record = (source_machine_id, candidate, self.now() + ROUTE_TICKET_TTL_SECONDS)
+            self._candidates[key] = record
+            route = next(
+                (
+                    value for value in self._routes.values()
+                    if value.source_session_id == source_session_id
+                    and value.gesture_id == candidate.gesture_id
+                ),
+                None,
+            )
+            if route is not None:
+                dispatch = self._dispatch_candidate_locked(route, record)
+        if dispatch is not None:
+            route, outbound = dispatch
+            self.enqueue(lambda: self._deliver_request(route, outbound))
+        return True
 
     def accept_request(self, source_session_id, message):
         try:
@@ -171,6 +241,9 @@ class ClusterBrowserRouter:
             return False
         with self._lock:
             self._topology_version = version
+            for key, (_machine_id, candidate, _expires_at) in tuple(self._candidates.items()):
+                if candidate.topology_version != version:
+                    self._candidates.pop(key, None)
             for ticket, route in tuple(self._routes.items()):
                 if route.topology_version != version:
                     self._routes.pop(ticket, None)
@@ -181,6 +254,9 @@ class ClusterBrowserRouter:
     def endpoint_disconnected(self, session_id):
         with self._lock:
             self._capabilities.pop(session_id, None)
+            for key in tuple(self._candidates):
+                if key[0] == session_id:
+                    self._candidates.pop(key, None)
             self._invalidate_session_locked(session_id)
 
     def stop(self):
@@ -189,6 +265,7 @@ class ClusterBrowserRouter:
             for route in tuple(self._active.values()):
                 self._finish_locked(route, self._unknown_result(route))
             self._routes.clear()
+            self._candidates.clear()
             self._capabilities.clear()
 
     def status(self, request_id):
@@ -208,6 +285,51 @@ class ClusterBrowserRouter:
                 if self._active.get(route.request_id) is route:
                     self._finish_locked(route, self._unknown_result(route))
 
+    def _dispatch_candidate_locked(self, route, record):
+        if route is None or route.request_id is not None:
+            return None
+        _source_machine_id, candidate, expires_at = record
+        key = (route.source_session_id, candidate.gesture_id)
+        if expires_at < self.now() or route.expires_at < self.now():
+            self._candidates.pop(key, None)
+            return None
+        if route.topology_version != candidate.topology_version:
+            self._candidates.pop(key, None)
+            return None
+        if route.source_display_id is not None and route.source_display_id != candidate.source_display_id:
+            return None
+        if route.source_side is not None and route.source_side != candidate.source_side:
+            return None
+        if len(self._active) >= self.max_active or not self.endpoint_available(route.destination_session_id):
+            return None
+        destination = self._capabilities.get(route.destination_session_id)
+        if destination is None:
+            return None
+        request_id = secrets.token_hex(16)
+        request = {
+            "protocol": 1,
+            "request_id": request_id,
+            "route_ticket": route.ticket,
+            "topology_version": route.topology_version,
+            "destination_machine_id": route.destination_machine_id,
+            "incognito": candidate.incognito,
+            "total_count": candidate.total_count,
+            "entries": [
+                {"source_index": entry.source_index, "url": entry.url, "active": entry.active}
+                for entry in candidate.entries
+            ],
+            "complete_capture": candidate.complete_capture,
+        }
+        route.request_id = request_id
+        route.deadline_at = self.now() + OPERATION_DEADLINE_SECONDS
+        self._active[request_id] = route
+        self._candidates.pop(key, None)
+        return route, {
+            "type": "browser_handoff_request",
+            "request": request,
+            "browser_instance_id": destination.browser_instance_id,
+        }
+
     def _usable_route_locked(self, ticket, topology_version):
         route = self._routes.get(ticket)
         if (
@@ -219,6 +341,9 @@ class ClusterBrowserRouter:
         return route
 
     def _invalidate_session_locked(self, session_id):
+        for key in tuple(self._candidates):
+            if key[0] == session_id:
+                self._candidates.pop(key, None)
         for ticket, route in tuple(self._routes.items()):
             if session_id in {route.source_session_id, route.destination_session_id}:
                 self._routes.pop(ticket, None)

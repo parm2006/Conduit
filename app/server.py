@@ -33,8 +33,19 @@ from app.input_router import InputRouter, LocalServer
 from app.machine_identity import windows_machine_id
 from app.browser_handoff.desktop import BrowserHandoffDesktop
 from app.browser_handoff.cluster_router import ClusterBrowserRouter
+from app.browser_handoff.coordinator import BrowserHandoffCoordinator
+from app.browser_handoff.windows_drag import WinEventMoveObserver
+from app.display_topology import NativeRect
 
 logger = logging.getLogger(__name__)
+
+
+def _browser_bounds_to_physical(window):
+    left, top = window.get("left"), window.get("top")
+    width, height = window.get("width"), window.get("height")
+    if any(type(value) is not int for value in (left, top, width, height)):
+        raise ValueError("browser bounds are unavailable")
+    return NativeRect(left, top, left + width, top + height)
 
 
 class _ServerInputEffects:
@@ -144,6 +155,13 @@ class ConduitServer:
             send=self._send_browser_control,
             now=time.monotonic,
         )
+        self.browser_move_observer = WinEventMoveObserver()
+        self.browser_handoff_coordinator = BrowserHandoffCoordinator(
+            desktop=self.browser_handoff_desktop,
+            move_tracker=self.browser_move_observer.tracker,
+            to_physical=_browser_bounds_to_physical,
+            send_candidate=self._stage_local_browser_candidate,
+        )
         self.clipboard_hub = ClipboardHub(self.server_machine_id)
         self.cluster_file_router = ClusterFileRouter(
             self.server_machine_id,
@@ -215,6 +233,9 @@ class ConduitServer:
         )
         self.control_network.register_callback(
             'browser_handoff_request', self.on_browser_handoff_request,
+        )
+        self.control_network.register_callback(
+            'browser_handoff_candidate', self.on_browser_handoff_candidate,
         )
         self.control_network.register_callback(
             'browser_handoff_result', self.on_browser_handoff_result,
@@ -306,12 +327,22 @@ class ConduitServer:
         f_success = self.file_network.start()
         if c_success and d_success and f_success:
             self.browser_handoff_desktop.start()
+            try:
+                self.browser_move_observer.start()
+            except Exception as error:
+                logger.warning("Browser move observer unavailable (%s)", type(error).__name__)
             self.global_hotkey_monitor.start()
             return True
         self.stop()
         return False
 
     def stop(self):
+        observer = getattr(self, "browser_move_observer", None)
+        if observer is not None:
+            observer.stop()
+        coordinator = getattr(self, "browser_handoff_coordinator", None)
+        if coordinator is not None:
+            coordinator.cancel()
         self._abort_topology_transaction(shutdown=True)
         self.global_hotkey_monitor.stop()
         self.cluster_file_router.stop()
@@ -412,6 +443,12 @@ class ConduitServer:
         previous_router = getattr(self, 'input_router', None)
         if previous_router is not None:
             previous_router.pause("topology changed", restore_center=False)
+        coordinator = getattr(self, "browser_handoff_coordinator", None)
+        if coordinator is not None:
+            coordinator.cancel()
+        browser_router = getattr(self, "cluster_browser_router", None)
+        if browser_router is not None:
+            browser_router.topology_changed(topology.version)
         self.active_topology = topology
         self.input_handler.configure_topology_edges(topology, topology.server_id)
         self.input_router = InputRouter(
@@ -420,6 +457,7 @@ class ConduitServer:
             input_effects=_ServerInputEffects(self),
             handoff_failed=self._on_handoff_failed,
             ownership_changed=self._on_cursor_ownership_changed,
+            accepted_edge=self._on_browser_handoff_accepted_edge,
             remote_viewport=getattr(self, 'remote_viewport', None),
         )
         if getattr(self, 'routing_suspended', False):
@@ -485,6 +523,29 @@ class ConduitServer:
             return False
         return self.cluster_browser_router.accept_request(data.get("session_id"), data)
 
+    def on_browser_handoff_candidate(self, data):
+        if not isinstance(data, dict):
+            return False
+        return self.cluster_browser_router.stage_candidate(
+            data.get("session_id"), data.get("peer_identity"), data.get("candidate"),
+        )
+
+    def _on_browser_handoff_accepted_edge(self, event):
+        if not isinstance(event, dict) or not event.get("gesture_id"):
+            return False
+        source_session_id = event.get("source_session_id") or self.server_machine_id
+        destination_session_id = event.get("destination_session_id") or self.server_machine_id
+        return self.cluster_browser_router.authorize_edge(
+            source_session_id,
+            event.get("source_machine_id"),
+            destination_session_id,
+            event.get("destination_machine_id"),
+            event.get("topology_version"),
+            gesture_id=event.get("gesture_id"),
+            source_display_id=event.get("source_display_id"),
+            source_side=event.get("source_side"),
+        ) is not None
+
     def on_browser_handoff_result(self, data):
         if not isinstance(data, dict):
             return False
@@ -501,6 +562,13 @@ class ConduitServer:
     def _on_server_browser_result(self, _browser_instance_id, message):
         return self.cluster_browser_router.accept_result(
             self.server_machine_id, message,
+        )
+
+    def _stage_local_browser_candidate(self, candidate):
+        return self.cluster_browser_router.stage_candidate(
+            self.server_machine_id,
+            self.server_machine_id,
+            candidate,
         )
 
     def _restore_topology(self, topology):
@@ -1013,12 +1081,32 @@ class ConduitServer:
             cancel_edit = getattr(self, 'on_topology_edit_cancel', None)
             if cancel_edit is not None:
                 cancel_edit()
+            browser_gesture_id = None
+            coordinator = getattr(self, "browser_handoff_coordinator", None)
+            if coordinator is not None:
+                try:
+                    from app.browser_handoff.edge_band import configured_edge_region
+                    browser_gesture_id = coordinator.claim_edge(
+                        display_rect=region.source_rect,
+                        edge_region=configured_edge_region(
+                            region.source_rect,
+                            region.source_side,
+                        ),
+                        source_display_id=region.source_display_id,
+                        source_side=region.source_side,
+                        topology_version=router.topology.version,
+                    )
+                except Exception:
+                    browser_gesture_id = None
+            edge_kwargs = {"topology_version": router.topology.version}
+            if browser_gesture_id is not None:
+                edge_kwargs["gesture_id"] = browser_gesture_id
             switched = router.handle_edge(
                 region.source_machine_id,
                 region.source_display_id,
                 region.source_side,
                 ratio,
-                topology_version=router.topology.version,
+                **edge_kwargs,
             )
             return switched
 
@@ -1057,13 +1145,18 @@ class ConduitServer:
             data.get('ratio'),
             data.get('topology_version'),
         )
+        edge_kwargs = {
+            "session_id": data.get('session_id'),
+            "topology_version": data.get('topology_version'),
+        }
+        if data.get('gesture_id') is not None:
+            edge_kwargs["gesture_id"] = data.get('gesture_id')
         switched = router.handle_edge(
             data.get('peer_identity'),
             data.get('source_display_id'),
             data.get('source_side'),
             data.get('ratio', 0.5),
-            session_id=data.get('session_id'),
-            topology_version=data.get('topology_version'),
+            **edge_kwargs,
         )
         router_state = getattr(router, "state", None)
         if switched and (

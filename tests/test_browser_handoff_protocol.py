@@ -4,11 +4,40 @@ from app.browser_handoff.protocol import (
     BrowserHandoffProtocolError,
     MAX_URL_BYTES,
     validate_request,
+    validate_candidate,
     validate_result,
 )
 
 
 class BrowserHandoffProtocolTests(unittest.TestCase):
+    def candidate(self, **overrides):
+        value = {
+            "protocol": 1,
+            "gesture_id": "b" * 32,
+            "source_display_id": "display-1",
+            "source_side": "right",
+            "topology_version": 4,
+            "incognito": False,
+            "total_count": 1,
+            "entries": [{"source_index": 0, "url": "https://example.test/a", "active": True}],
+            "complete_capture": True,
+        }
+        value.update(overrides)
+        return value
+
+    def test_accepts_candidate_without_destination_authority(self):
+        candidate = validate_candidate(self.candidate())
+
+        self.assertEqual(candidate.gesture_id, "b" * 32)
+        self.assertEqual(candidate.source_side, "right")
+        self.assertEqual(candidate.entries[0].url, "https://example.test/a")
+
+    def test_rejects_candidate_with_invalid_side_or_gesture(self):
+        for message in (self.candidate(source_side="diagonal"), self.candidate(gesture_id="not-a-gesture")):
+            with self.subTest(message=message):
+                with self.assertRaises(BrowserHandoffProtocolError):
+                    validate_candidate(message)
+
     def request(self, **overrides):
         value = {
             "protocol": 1,

@@ -106,3 +106,41 @@ class ClusterBrowserRouterTests(unittest.TestCase):
         second = limited.authorize_edge("a", "a", "b", "b", 7)
         self.assertTrue(limited.accept_request("a", request(first, request_id="1" * 32, destination="b")))
         self.assertFalse(limited.accept_request("a", request(second, request_id="2" * 32, destination="b")))
+
+    def test_candidate_and_accepted_edge_join_in_either_arrival_order(self):
+        candidate = {
+            "protocol": 1, "gesture_id": "c" * 32,
+            "source_display_id": "display-a", "source_side": "right",
+            "topology_version": 7, "incognito": False, "total_count": 1,
+            "entries": [{"source_index": 0, "url": "https://example.test", "active": True}],
+            "complete_capture": True,
+        }
+        self.assertTrue(self.router.stage_candidate("client-a-session", "client-a", candidate))
+        self.assertEqual(self.sent, [])
+        ticket = self.router.authorize_edge(
+            "client-a-session", "client-a", "client-b-session", "client-b", 7,
+            gesture_id="c" * 32, source_display_id="display-a", source_side="right",
+        )
+        self.assertIsNotNone(ticket)
+        self._run_queued()
+        self.assertEqual(self.sent[0][0], "client-b-session")
+        outbound = self.sent[0][1]["request"]
+        self.assertEqual(outbound["destination_machine_id"], "client-b")
+        self.assertEqual(outbound["entries"][0]["url"], "https://example.test")
+
+    def test_candidate_only_or_mismatched_edge_does_not_open(self):
+        candidate = {
+            "protocol": 1, "gesture_id": "d" * 32,
+            "source_display_id": "display-a", "source_side": "right",
+            "topology_version": 7, "incognito": False, "total_count": 1,
+            "entries": [{"source_index": 0, "url": "https://example.test", "active": True}],
+            "complete_capture": True,
+        }
+        self.assertTrue(self.router.stage_candidate("client-a-session", "client-a", candidate))
+        self.assertEqual(self.sent, [])
+        self.router.authorize_edge(
+            "client-a-session", "client-a", "client-b-session", "client-b", 7,
+            gesture_id="d" * 32, source_display_id="display-a", source_side="left",
+        )
+        self._run_queued()
+        self.assertEqual(self.sent, [])

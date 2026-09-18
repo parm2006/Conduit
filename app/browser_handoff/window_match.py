@@ -55,6 +55,8 @@ class BrowserWindowCandidate:
     bounds: PhysicalRect
     focused: bool
     observed_at: float
+    metadata_revision: int | None = None
+    bridge_epoch: str | None = None
 
 
 def _is_fresh(observed_at, now):

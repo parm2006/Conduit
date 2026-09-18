@@ -128,6 +128,7 @@ class InputRouter:
         *,
         session_id=None,
         topology_version=None,
+        gesture_id=None,
     ):
         if self._pause_requested.is_set():
             logger.warning("[cursor] Rejected edge while pause is pending")
@@ -210,6 +211,8 @@ class InputRouter:
                 )
                 accepted_event = {
                     "source_machine_id": edge.mapping.source_machine_id,
+                    "source_display_id": edge.mapping.source_display_id,
+                    "source_side": edge.mapping.source_side,
                     "source_session_id": (
                         prior_state.session_id
                         if isinstance(prior_state, RemoteClient) else None
@@ -222,6 +225,8 @@ class InputRouter:
                     ),
                     "topology_version": self.topology.version,
                 }
+                if gesture_id is not None:
+                    accepted_event["gesture_id"] = gesture_id
         if accepted_event is not None and self._accepted_edge is not None:
             threading.Thread(
                 target=self._notify_accepted_edge,

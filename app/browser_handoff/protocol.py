@@ -20,6 +20,11 @@ _REQUEST_FIELDS = frozenset({
     "destination_machine_id", "incognito", "total_count", "entries",
     "complete_capture",
 })
+_CANDIDATE_FIELDS = frozenset({
+    "protocol", "gesture_id", "source_display_id", "source_side",
+    "topology_version", "incognito", "total_count", "entries",
+    "complete_capture",
+})
 _ENTRY_FIELDS = frozenset({"source_index", "url", "active"})
 _RESULT_FIELDS = frozenset({
     "request_id", "route_ticket", "status", "opened_count", "total_count",
@@ -68,6 +73,18 @@ class HandoffRequest:
     route_ticket: str
     topology_version: int
     destination_machine_id: str
+    incognito: bool
+    total_count: int
+    entries: tuple
+    complete_capture: bool
+
+
+@dataclass(frozen=True)
+class HandoffCandidate:
+    gesture_id: str
+    source_display_id: str
+    source_side: str
+    topology_version: int
     incognito: bool
     total_count: int
     entries: tuple
@@ -135,6 +152,62 @@ def validate_request(message):
         route_ticket=route_ticket,
         topology_version=topology_version,
         destination_machine_id=destination_machine_id,
+        incognito=message["incognito"],
+        total_count=total_count,
+        entries=tuple(entries),
+        complete_capture=message["complete_capture"],
+    )
+
+
+def validate_candidate(message):
+    """Validate a short-lived source snapshot before it enters routing."""
+    _require_exact_fields(message, _CANDIDATE_FIELDS, "candidate")
+    if type(message["protocol"]) is not int or message["protocol"] != PROTOCOL_VERSION:
+        raise BrowserHandoffProtocolError("unsupported_protocol")
+    gesture_id = message["gesture_id"]
+    if type(gesture_id) is not str or not _REQUEST_ID.fullmatch(gesture_id):
+        raise BrowserHandoffProtocolError("invalid_gesture_id")
+    source_display_id = message["source_display_id"]
+    if type(source_display_id) is not str or not source_display_id or len(source_display_id) > 256:
+        raise BrowserHandoffProtocolError("invalid_source_display")
+    source_side = message["source_side"]
+    if source_side not in {"left", "right", "top", "bottom"}:
+        raise BrowserHandoffProtocolError("invalid_source_side")
+    topology_version = _require_int(message["topology_version"], "topology_version", minimum=0)
+    if type(message["incognito"]) is not bool or type(message["complete_capture"]) is not bool:
+        raise BrowserHandoffProtocolError("invalid_boolean")
+    total_count = _require_int(message["total_count"], "total_count", minimum=0, maximum=MAX_TABS_PER_WINDOW)
+    entries_value = message["entries"]
+    if type(entries_value) is not list or len(entries_value) > total_count:
+        raise BrowserHandoffProtocolError("invalid_entries")
+    entries = []
+    source_indexes = set()
+    active_count = 0
+    for value in entries_value:
+        _require_exact_fields(value, _ENTRY_FIELDS, "entry")
+        source_index = _require_int(value["source_index"], "source_index", minimum=0, maximum=max(total_count - 1, 0))
+        if source_index in source_indexes:
+            raise BrowserHandoffProtocolError("duplicate_source_index")
+        source_indexes.add(source_index)
+        url = value["url"]
+        if type(url) is not str or len(url.encode("utf-8")) > MAX_URL_BYTES:
+            raise BrowserHandoffProtocolError("invalid_url")
+        active = value["active"]
+        if type(active) is not bool:
+            raise BrowserHandoffProtocolError("invalid_active")
+        active_count += active
+        entries.append(HandoffEntry(source_index, url, active))
+    if active_count > 1:
+        raise BrowserHandoffProtocolError("multiple_active_entries")
+    if message["complete_capture"] and source_indexes != set(range(total_count)):
+        raise BrowserHandoffProtocolError("incomplete_capture")
+    if _encoded_size(message) > MAX_REQUEST_BYTES:
+        raise BrowserHandoffProtocolError("candidate_too_large")
+    return HandoffCandidate(
+        gesture_id=gesture_id,
+        source_display_id=source_display_id,
+        source_side=source_side,
+        topology_version=topology_version,
         incognito=message["incognito"],
         total_count=total_count,
         entries=tuple(entries),

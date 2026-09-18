@@ -217,6 +217,24 @@ class MoveTrackerTests(unittest.TestCase):
         self.assertEqual(token.bounds, end)
         self.assertIsNone(tracker.consume_eligible_move(now=10.3))
 
+    def test_claims_active_move_before_button_release_and_never_duplicates(self):
+        tracker = MoveTracker(token_ttl_seconds=1.0)
+        start = PhysicalRect(0, 0, 800, 600)
+        end = PhysicalRect(40, 0, 840, 600)
+        tracker.observe(EVENT_SYSTEM_MOVESIZESTART, hwnd=42, process_id=101, process_created=1234,
+                        bounds=start, timestamp=10.0, left_button_down=True)
+        tracker.observe(EVENT_OBJECT_LOCATIONCHANGE, hwnd=42, process_id=101, process_created=1234,
+                        bounds=end, timestamp=10.1, left_button_down=True)
+
+        token = tracker.claim_active_move(now=10.2)
+
+        self.assertIsNotNone(token)
+        self.assertEqual(token.bounds, end)
+        self.assertIsNone(tracker.claim_active_move(now=10.2))
+        tracker.observe(EVENT_SYSTEM_MOVESIZEEND, hwnd=42, process_id=101, process_created=1234,
+                        bounds=end, timestamp=10.3, left_button_down=False)
+        self.assertIsNone(tracker.consume_eligible_move(now=10.4))
+
 
 class ProbeNativeFramingTests(unittest.TestCase):
     def test_host_diagnostics_report_each_pipeline_boundary_without_urls(self):
