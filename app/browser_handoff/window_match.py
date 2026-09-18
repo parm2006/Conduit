@@ -75,9 +75,10 @@ def match_window(native, candidates, *, now):
     """Return the sole defensible candidate, otherwise abstain.
 
     The extension probe must convert Chromium's device-independent bounds to
-    physical pixels before calling this function.  There is deliberately no
-    title, URL, or focus-only fallback: multiple plausible candidates result
-    in no match.
+    physical pixels before calling this function. Native-host ancestry binds a
+    browser connection but does not identify the Chromium process that owns a
+    top-level window. There is deliberately no title, URL, or focus-only
+    fallback: multiple plausible candidates result in no match.
     """
     if not _is_fresh(native.observed_at, now):
         return None
@@ -85,9 +86,7 @@ def match_window(native, candidates, *, now):
     plausible = [
         candidate
         for candidate in candidates
-        if candidate.process_id == native.process_id
-        and candidate.process_created == native.process_created
-        and _is_fresh(candidate.observed_at, now)
+        if _is_fresh(candidate.observed_at, now)
         and _bounds_are_compatible(native.bounds, candidate.bounds)
     ]
     return plausible[0] if len(plausible) == 1 else None

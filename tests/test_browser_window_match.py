@@ -55,26 +55,32 @@ class BrowserWindowMatchTests(unittest.TestCase):
         values.update(overrides)
         return BrowserWindowCandidate(**values)
 
-    def test_matches_one_fresh_candidate_with_the_same_process_identity_and_bounds(self):
-        result = match_window(self.native, [self.candidate()], now=10.1)
+    def test_matches_one_fresh_geometry_candidate_despite_unverified_process_identity(self):
+        result = match_window(
+            self.native,
+            [self.candidate(process_id=202, process_created=5678)],
+            now=10.1,
+        )
 
+        self.assertIsNotNone(result)
         self.assertEqual(result.browser_instance_id, "instance-a")
         self.assertEqual(result.window_id, 7)
 
     def test_abstains_when_two_candidates_are_equally_plausible(self):
         result = match_window(
             self.native,
-            [self.candidate(window_id=7), self.candidate(window_id=8)],
+            [
+                self.candidate(window_id=7, process_id=202, process_created=5678),
+                self.candidate(window_id=8, process_id=303, process_created=6789),
+            ],
             now=10.1,
         )
 
         self.assertIsNone(result)
 
-    def test_abstains_when_process_identity_or_metadata_is_stale(self):
-        wrong_process = self.candidate(process_created=5678)
+    def test_abstains_when_metadata_is_stale(self):
         stale = self.candidate(observed_at=6.0)
 
-        self.assertIsNone(match_window(self.native, [wrong_process], now=10.1))
         self.assertIsNone(match_window(self.native, [stale], now=10.1))
 
     def test_abstains_when_bounds_do_not_overlap_after_dpi_conversion(self):
