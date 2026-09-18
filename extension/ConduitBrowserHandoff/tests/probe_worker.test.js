@@ -134,6 +134,10 @@ test("probe manifest exposes a local status popup without tab or storage permiss
   const popupScript = await readFile(new URL("../probe/popup.js", import.meta.url), "utf8");
 
   assert.equal(manifest.action.default_popup, "popup.html");
+  assert.deepEqual(manifest.background, {
+    service_worker: "probe_worker.js",
+    type: "module",
+  });
   assert.deepEqual(manifest.permissions.sort(), ["nativeMessaging", "windows"]);
   assert.match(popup, /Loading probe diagnostics/);
   assert.doesNotMatch(popup, /Waiting for a qualifying window move/);
