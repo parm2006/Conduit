@@ -85,6 +85,10 @@ class BrowserHandoffCoordinator:
         if matched is None:
             return None
         with self._lock:
+            now = self.now()
+            for request_id, pending in tuple(self._pending.items()):
+                if pending.expires_at <= now:
+                    self._pending.pop(request_id, None)
             if len(self._pending) >= self.max_pending:
                 return None
             gesture_id = secrets.token_hex(16)
@@ -99,7 +103,7 @@ class BrowserHandoffCoordinator:
                 window_id=matched.window_id,
                 bridge_epoch=matched.bridge_epoch,
                 metadata_revision=matched.metadata_revision,
-                expires_at=self.now() + self.token_ttl_seconds,
+                expires_at=now + self.token_ttl_seconds,
             )
             self._pending[request_id] = pending
         threading.Thread(
@@ -168,7 +172,12 @@ class BrowserHandoffCoordinator:
 
     def _request_snapshot(self, pending):
         try:
-            self.desktop.request_snapshot(pending.instance_id, pending.window_id, pending.request_id)
+            submitted = self.desktop.request_snapshot(
+                pending.instance_id, pending.window_id, pending.request_id,
+            )
+            if not submitted:
+                with self._lock:
+                    self._pending.pop(pending.request_id, None)
         except Exception:
             with self._lock:
                 self._pending.pop(pending.request_id, None)

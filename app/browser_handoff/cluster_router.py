@@ -6,12 +6,14 @@ lock so a cursor edge cannot wait for browser or network work.
 """
 
 from dataclasses import dataclass
+import json
 import secrets
 import threading
 
 from .protocol import (
     BrowserHandoffProtocolError,
     MAX_ACTIVE_REQUESTS_PER_NODE,
+    MAX_REQUEST_BYTES,
     MAX_TERMINAL_RESULTS_PER_EPOCH,
     OPERATION_DEADLINE_SECONDS,
     RESULT_RETENTION_SECONDS,
@@ -20,6 +22,11 @@ from .protocol import (
     validate_request,
     validate_result,
 )
+
+
+MAX_STAGED_CANDIDATES_PER_SOURCE = 8
+MAX_STAGED_CANDIDATE_BYTES_PER_SOURCE = 4 * MAX_REQUEST_BYTES
+MAX_STAGED_CANDIDATES = 64
 
 
 @dataclass(frozen=True)
@@ -59,6 +66,9 @@ class ClusterBrowserRouter:
         enqueue=None,
         max_active=MAX_ACTIVE_REQUESTS_PER_NODE,
         max_results=MAX_TERMINAL_RESULTS_PER_EPOCH,
+        max_staged_candidates_per_source=MAX_STAGED_CANDIDATES_PER_SOURCE,
+        max_staged_candidate_bytes_per_source=MAX_STAGED_CANDIDATE_BYTES_PER_SOURCE,
+        max_staged_candidates=MAX_STAGED_CANDIDATES,
     ):
         if not isinstance(server_session_id, str) or not server_session_id:
             raise ValueError("server_session_id is invalid")
@@ -71,6 +81,9 @@ class ClusterBrowserRouter:
         self.enqueue = enqueue or self._enqueue_daemon
         self.max_active = max_active
         self.max_results = max_results
+        self.max_staged_candidates_per_source = int(max_staged_candidates_per_source)
+        self.max_staged_candidate_bytes_per_source = int(max_staged_candidate_bytes_per_source)
+        self.max_staged_candidates = int(max_staged_candidates)
         self._capabilities = {}
         self._routes = {}
         self._candidates = {}
@@ -157,6 +170,7 @@ class ClusterBrowserRouter:
             return False
         dispatch = None
         with self._lock:
+            self._purge_candidates_locked()
             if self._stopped or (
                 self._topology_version is not None
                 and candidate.topology_version != self._topology_version
@@ -169,7 +183,23 @@ class ClusterBrowserRouter:
             key = (source_session_id, candidate.gesture_id)
             if key in self._candidates:
                 return False
-            record = (source_machine_id, candidate, self.now() + ROUTE_TICKET_TTL_SECONDS)
+            if len(self._candidates) >= self.max_staged_candidates:
+                return False
+            candidate_bytes = _encoded_candidate_size(message)
+            source_records = [
+                value for (session_id, _gesture_id), value in self._candidates.items()
+                if session_id == source_session_id
+            ]
+            if (
+                len(source_records) >= self.max_staged_candidates_per_source
+                or sum(value[3] for value in source_records) + candidate_bytes
+                > self.max_staged_candidate_bytes_per_source
+            ):
+                return False
+            record = (
+                source_machine_id, candidate, self.now() + ROUTE_TICKET_TTL_SECONDS,
+                candidate_bytes,
+            )
             self._candidates[key] = record
             route = next(
                 (
@@ -241,7 +271,8 @@ class ClusterBrowserRouter:
             return False
         with self._lock:
             self._topology_version = version
-            for key, (_machine_id, candidate, _expires_at) in tuple(self._candidates.items()):
+            self._purge_candidates_locked()
+            for key, (_machine_id, candidate, _expires_at, _candidate_bytes) in tuple(self._candidates.items()):
                 if candidate.topology_version != version:
                     self._candidates.pop(key, None)
             for ticket, route in tuple(self._routes.items()):
@@ -288,7 +319,7 @@ class ClusterBrowserRouter:
     def _dispatch_candidate_locked(self, route, record):
         if route is None or route.request_id is not None:
             return None
-        _source_machine_id, candidate, expires_at = record
+        _source_machine_id, candidate, expires_at, _candidate_bytes = record
         key = (route.source_session_id, candidate.gesture_id)
         if expires_at < self.now() or route.expires_at < self.now():
             self._candidates.pop(key, None)
@@ -340,6 +371,12 @@ class ClusterBrowserRouter:
             return None
         return route
 
+    def _purge_candidates_locked(self):
+        now = self.now()
+        for key, record in tuple(self._candidates.items()):
+            if record[2] <= now:
+                self._candidates.pop(key, None)
+
     def _invalidate_session_locked(self, session_id):
         for key in tuple(self._candidates):
             if key[0] == session_id:
@@ -381,3 +418,8 @@ class ClusterBrowserRouter:
     def _enqueue_daemon(task):
         thread = threading.Thread(target=task, name="browser-handoff-route", daemon=True)
         thread.start()
+
+
+def _encoded_candidate_size(message):
+    """Return the bounded wire size already checked by candidate validation."""
+    return len(json.dumps(message, separators=(",", ":"), ensure_ascii=False).encode("utf-8"))

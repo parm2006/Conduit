@@ -49,6 +49,20 @@ class BrowserHandoffDesktopTests(unittest.TestCase):
         desktop.on_disconnected(connection)
         self.assertIsNone(desktop.metadata("instance-a"))
 
+    def test_snapshot_retention_is_bounded_and_disconnect_clears_all_instance_requests(self):
+        desktop = BrowserHandoffDesktop(start_bridge=False)
+        connection = self._connection()
+        desktop.on_connected(connection)
+        for index in range(10):
+            request_id = f"{index:032x}"
+            self.assertTrue(desktop.on_message(connection, {
+                "type": "browser_handoff_snapshot", "request_id": request_id,
+                "snapshot": {"window_id": 7, "revision": index, "complete_capture": True},
+            }))
+        self.assertLessEqual(len(desktop._snapshots), 8)
+        desktop.on_disconnected(connection)
+        self.assertEqual(desktop._snapshots, {})
+
     def test_routes_snapshot_requests_only_to_live_matched_browser_instance(self):
         desktop = BrowserHandoffDesktop(start_bridge=False)
         connection = self._connection()

@@ -1,4 +1,6 @@
 import threading
+import time
+from dataclasses import replace
 import unittest
 
 from app.browser_handoff.coordinator import BrowserHandoffCoordinator
@@ -22,6 +24,7 @@ class FakeDesktop:
     def __init__(self):
         self.on_snapshot = lambda instance, message: None
         self.requests = []
+        self.request_result = True
         self.candidate = BrowserWindowCandidate(
             browser_instance_id="browser-1", window_id=7,
             process_id=11, process_created=12,
@@ -34,7 +37,7 @@ class FakeDesktop:
 
     def request_snapshot(self, instance_id, window_id, request_id):
         self.requests.append((instance_id, window_id, request_id))
-        return True
+        return self.request_result
 
 
 class BrowserHandoffCoordinatorTests(unittest.TestCase):
@@ -93,6 +96,55 @@ class BrowserHandoffCoordinatorTests(unittest.TestCase):
             "snapshot": {"window_id": 8, "revision": 3, "complete_capture": True},
         }))
         self.assertEqual(published, [])
+
+    def test_expired_pending_capture_does_not_block_new_claim(self):
+        desktop = FakeDesktop()
+        clock = [100.0]
+        coordinator = BrowserHandoffCoordinator(
+            desktop=desktop,
+            move_tracker=FakeTracker(MoveToken(1, 11, 12, desktop.candidate.bounds, 100.0)),
+            to_physical=lambda window: window,
+            send_candidate=lambda candidate: None,
+            now=lambda: clock[0],
+            token_ttl_seconds=1.0,
+            max_pending=1,
+        )
+        self.assertIsNotNone(coordinator.claim_edge(
+            display_rect=PhysicalRect(0, 0, 2000, 1000),
+            edge_region=configured_edge_region(PhysicalRect(0, 0, 2000, 1000), "right"),
+            source_display_id="display-1", source_side="right", topology_version=4,
+        ))
+        clock[0] = 101.5
+        desktop.candidate = replace(desktop.candidate, observed_at=101.5)
+        coordinator.move_tracker.token = MoveToken(2, 11, 12, desktop.candidate.bounds, 101.5)
+        self.assertIsNotNone(coordinator.claim_edge(
+            display_rect=PhysicalRect(0, 0, 2000, 1000),
+            edge_region=configured_edge_region(PhysicalRect(0, 0, 2000, 1000), "right"),
+            source_display_id="display-1", source_side="right", topology_version=4,
+        ))
+
+    def test_failed_snapshot_submission_releases_pending_capture(self):
+        desktop = FakeDesktop()
+        desktop.request_result = False
+        coordinator = BrowserHandoffCoordinator(
+            desktop=desktop,
+            move_tracker=FakeTracker(MoveToken(1, 11, 12, desktop.candidate.bounds, 100.0)),
+            to_physical=lambda window: window,
+            send_candidate=lambda candidate: None,
+            now=lambda: 100.0,
+            max_pending=1,
+        )
+        self.assertIsNotNone(coordinator.claim_edge(
+            display_rect=PhysicalRect(0, 0, 2000, 1000),
+            edge_region=configured_edge_region(PhysicalRect(0, 0, 2000, 1000), "right"),
+            source_display_id="display-1", source_side="right", topology_version=4,
+        ))
+        request_id = desktop.requests[0][2]
+        for _ in range(20):
+            if not coordinator._pending:
+                break
+            time.sleep(0.005)
+        self.assertNotIn(request_id, coordinator._pending)
 
 
 if __name__ == "__main__":

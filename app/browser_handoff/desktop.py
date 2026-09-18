@@ -7,6 +7,10 @@ from .local_bridge import DesktopBridge
 from .window_match import BrowserWindowCandidate
 
 
+SNAPSHOT_RETENTION_SECONDS = 5.0
+MAX_RETAINED_SNAPSHOTS = 8
+
+
 class BrowserHandoffDesktop:
     """Keep URL-free metadata and bridge connections in memory for one app run."""
 
@@ -63,7 +67,9 @@ class BrowserHandoffDesktop:
                 self._connections.pop(instance, None)
                 self._metadata.pop(instance, None)
                 self._metadata_received_at.pop(instance, None)
-                self._snapshots.pop(instance, None)
+                for key in tuple(self._snapshots):
+                    if key[0] == instance:
+                        self._snapshots.pop(key, None)
 
     def on_message(self, connection, message):
         if type(message) is not dict:
@@ -89,6 +95,12 @@ class BrowserHandoffDesktop:
             with self._lock:
                 if self._connections.get(instance) is not connection:
                     return False
+                now = time.monotonic()
+                for key, (_snapshot, received_at) in tuple(self._snapshots.items()):
+                    if received_at + SNAPSHOT_RETENTION_SECONDS <= now:
+                        self._snapshots.pop(key, None)
+                while len(self._snapshots) >= MAX_RETAINED_SNAPSHOTS:
+                    self._snapshots.pop(next(iter(self._snapshots)), None)
                 self._snapshots[(instance, request_id)] = (dict(message), time.monotonic())
             callback_message = dict(message)
             callback_message["_bridge_epoch"] = connection.epoch
@@ -120,6 +132,9 @@ class BrowserHandoffDesktop:
     def snapshot(self, browser_instance_id, request_id):
         with self._lock:
             item = self._snapshots.get((browser_instance_id, request_id))
+            if item is not None and item[1] + SNAPSHOT_RETENTION_SECONDS <= time.monotonic():
+                self._snapshots.pop((browser_instance_id, request_id), None)
+                item = None
             return None if item is None else dict(item[0])
 
     def browser_candidates(self, to_physical, *, received_at=None):

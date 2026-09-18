@@ -144,3 +144,24 @@ class ClusterBrowserRouterTests(unittest.TestCase):
         )
         self._run_queued()
         self.assertEqual(self.sent, [])
+
+    def test_unmatched_candidates_are_bounded_per_source_and_expire(self):
+        router = ClusterBrowserRouter(
+            server_session_id="server", endpoint_available=lambda session: True,
+            send=lambda session, message: True, now=lambda: self.clock[0],
+            enqueue=self.queued.append, max_staged_candidates_per_source=1,
+            max_staged_candidate_bytes_per_source=10_000,
+        )
+        router.register_capability("client-a-session", "client-a", "source-1")
+        candidate = {
+            "protocol": 1, "gesture_id": "e" * 32,
+            "source_display_id": "display-a", "source_side": "right",
+            "topology_version": 7, "incognito": False, "total_count": 1,
+            "entries": [{"source_index": 0, "url": "https://example.test", "active": True}],
+            "complete_capture": True,
+        }
+        self.assertTrue(router.stage_candidate("client-a-session", "client-a", candidate))
+        candidate["gesture_id"] = "f" * 32
+        self.assertFalse(router.stage_candidate("client-a-session", "client-a", candidate))
+        self.clock[0] += 61
+        self.assertTrue(router.stage_candidate("client-a-session", "client-a", candidate))
