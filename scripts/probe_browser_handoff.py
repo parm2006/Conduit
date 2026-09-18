@@ -132,6 +132,60 @@ class ProbeMetadataStore:
             return dict(message), received_at
 
 
+class ProbeHostDiagnostics:
+    """Bounded URL-free counters for the native-host pipeline."""
+
+    def __init__(self):
+        self._state = {
+            "messages_received": 0,
+            "hello_received": 0,
+            "metadata_received": 0,
+            "metadata_accepted": 0,
+            "metadata_rejected": 0,
+            "windows_in_latest_metadata": 0,
+            "correlations_emitted": 0,
+            "last_correlation_status": None,
+            "last_stage": "observer_started",
+        }
+
+    def record_message(self, message_type):
+        self._state["messages_received"] += 1
+        if message_type == "probe_hello":
+            self._state["hello_received"] += 1
+            self._state["last_stage"] = "hello_received"
+        elif message_type == "window_metadata":
+            self._state["metadata_received"] += 1
+            self._state["last_stage"] = "metadata_received"
+        else:
+            self._state["last_stage"] = "unsupported_message"
+
+    def record_metadata(self, *, accepted, window_count):
+        key = "metadata_accepted" if accepted else "metadata_rejected"
+        self._state[key] += 1
+        if accepted:
+            self._state["windows_in_latest_metadata"] = window_count
+            self._state["last_stage"] = "metadata_accepted"
+        else:
+            self._state["last_stage"] = "metadata_rejected"
+
+    def record_correlation(self, status):
+        self._state["correlations_emitted"] += 1
+        self._state["last_correlation_status"] = status
+        self._state["last_stage"] = "correlation_emitted"
+
+    def message(self, observer_snapshot):
+        return {
+            "type": "probe_diagnostics",
+            "schema_version": 1,
+            "host": dict(self._state),
+            "observer": observer_snapshot,
+        }
+
+    @property
+    def hello_received(self):
+        return self._state["hello_received"] > 0
+
+
 def correlation_evidence(token, metadata, *, received_at, now):
     """Return URL-free raw-coordinate evidence for one native move token.
 
@@ -291,6 +345,7 @@ def _native_host_loop():
 
     store = ProbeMetadataStore()
     observer = WinEventMoveObserver()
+    diagnostics = ProbeHostDiagnostics()
     try:
         observer.start()
     except Exception as error:
@@ -314,6 +369,21 @@ def _native_host_loop():
         daemon=True,
     )
     reader.start()
+    last_diagnostics = None
+
+    def emit_correlation(evidence):
+        diagnostics.record_correlation(evidence.get("status"))
+        write_native_message(sys.stdout.buffer, evidence)
+
+    def emit_diagnostics_if_changed():
+        nonlocal last_diagnostics
+        if not diagnostics.hello_received:
+            return
+        message = diagnostics.message(observer.diagnostic_snapshot())
+        if message != last_diagnostics:
+            write_native_message(sys.stdout.buffer, message)
+            last_diagnostics = message
+
     try:
         while True:
             try:
@@ -322,9 +392,10 @@ def _native_host_loop():
                 emit_probe_correlation(
                     store,
                     observer.tracker,
-                    lambda evidence: write_native_message(sys.stdout.buffer, evidence),
+                    emit_correlation,
                     now=time.monotonic(),
                 )
+                emit_diagnostics_if_changed()
                 continue
             if kind == "closed":
                 return 0
@@ -333,6 +404,7 @@ def _native_host_loop():
                 return 1
             message = payload
             message_type = message.get("type")
+            diagnostics.record_message(message_type)
             if message_type == "probe_hello":
                 browser_process_id, browser_process_created = _parent_process_identity()
                 write_native_message(
@@ -345,13 +417,18 @@ def _native_host_loop():
                     ),
                 )
             elif message_type == "window_metadata":
-                if not store.record(message, received_at=time.monotonic()):
+                accepted = store.record(message, received_at=time.monotonic())
+                windows = message.get("windows", [])
+                diagnostics.record_metadata(
+                    accepted=accepted,
+                    window_count=len(windows) if type(windows) is list else 0,
+                )
+                if not accepted:
                     write_native_message(
                         sys.stdout.buffer,
                         {"type": "probe_error", "reason": "invalid_metadata"},
                     )
                 else:
-                    windows = message.get("windows", [])
                     print(f"probe metadata: {len(windows)} opaque windows", file=sys.stderr)
             else:
                 write_native_message(
@@ -361,9 +438,10 @@ def _native_host_loop():
             emit_probe_correlation(
                 store,
                 observer.tracker,
-                lambda evidence: write_native_message(sys.stdout.buffer, evidence),
+                emit_correlation,
                 now=time.monotonic(),
             )
+            emit_diagnostics_if_changed()
     finally:
         observer.stop()
 

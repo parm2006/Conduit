@@ -28,6 +28,8 @@ from scripts.probe_browser_handoff import (
     write_native_message,
 )
 
+ProbeHostDiagnostics = getattr(browser_probe, "ProbeHostDiagnostics", None)
+
 
 class BrowserWindowMatchTests(unittest.TestCase):
     def setUp(self):
@@ -82,6 +84,58 @@ class BrowserWindowMatchTests(unittest.TestCase):
 
 
 class MoveTrackerTests(unittest.TestCase):
+    def test_diagnostics_explain_a_move_rejected_without_a_mouse_button(self):
+        tracker = MoveTracker(token_ttl_seconds=1.0)
+        start = PhysicalRect(0, 0, 800, 600)
+        end = PhysicalRect(40, 0, 840, 600)
+
+        tracker.observe(
+            EVENT_SYSTEM_MOVESIZESTART,
+            hwnd=42,
+            process_id=101,
+            process_created=1234,
+            bounds=start,
+            timestamp=10.0,
+            left_button_down=False,
+        )
+        tracker.observe(
+            EVENT_OBJECT_LOCATIONCHANGE,
+            hwnd=42,
+            process_id=101,
+            process_created=1234,
+            bounds=end,
+            timestamp=10.1,
+            left_button_down=False,
+        )
+        tracker.observe(
+            EVENT_SYSTEM_MOVESIZEEND,
+            hwnd=42,
+            process_id=101,
+            process_created=1234,
+            bounds=end,
+            timestamp=10.2,
+            left_button_down=False,
+        )
+        tracker.observe(
+            EVENT_OBJECT_LOCATIONCHANGE,
+            hwnd=99,
+            process_id=202,
+            process_created=5678,
+            bounds=end,
+            timestamp=10.25,
+            left_button_down=False,
+        )
+
+        self.assertTrue(hasattr(tracker, "diagnostic_snapshot"))
+        diagnostics = tracker.diagnostic_snapshot()
+
+        self.assertEqual(diagnostics["events"]["move_start"], 1)
+        self.assertEqual(diagnostics["events"]["location_change"], 2)
+        self.assertEqual(diagnostics["events"]["move_end"], 1)
+        self.assertEqual(diagnostics["tokens_created"], 0)
+        self.assertEqual(diagnostics["last_decision"], "rejected_no_left_button")
+        self.assertEqual(diagnostics["active_sessions"], 0)
+
     def test_accepts_a_left_button_observed_during_an_asynchronous_move(self):
         tracker = MoveTracker(token_ttl_seconds=1.0)
         start = PhysicalRect(0, 0, 800, 600)
@@ -159,6 +213,32 @@ class MoveTrackerTests(unittest.TestCase):
 
 
 class ProbeNativeFramingTests(unittest.TestCase):
+    def test_host_diagnostics_report_each_pipeline_boundary_without_urls(self):
+        self.assertIsNotNone(ProbeHostDiagnostics)
+        diagnostics = ProbeHostDiagnostics()
+        diagnostics.record_message("probe_hello")
+        diagnostics.record_message("window_metadata")
+        diagnostics.record_metadata(accepted=True, window_count=2)
+        diagnostics.record_correlation("ambiguous_or_bounds_mismatch")
+
+        message = diagnostics.message(
+            {
+                "running": True,
+                "hooks_installed": 2,
+                "raw_callbacks": 7,
+                "accepted_callbacks": 5,
+                "tracker": {"last_decision": "token_created"},
+            }
+        )
+
+        self.assertEqual(message["type"], "probe_diagnostics")
+        self.assertEqual(message["host"]["messages_received"], 2)
+        self.assertEqual(message["host"]["metadata_accepted"], 1)
+        self.assertEqual(message["host"]["windows_in_latest_metadata"], 2)
+        self.assertEqual(message["host"]["correlations_emitted"], 1)
+        self.assertEqual(message["observer"]["raw_callbacks"], 7)
+        self.assertNotIn("url", repr(message).lower())
+
     def test_probe_native_host_has_its_queue_dependency(self):
         self.assertTrue(hasattr(browser_probe, "queue"))
 

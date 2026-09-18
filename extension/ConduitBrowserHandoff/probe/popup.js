@@ -1,15 +1,17 @@
+import { probeHeadline } from "./probe_status.js";
+
 const status = document.querySelector("#status");
 const evidence = document.querySelector("#evidence");
 
-chrome.runtime.sendMessage({ type: "probe_status" }).then(({ connection, correlation }) => {
-  if (!correlation) {
-    status.textContent = connection === "ready"
-      ? "Waiting for a qualifying window move."
-      : `Probe host: ${connection}.`;
-    return;
+async function renderStatus() {
+  try {
+    const snapshot = await chrome.runtime.sendMessage({ type: "probe_status" });
+    status.textContent = probeHeadline(snapshot);
+    evidence.textContent = JSON.stringify(snapshot, null, 2);
+  } catch {
+    status.textContent = "Probe worker is unavailable.";
   }
-  status.textContent = `Last result: ${correlation.status ?? "error"}`;
-  evidence.textContent = JSON.stringify(correlation, null, 2);
-}).catch(() => {
-  status.textContent = "Probe worker is unavailable.";
-});
+}
+
+void renderStatus();
+setInterval(renderStatus, 500);

@@ -60,6 +60,17 @@ class MoveTracker:
         self._sessions = {}
         self._completed = deque()
         self._lock = threading.Lock()
+        self._event_counts = {
+            "move_start": 0,
+            "location_change": 0,
+            "move_end": 0,
+            "other": 0,
+        }
+        self._events_without_session = 0
+        self._tokens_created = 0
+        self._tokens_consumed = 0
+        self._tokens_expired = 0
+        self._last_decision = "idle"
 
     def observe(
         self,
@@ -75,6 +86,7 @@ class MoveTracker:
         """Record one normalized WinEvent without touching the desktop."""
         with self._lock:
             if event == EVENT_SYSTEM_MOVESIZESTART:
+                self._event_counts["move_start"] += 1
                 self._sessions[hwnd] = _MoveSession(
                     hwnd,
                     process_id,
@@ -84,10 +96,19 @@ class MoveTracker:
                     timestamp,
                     bool(left_button_down),
                 )
+                self._last_decision = "session_started"
                 return
+
+            if event == EVENT_OBJECT_LOCATIONCHANGE:
+                self._event_counts["location_change"] += 1
+            elif event == EVENT_SYSTEM_MOVESIZEEND:
+                self._event_counts["move_end"] += 1
+            else:
+                self._event_counts["other"] += 1
 
             session = self._sessions.get(hwnd)
             if session is None:
+                self._events_without_session += 1
                 return
             if event == EVENT_OBJECT_LOCATIONCHANGE:
                 session.left_button_observed = (
@@ -98,12 +119,19 @@ class MoveTracker:
                 if bounds.left != session.start_bounds.left or bounds.top != session.start_bounds.top:
                     session.moved = True
                 session.latest_bounds = bounds
+                self._last_decision = "tracking_move"
                 return
             if event != EVENT_SYSTEM_MOVESIZEEND:
                 return
 
             self._sessions.pop(hwnd, None)
-            if session.left_button_observed and session.moved and not session.resized:
+            if session.resized:
+                self._last_decision = "rejected_resize"
+            elif not session.moved:
+                self._last_decision = "rejected_no_movement"
+            elif not session.left_button_observed:
+                self._last_decision = "rejected_no_left_button"
+            else:
                 self._completed.append(
                     MoveToken(
                         hwnd=session.hwnd,
@@ -113,6 +141,8 @@ class MoveTracker:
                         completed_at=timestamp,
                     )
                 )
+                self._tokens_created += 1
+                self._last_decision = "token_created"
 
     def consume_eligible_move(self, *, now):
         """Consume the newest non-expired token exactly once."""
@@ -120,7 +150,27 @@ class MoveTracker:
             cutoff = now - self._token_ttl_seconds
             while self._completed and self._completed[0].completed_at < cutoff:
                 self._completed.popleft()
-            return self._completed.pop() if self._completed else None
+                self._tokens_expired += 1
+                self._last_decision = "token_expired"
+            if not self._completed:
+                return None
+            self._tokens_consumed += 1
+            self._last_decision = "token_consumed"
+            return self._completed.pop()
+
+    def diagnostic_snapshot(self):
+        """Return bounded URL-free evidence about move-token decisions."""
+        with self._lock:
+            return {
+                "events": dict(self._event_counts),
+                "events_without_session": self._events_without_session,
+                "active_sessions": len(self._sessions),
+                "tokens_pending": len(self._completed),
+                "tokens_created": self._tokens_created,
+                "tokens_consumed": self._tokens_consumed,
+                "tokens_expired": self._tokens_expired,
+                "last_decision": self._last_decision,
+            }
 
 
 class WinEventMoveObserver:
@@ -136,6 +186,17 @@ class WinEventMoveObserver:
         self._callback = None
         self._startup_error = None
         self.errors = queue.SimpleQueue()
+        self._diagnostic_lock = threading.Lock()
+        self._diagnostics = {
+            "running": False,
+            "hooks_installed": 0,
+            "raw_callbacks": 0,
+            "accepted_callbacks": 0,
+            "filtered_invalid_window": 0,
+            "filtered_non_window_object": 0,
+            "callback_errors": 0,
+            "last_event": "none",
+        }
 
     def start(self):
         if os.name != "nt":
@@ -160,6 +221,21 @@ class WinEventMoveObserver:
             self._thread.join(2)
             self._thread = None
 
+    def diagnostic_snapshot(self):
+        """Return observer and tracker state without desktop content."""
+        with self._diagnostic_lock:
+            snapshot = dict(self._diagnostics)
+        snapshot["tracker"] = self.tracker.diagnostic_snapshot()
+        return snapshot
+
+    def _update_diagnostics(self, **updates):
+        with self._diagnostic_lock:
+            self._diagnostics.update(updates)
+
+    def _increment_diagnostic(self, name):
+        with self._diagnostic_lock:
+            self._diagnostics[name] += 1
+
     def _run(self):
         user32 = ctypes.windll.user32
         kernel32 = ctypes.windll.kernel32
@@ -176,8 +252,15 @@ class WinEventMoveObserver:
         )
 
         def callback(_hook, event, hwnd, object_id, child_id, _thread, _event_time):
-            if not hwnd or object_id != OBJID_WINDOW or child_id != CHILDID_SELF:
+            self._increment_diagnostic("raw_callbacks")
+            self._update_diagnostics(last_event=_event_name(event))
+            if not hwnd:
+                self._increment_diagnostic("filtered_invalid_window")
                 return
+            if object_id != OBJID_WINDOW or child_id != CHILDID_SELF:
+                self._increment_diagnostic("filtered_non_window_object")
+                return
+            self._increment_diagnostic("accepted_callbacks")
             try:
                 bounds = _window_rect(user32, hwnd)
                 process_id = _window_process_id(user32, hwnd)
@@ -192,6 +275,7 @@ class WinEventMoveObserver:
                     left_button_down=bool(user32.GetAsyncKeyState(VK_LBUTTON) & 0x8000),
                 )
             except Exception as error:  # callback errors must not disrupt input
+                self._increment_diagnostic("callback_errors")
                 self.errors.put(error)
 
         self._callback = callback_type(callback)
@@ -212,6 +296,8 @@ class WinEventMoveObserver:
                 if not hook:
                     raise ctypes.WinError()
                 self._hooks.append(hook)
+                self._increment_diagnostic("hooks_installed")
+            self._update_diagnostics(running=True)
             self._ready.set()
             message = ctypes.wintypes.MSG()
             while not self._stop.is_set() and user32.GetMessageW(ctypes.byref(message), None, 0, 0) > 0:
@@ -222,9 +308,18 @@ class WinEventMoveObserver:
             self.errors.put(error)
             self._ready.set()
         finally:
+            self._update_diagnostics(running=False)
             for hook in self._hooks:
                 user32.UnhookWinEvent(hook)
             self._hooks.clear()
+
+
+def _event_name(event):
+    return {
+        EVENT_SYSTEM_MOVESIZESTART: "move_start",
+        EVENT_SYSTEM_MOVESIZEEND: "move_end",
+        EVENT_OBJECT_LOCATIONCHANGE: "location_change",
+    }.get(event, "other")
 
 
 def _window_rect(user32, hwnd):

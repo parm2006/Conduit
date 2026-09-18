@@ -6,7 +6,13 @@ export function installProbeWorker(chrome, {
   const nativePort = chrome.runtime.connectNative("com.conduit.browser_handoff_probe");
   let browserProcess = null;
   let lastCorrelation = null;
+  let lastDiagnostics = null;
   let connection = "connecting";
+  const workerDiagnostics = {
+    native_messages_received: 0,
+    diagnostics_received: 0,
+    diagnostics_stale: false,
+  };
 
   function windowMetadata(window) {
     return {
@@ -42,6 +48,7 @@ export function installProbeWorker(chrome, {
   }
 
   nativePort.onMessage.addListener((message) => {
+    workerDiagnostics.native_messages_received += 1;
     if (message?.type === "probe_host_ready") {
       connection = "ready";
       browserProcess = {
@@ -51,17 +58,29 @@ export function installProbeWorker(chrome, {
       void publishWindows("native_ready");
       return;
     }
+    if (message?.type === "probe_diagnostics") {
+      workerDiagnostics.diagnostics_received += 1;
+      workerDiagnostics.diagnostics_stale = false;
+      lastDiagnostics = message;
+      return;
+    }
     if (message?.type === "probe_correlation" || message?.type === "probe_error") {
       lastCorrelation = message;
     }
   });
   nativePort.onDisconnect.addListener(() => {
     connection = "disconnected";
+    workerDiagnostics.diagnostics_stale = true;
     lastCorrelation = { type: "probe_error", reason: "native_host_disconnected" };
   });
   chrome.runtime.onMessage.addListener((message, _sender, respond) => {
     if (message?.type !== "probe_status") return undefined;
-    respond({ connection, correlation: lastCorrelation });
+    respond({
+      connection,
+      correlation: lastCorrelation,
+      diagnostics: lastDiagnostics,
+      worker: { ...workerDiagnostics },
+    });
     return true;
   });
   for (const event of [
@@ -74,7 +93,12 @@ export function installProbeWorker(chrome, {
   void publishWindows("startup");
   return {
     latestCorrelation: () => lastCorrelation,
-    status: () => ({ connection, correlation: lastCorrelation }),
+    status: () => ({
+      connection,
+      correlation: lastCorrelation,
+      diagnostics: lastDiagnostics,
+      worker: { ...workerDiagnostics },
+    }),
   };
 }
 
