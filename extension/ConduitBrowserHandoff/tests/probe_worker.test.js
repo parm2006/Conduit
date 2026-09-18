@@ -3,7 +3,6 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 
 import { installProbeWorker } from "../probe/probe_worker.js";
-import * as probeStatus from "../probe/probe_status.js";
 
 function event() {
   return { addListener(listener) { this.listener = listener; } };
@@ -126,31 +125,19 @@ test("marks retained diagnostics stale when the native host disconnects", () => 
 
   assert.equal(snapshot.connection, "disconnected");
   assert.equal(snapshot.worker.diagnostics_stale, true);
-  assert.equal(probeStatus.probeHeadline(snapshot), "Probe host: disconnected.");
-});
-
-test("popup headline distinguishes missing diagnostics from waiting for correlation", () => {
-  assert.equal(typeof probeStatus.probeHeadline, "function");
-  assert.equal(
-    probeStatus.probeHeadline({ connection: "ready", correlation: null, diagnostics: null }),
-    "Connected, but diagnostic data has not arrived.",
-  );
-  assert.equal(
-    probeStatus.probeHeadline({
-      connection: "ready",
-      correlation: null,
-      diagnostics: { host: { last_stage: "metadata_received" } },
-    }),
-    "Connected. Last confirmed stage: metadata_received.",
-  );
+  assert.equal(snapshot.correlation.reason, "native_host_disconnected");
 });
 
 test("probe manifest exposes a local status popup without tab or storage permission", async () => {
   const manifest = JSON.parse(await readFile(new URL("../probe/manifest.json", import.meta.url)));
   const popup = await readFile(new URL("../probe/popup.html", import.meta.url), "utf8");
+  const popupScript = await readFile(new URL("../probe/popup.js", import.meta.url), "utf8");
 
   assert.equal(manifest.action.default_popup, "popup.html");
   assert.deepEqual(manifest.permissions.sort(), ["nativeMessaging", "windows"]);
   assert.match(popup, /Loading probe diagnostics/);
   assert.doesNotMatch(popup, /Waiting for a qualifying window move/);
+  assert.doesNotMatch(popup, /type="module"/);
+  assert.match(popupScript, /function probeHeadline/);
+  assert.doesNotMatch(popupScript, /^import /m);
 });
