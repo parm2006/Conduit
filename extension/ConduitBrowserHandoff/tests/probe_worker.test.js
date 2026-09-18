@@ -147,7 +147,10 @@ test("popup headline distinguishes missing diagnostics from waiting for correlat
 
 test("probe manifest exposes a local status popup without tab or storage permission", async () => {
   const manifest = JSON.parse(await readFile(new URL("../probe/manifest.json", import.meta.url)));
+  const popup = await readFile(new URL("../probe/popup.html", import.meta.url), "utf8");
 
   assert.equal(manifest.action.default_popup, "popup.html");
   assert.deepEqual(manifest.permissions.sort(), ["nativeMessaging", "windows"]);
+  assert.match(popup, /Loading probe diagnostics/);
+  assert.doesNotMatch(popup, /Waiting for a qualifying window move/);
 });
