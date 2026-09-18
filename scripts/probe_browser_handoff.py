@@ -22,6 +22,7 @@ if str(ROOT) not in sys.path:
 
 from app.browser_handoff.window_match import (
     BrowserWindowCandidate,
+    MAX_EDGE_DELTA_PIXELS,
     MAX_METADATA_AGE_SECONDS,
     NativeWindowObservation,
     PhysicalRect,
@@ -227,10 +228,23 @@ def correlation_evidence(token, metadata, *, received_at, now):
         if candidate.process_id == token.process_id
         and candidate.process_created == token.process_created
     ]
+    matching_geometry = [
+        candidate
+        for candidate in candidates
+        if all(
+            abs(native_edge - browser_edge) <= MAX_EDGE_DELTA_PIXELS
+            for native_edge, browser_edge in zip(
+                _rect_values(token.bounds), _rect_values(candidate.bounds)
+            )
+        )
+    ]
     result["candidates"] = [
         {
             "window_id": candidate.window_id,
+            "process_id": candidate.process_id,
+            "process_created": candidate.process_created,
             "same_process": candidate in matching_identity,
+            "same_geometry": candidate in matching_geometry,
             "bounds": _rect_values(candidate.bounds),
             "edge_deltas": [
                 native_edge - browser_edge
@@ -245,6 +259,13 @@ def correlation_evidence(token, metadata, *, received_at, now):
         result["status"] = "no_candidates"
         return result
     if not matching_identity:
+        if len(matching_geometry) == 1:
+            result["status"] = "unique_geometry_match_process_unverified"
+            result["matching_window_id"] = matching_geometry[0].window_id
+            return result
+        if len(matching_geometry) > 1:
+            result["status"] = "ambiguous_geometry_match_process_unverified"
+            return result
         result["status"] = "no_process_match"
         return result
     matched = match_window(native, candidates, now=now)

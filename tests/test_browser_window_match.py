@@ -274,6 +274,58 @@ class ProbeNativeFramingTests(unittest.TestCase):
         self.assertEqual(result["matching_window_id"], 7)
         self.assertNotIn("url", repr(result).lower())
 
+    def test_probe_reports_a_unique_geometry_match_when_host_parent_identity_differs(self):
+        result = browser_probe.correlation_evidence(
+            MoveToken(
+                hwnd=42,
+                process_id=101,
+                process_created=1234,
+                bounds=PhysicalRect(100, 50, 900, 650),
+                completed_at=10.1,
+            ),
+            {
+                "browser_instance_id": "opaque-instance",
+                "windows": [{
+                    "window_id": 7,
+                    "browser_process_id": 202,
+                    "browser_process_created": 5678,
+                    "left": 100,
+                    "top": 50,
+                    "width": 800,
+                    "height": 600,
+                }],
+            },
+            received_at=10.0,
+            now=10.2,
+        )
+
+        self.assertEqual(result["status"], "unique_geometry_match_process_unverified")
+        self.assertEqual(result["matching_window_id"], 7)
+        self.assertEqual(result["candidates"][0]["process_id"], 202)
+
+    def test_probe_abstains_when_two_geometry_matches_have_unverified_processes(self):
+        result = browser_probe.correlation_evidence(
+            MoveToken(
+                hwnd=42,
+                process_id=101,
+                process_created=1234,
+                bounds=PhysicalRect(100, 50, 900, 650),
+                completed_at=10.1,
+            ),
+            {
+                "browser_instance_id": "opaque-instance",
+                "windows": [
+                    {"window_id": 7, "browser_process_id": 202, "browser_process_created": 5678, "left": 100, "top": 50, "width": 800, "height": 600},
+                    {"window_id": 8, "browser_process_id": 303, "browser_process_created": 6789, "left": 100, "top": 50, "width": 800, "height": 600},
+                ],
+            },
+            received_at=10.0,
+            now=10.2,
+        )
+
+        self.assertEqual(result["status"], "ambiguous_geometry_match_process_unverified")
+        self.assertNotIn("matching_window_id", result)
+
     def test_probe_metadata_store_rejects_url_bearing_messages(self):
         store = ProbeMetadataStore()
 
