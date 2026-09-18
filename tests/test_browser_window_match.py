@@ -82,6 +82,41 @@ class BrowserWindowMatchTests(unittest.TestCase):
 
 
 class MoveTrackerTests(unittest.TestCase):
+    def test_accepts_a_left_button_observed_during_an_asynchronous_move(self):
+        tracker = MoveTracker(token_ttl_seconds=1.0)
+        start = PhysicalRect(0, 0, 800, 600)
+        end = PhysicalRect(40, 0, 840, 600)
+
+        tracker.observe(
+            EVENT_SYSTEM_MOVESIZESTART,
+            hwnd=42,
+            process_id=101,
+            process_created=1234,
+            bounds=start,
+            timestamp=10.0,
+            left_button_down=False,
+        )
+        tracker.observe(
+            EVENT_OBJECT_LOCATIONCHANGE,
+            hwnd=42,
+            process_id=101,
+            process_created=1234,
+            bounds=end,
+            timestamp=10.1,
+            left_button_down=True,
+        )
+        tracker.observe(
+            EVENT_SYSTEM_MOVESIZEEND,
+            hwnd=42,
+            process_id=101,
+            process_created=1234,
+            bounds=end,
+            timestamp=10.2,
+            left_button_down=False,
+        )
+
+        self.assertIsNotNone(tracker.consume_eligible_move(now=10.3))
+
     def test_retains_completed_left_button_window_move_until_edge_consumes_it(self):
         tracker = MoveTracker(token_ttl_seconds=1.0)
         start = PhysicalRect(0, 0, 800, 600)

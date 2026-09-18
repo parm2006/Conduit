@@ -45,7 +45,7 @@ class _MoveSession:
     start_bounds: PhysicalRect
     latest_bounds: PhysicalRect
     started_at: float
-    started_with_left_button: bool
+    left_button_observed: bool
     moved: bool = False
     resized: bool = False
 
@@ -90,6 +90,9 @@ class MoveTracker:
             if session is None:
                 return
             if event == EVENT_OBJECT_LOCATIONCHANGE:
+                session.left_button_observed = (
+                    session.left_button_observed or bool(left_button_down)
+                )
                 if bounds.width != session.start_bounds.width or bounds.height != session.start_bounds.height:
                     session.resized = True
                 if bounds.left != session.start_bounds.left or bounds.top != session.start_bounds.top:
@@ -100,7 +103,7 @@ class MoveTracker:
                 return
 
             self._sessions.pop(hwnd, None)
-            if session.started_with_left_button and session.moved and not session.resized:
+            if session.left_button_observed and session.moved and not session.resized:
                 self._completed.append(
                     MoveToken(
                         hwnd=session.hwnd,
