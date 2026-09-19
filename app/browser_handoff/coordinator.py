@@ -6,7 +6,6 @@ import secrets
 import threading
 import time
 
-from .edge_band import window_in_activation_band
 from .window_match import NativeWindowObservation, match_window
 
 
@@ -91,9 +90,11 @@ class BrowserHandoffCoordinator:
                 diagnostics,
             )
             return None
-        if not window_in_activation_band(token.bounds, display_rect, edge_region):
-            logger.info("browser_handoff stage=edge_band_rejected hwnd=%s", token.hwnd)
-            return None
+        # The input router has already established that the cursor is on this
+        # configured topology edge.  The dragged browser window may remain
+        # well inside the display because the user can grab any point on its
+        # title bar; requiring one of its outer edges to be at the display edge
+        # would reject valid title-bar drags based on the grab offset.
         observed_at = self.now()
         native = NativeWindowObservation(
             hwnd=token.hwnd,

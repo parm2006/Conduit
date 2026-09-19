@@ -128,6 +128,30 @@ class BrowserHandoffCoordinatorTests(unittest.TestCase):
         self.assertEqual(published[0]["gesture_id"], gesture_id)
         self.assertEqual(published[0]["entries"][0]["url"], "https://example.test")
 
+    def test_cursor_edge_claim_does_not_require_browser_window_edge_geometry(self):
+        desktop = FakeDesktop()
+        desktop.candidate = replace(
+            desktop.candidate,
+            bounds=PhysicalRect(500, 200, 1300, 900),
+        )
+        published = []
+        coordinator = BrowserHandoffCoordinator(
+            desktop=desktop,
+            move_tracker=FakeTracker(MoveToken(1, 11, 12, desktop.candidate.bounds, 100.0)),
+            to_physical=lambda window: window,
+            send_candidate=published.append,
+            now=lambda: 100.0,
+        )
+
+        gesture_id = coordinator.claim_edge(
+            display_rect=PhysicalRect(0, 0, 2000, 1000),
+            edge_region=configured_edge_region(PhysicalRect(0, 0, 2000, 1000), "left"),
+            source_display_id="display-1", source_side="left", topology_version=4,
+        )
+
+        self.assertIsInstance(gesture_id, str)
+        self.assertEqual(desktop.requests[0][0:2], ("browser-1", 7))
+
     def test_rejects_snapshot_for_different_window_or_revision(self):
         desktop = FakeDesktop()
         published = []
