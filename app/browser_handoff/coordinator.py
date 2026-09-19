@@ -146,6 +146,9 @@ class BrowserHandoffCoordinator:
             if snapshot.get("complete_capture") is not True:
                 self._pending.pop(request_id, None)
                 return False
+            if snapshot.get("incognito") is True:
+                self._pending.pop(request_id, None)
+                return False
             candidate = {
                 "protocol": 1,
                 "gesture_id": pending.gesture_id,

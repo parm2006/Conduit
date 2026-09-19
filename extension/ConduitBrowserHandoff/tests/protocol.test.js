@@ -21,6 +21,7 @@ const request = () => ({
 test("accepts duplicate URLs but rejects bool integers and duplicate indexes", () => {
   assert.equal(validateRequest(request()).entries.length, 2);
   assert.throws(() => validateRequest({ ...request(), total_count: true }));
+  assert.throws(() => validateRequest({ ...request(), incognito: true }));
   assert.throws(() => validateRequest({ ...request(), entries: [
     { source_index: 0, url: "https://example.test/a", active: false },
     { source_index: 0, url: "https://example.test/a", active: true },

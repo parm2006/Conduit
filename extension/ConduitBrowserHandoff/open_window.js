@@ -1,6 +1,12 @@
 import { classifyUrl } from "./url_policy.js";
 
 export async function openDestinationWindow(chrome, request, { browser, allowFileUrl = false } = {}) {
+  if (request.incognito === true) {
+    return {
+      status: "failed", opened_count: 0, total_count: request.entries.length,
+      outcomes: [{ reason: "incognito_unsupported" }],
+    };
+  }
   const planned = request.entries.map((entry) => ({ entry, decision: classifyUrl(entry.url, { browser, allowFileUrl }) }));
   const supported = planned.filter(({ decision }) => decision.allowed);
   const outcomes = planned
@@ -12,11 +18,11 @@ export async function openDestinationWindow(chrome, request, { browser, allowFil
 
   let window;
   try {
-    window = await chrome.windows.create({ url: "about:blank", incognito: request.incognito });
+    window = await chrome.windows.create({ url: "about:blank" });
   } catch {
     return { status: "failed", opened_count: 0, total_count: request.entries.length, outcomes: [{ reason: "window_create_failed" }] };
   }
-  if (window.incognito !== request.incognito) {
+  if (window.incognito === true) {
     return { status: "failed", opened_count: 0, total_count: request.entries.length, outcomes: [{ reason: "privacy_mismatch" }] };
   }
 

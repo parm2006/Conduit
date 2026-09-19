@@ -4,7 +4,6 @@
   "version": "0.1.0",
   "description": "Copies a selected Chromium window through an authenticated Conduit handoff.",
   "permissions": ["tabs", "nativeMessaging"],
-  "incognito": "spanning",
   "background": {
     "service_worker": "background.js",
     "type": "module"

@@ -119,6 +119,8 @@ def validate_request(message):
         raise BrowserHandoffProtocolError("invalid_destination_machine")
     if type(message["incognito"]) is not bool or type(message["complete_capture"]) is not bool:
         raise BrowserHandoffProtocolError("invalid_boolean")
+    if message["incognito"]:
+        raise BrowserHandoffProtocolError("incognito_unsupported")
     total_count = _require_int(message["total_count"], "total_count", minimum=0, maximum=MAX_TABS_PER_WINDOW)
     entries_value = message["entries"]
     if type(entries_value) is not list or len(entries_value) > total_count:
@@ -176,6 +178,8 @@ def validate_candidate(message):
     topology_version = _require_int(message["topology_version"], "topology_version", minimum=0)
     if type(message["incognito"]) is not bool or type(message["complete_capture"]) is not bool:
         raise BrowserHandoffProtocolError("invalid_boolean")
+    if message["incognito"]:
+        raise BrowserHandoffProtocolError("incognito_unsupported")
     total_count = _require_int(message["total_count"], "total_count", minimum=0, maximum=MAX_TABS_PER_WINDOW)
     entries_value = message["entries"]
     if type(entries_value) is not list or len(entries_value) > total_count:

@@ -19,7 +19,7 @@ export function validateRequest(request) {
     || typeof request.route_ticket !== "string" || !request.route_ticket || request.route_ticket.length > 256
     || !integer(request.topology_version) || request.topology_version < 0
     || typeof request.destination_machine_id !== "string" || !request.destination_machine_id || request.destination_machine_id.length > 256
-    || typeof request.incognito !== "boolean" || typeof request.complete_capture !== "boolean"
+    || typeof request.incognito !== "boolean" || request.incognito || typeof request.complete_capture !== "boolean"
     || !integer(request.total_count) || request.total_count < 0 || request.total_count > MAX_TABS_PER_WINDOW
     || !Array.isArray(request.entries) || request.entries.length > request.total_count) throw new TypeError("invalid_request");
   const indexes = new Set();

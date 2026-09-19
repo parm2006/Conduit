@@ -33,7 +33,11 @@ class BrowserHandoffProtocolTests(unittest.TestCase):
         self.assertEqual(candidate.entries[0].url, "https://example.test/a")
 
     def test_rejects_candidate_with_invalid_side_or_gesture(self):
-        for message in (self.candidate(source_side="diagonal"), self.candidate(gesture_id="not-a-gesture")):
+        for message in (
+            self.candidate(source_side="diagonal"),
+            self.candidate(gesture_id="not-a-gesture"),
+            self.candidate(incognito=True),
+        ):
             with self.subTest(message=message):
                 with self.assertRaises(BrowserHandoffProtocolError):
                     validate_candidate(message)
@@ -75,6 +79,9 @@ class BrowserHandoffProtocolTests(unittest.TestCase):
             with self.subTest(message=message):
                 with self.assertRaises(BrowserHandoffProtocolError):
                     validate_request(message)
+
+        with self.assertRaises(BrowserHandoffProtocolError):
+            validate_request(self.request(incognito=True))
 
     def test_rejects_unknown_fields_and_unicode_urls_over_the_utf8_limit(self):
         unknown = self.request(unexpected=True)

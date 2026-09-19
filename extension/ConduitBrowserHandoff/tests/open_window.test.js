@@ -3,13 +3,13 @@ import assert from "node:assert/strict";
 
 import { openDestinationWindow } from "../open_window.js";
 
-test("opens supported duplicate URLs in one private window and activates the source active tab", async () => {
+test("opens supported duplicate URLs in one normal window and activates the source active tab", async () => {
   const calls = [];
   const chrome = {
     windows: {
       async create(options) {
         calls.push(["window", options]);
-        return { id: 5, incognito: true, tabs: [{ id: 50, url: "about:blank" }] };
+        return { id: 5, incognito: false, tabs: [{ id: 50, url: "about:blank" }] };
       },
     },
     tabs: {
@@ -20,7 +20,7 @@ test("opens supported duplicate URLs in one private window and activates the sou
   };
 
   const result = await openDestinationWindow(chrome, {
-    incognito: true,
+    incognito: false,
     entries: [
       { source_index: 0, url: "https://example.test/a", active: false },
       { source_index: 1, url: "https://example.test/a", active: true },
@@ -29,7 +29,7 @@ test("opens supported duplicate URLs in one private window and activates the sou
 
   assert.equal(result.status, "complete");
   assert.equal(result.opened_count, 2);
-  assert.deepEqual(calls[0], ["window", { url: "about:blank", incognito: true }]);
+  assert.deepEqual(calls[0], ["window", { url: "about:blank" }]);
   assert.deepEqual(calls.filter(([kind]) => kind === "tab").map(([, value]) => value.index), [1, 2]);
   assert.deepEqual(calls.at(-2), ["remove", 50]);
   assert.deepEqual(calls.at(-1), ["update", 62, { active: true }]);
@@ -55,10 +55,10 @@ test("does not remove the helper tab or retry when no entry can be opened", asyn
   assert.deepEqual(removed, []);
 });
 
-test("fails closed when Chromium does not create the requested private window", async () => {
+test("fails closed when a private request reaches the opener", async () => {
   let tabCreates = 0;
   const chrome = {
-    windows: { async create() { return { id: 5, incognito: false, tabs: [{ id: 50 }] }; } },
+    windows: { async create() { tabCreates += 100; return { id: 5, incognito: false, tabs: [{ id: 50 }] }; } },
     tabs: { async create() { tabCreates += 1; }, async update() {}, async remove() {} },
   };
 
@@ -68,6 +68,6 @@ test("fails closed when Chromium does not create the requested private window", 
   }, { browser: "chrome" });
 
   assert.equal(result.status, "failed");
-  assert.equal(result.outcomes[0].reason, "privacy_mismatch");
+  assert.equal(result.outcomes[0].reason, "incognito_unsupported");
   assert.equal(tabCreates, 0);
 });

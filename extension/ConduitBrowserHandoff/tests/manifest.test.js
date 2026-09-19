@@ -8,7 +8,7 @@ test("shipping manifest has only the required MV3 permissions", async () => {
   assert.equal(manifest.manifest_version, 3);
   assert.equal(manifest.name, "ConduitBrowserHandoff");
   assert.deepEqual(manifest.permissions.sort(), ["nativeMessaging", "tabs"]);
-  assert.equal(manifest.incognito, "spanning");
+  assert.equal(manifest.incognito, undefined);
   assert.equal(manifest.background.type, "module");
   assert.equal(manifest.content_scripts, undefined);
   assert.equal(manifest.host_permissions, undefined);
