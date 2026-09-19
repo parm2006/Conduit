@@ -15,8 +15,68 @@ class FakeConnection:
         self.sent.append(message)
         return True
 
+    def close(self):
+        pass
+
 
 class BrowserHandoffDesktopTests(unittest.TestCase):
+    def test_refresh_requires_all_live_bridges_and_exact_request_id(self):
+        desktop = BrowserHandoffDesktop(start_bridge=False)
+        first, second = self._connection(), self._connection("instance-b", "bridge-2")
+        desktop.on_connected(first)
+        desktop.on_connected(second)
+        self.assertTrue(desktop.request_metadata_refresh("refresh-1"))
+        convert = lambda window: PhysicalRect(window["left"], 0, window["left"] + 10, 10)
+        def reply(connection, request_id):
+            return desktop.on_message(connection, {
+                "type": "browser_handoff_metadata", "browser_instance_id": connection.hello.browser_instance_id,
+                "request_id": request_id, "revision": 9,
+                "windows": [{"window_id": 7, "left": 1, "top": 0, "width": 10, "height": 10}],
+            })
+        reply(first, "old-refresh")
+        self.assertIsNone(desktop.browser_candidates(convert, refresh_id="refresh-1"))
+        reply(first, "refresh-1")
+        self.assertIsNone(desktop.browser_candidates(convert, refresh_id="refresh-1"))
+        reply(second, "refresh-1")
+        candidates = desktop.browser_candidates(convert, refresh_id="refresh-1")
+        self.assertEqual(len(candidates), 2)
+        self.assertEqual({c.bridge_epoch for c in candidates}, {"bridge-1", "bridge-2"})
+        reply(first, "unrelated-later-message")
+        self.assertEqual(desktop.browser_candidates(convert, refresh_id="refresh-1"), candidates)
+        desktop.release_metadata_refresh("refresh-1")
+        self.assertEqual(desktop._refreshes, {})
+
+    def test_replaced_epoch_cannot_reuse_old_metadata_or_satisfy_refresh(self):
+        desktop = BrowserHandoffDesktop(start_bridge=False)
+        old = self._connection()
+        desktop.on_connected(old)
+        desktop.on_message(old, {"type": "browser_handoff_metadata", "browser_instance_id": "instance-a", "windows": []})
+        desktop.request_metadata_refresh("refresh-1")
+        new = self._connection(epoch="new-epoch")
+        desktop.on_connected(new)
+        self.assertIsNone(desktop.metadata("instance-a"))
+        self.assertFalse(desktop.on_message(old, {"type": "browser_handoff_metadata", "browser_instance_id": "instance-a", "windows": []}))
+        desktop.on_disconnected(old)
+        self.assertTrue(desktop.bridge_is_current("instance-a", "new-epoch"))
+        self.assertFalse(desktop.request_snapshot("instance-a", 7, "snapshot-1", expected_epoch="bridge-1"))
+        self.assertEqual(new.sent, [])
+        with self.assertRaises(ConnectionError):
+            desktop.browser_candidates(lambda window: window, refresh_id="refresh-1")
+
+    def test_disconnect_or_new_bridge_invalidates_refresh(self):
+        for replace_set in (False, True):
+            with self.subTest(new_bridge=replace_set):
+                desktop = BrowserHandoffDesktop(start_bridge=False)
+                first = self._connection()
+                desktop.on_connected(first)
+                desktop.request_metadata_refresh("refresh-1")
+                if replace_set:
+                    desktop.on_connected(self._connection("instance-b"))
+                else:
+                    desktop.on_disconnected(first)
+                with self.assertRaises(ConnectionError):
+                    desktop.browser_candidates(lambda window: window, refresh_id="refresh-1")
+
     @staticmethod
     def _connection(instance="instance-a", epoch="bridge-1"):
         hello = type("Hello", (), {

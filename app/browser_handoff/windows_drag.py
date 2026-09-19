@@ -5,7 +5,7 @@ tab, changes focus, injects input, or chooses a Chromium window on its own.
 """
 
 from collections import deque
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import ctypes
 import ctypes.wintypes
 import os
@@ -35,6 +35,7 @@ class MoveToken:
     process_created: int
     bounds: PhysicalRect
     completed_at: float
+    completion: object = field(default=None, compare=False, repr=False)
 
 
 @dataclass
@@ -49,6 +50,8 @@ class _MoveSession:
     moved: bool = False
     resized: bool = False
     claimed: bool = False
+    ended_at: float | None = None
+    invalidated: bool = False
 
 
 class MoveTracker:
@@ -87,6 +90,9 @@ class MoveTracker:
         """Record one normalized WinEvent without touching the desktop."""
         with self._lock:
             if event == EVENT_SYSTEM_MOVESIZESTART:
+                previous = self._sessions.get(hwnd)
+                if previous is not None:
+                    previous.invalidated = True
                 self._event_counts["move_start"] += 1
                 self._sessions[hwnd] = _MoveSession(
                     hwnd,
@@ -126,10 +132,15 @@ class MoveTracker:
                 return
 
             self._sessions.pop(hwnd, None)
+            session.latest_bounds = bounds
+            session.invalidated = session.resized or (process_id, process_created) != (session.process_id, session.process_created)
+            session.ended_at = timestamp
             if session.claimed:
                 self._last_decision = "token_already_claimed"
             elif session.resized:
                 self._last_decision = "rejected_resize"
+            elif session.invalidated:
+                self._last_decision = "rejected_invalidated_move"
             elif not session.moved:
                 self._last_decision = "rejected_no_movement"
             elif not session.left_button_observed:
@@ -171,6 +182,7 @@ class MoveTracker:
                 process_created=session.process_created,
                 bounds=session.latest_bounds,
                 completed_at=now,
+                completion=session,
             )
 
     def consume_eligible_move(self, *, now):
@@ -356,6 +368,27 @@ def _window_rect(user32, hwnd):
     if not user32.GetWindowRect(hwnd, ctypes.byref(rect)):
         raise ctypes.WinError()
     return PhysicalRect(rect.left, rect.top, rect.right, rect.bottom)
+
+
+def reread_move_bounds(token):
+    """Read final geometry only while the HWND still belongs to this process."""
+    if os.name != "nt":
+        raise OSError("Windows window identity is required")
+    user32 = ctypes.WinDLL("user32", use_last_error=True)
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    user32.GetWindowRect.argtypes = [ctypes.wintypes.HWND, ctypes.POINTER(ctypes.wintypes.RECT)]
+    user32.GetWindowThreadProcessId.argtypes = [ctypes.wintypes.HWND, ctypes.POINTER(ctypes.c_ulong)]
+    kernel32.OpenProcess.argtypes = [ctypes.wintypes.DWORD, ctypes.wintypes.BOOL, ctypes.wintypes.DWORD]
+    kernel32.OpenProcess.restype = ctypes.wintypes.HANDLE
+    kernel32.GetProcessTimes.argtypes = [ctypes.wintypes.HANDLE] + [ctypes.POINTER(ctypes.wintypes.FILETIME)] * 4
+    kernel32.CloseHandle.argtypes = [ctypes.wintypes.HANDLE]
+    pid = _window_process_id(user32, token.hwnd)
+    if pid != token.process_id or _process_creation_time(kernel32, pid) != token.process_created:
+        raise OSError("Moved window identity changed")
+    bounds = _window_rect(user32, token.hwnd)
+    if _window_process_id(user32, token.hwnd) != pid:
+        raise OSError("Moved window identity changed")
+    return bounds
 
 
 def _window_process_id(user32, hwnd):

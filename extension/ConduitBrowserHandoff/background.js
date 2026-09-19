@@ -91,24 +91,26 @@ export function installWorker(chrome, {
   const browserInstanceId = epoch;
   let revision = 0;
   let port;
-  const coalescer = new MetadataCoalescer({
-    publish: async () => {
-      try {
-        const windows = await chrome.windows.getAll({ populate: false });
-        port?.postMessage({
-          type: "browser_handoff_metadata",
-          epoch, browser_instance_id: browserInstanceId,
-          coordinate_units: "browser_dip",
-          revision,
-          windows: windows.map((window) => ({
-            window_id: window.id, focused: window.focused === true,
-            incognito: window.incognito === true, state: window.state,
-            left: window.left, top: window.top, width: window.width, height: window.height,
-          })),
-        });
-      } catch { /* disconnects and API errors are retried only by later events */ }
-    },
-  });
+  const publishMetadata = async (requestId, targetPort = port) => {
+    const queryRevision = revision;
+    try {
+      const windows = await chrome.windows.getAll({ populate: false });
+      if (targetPort !== port) return;
+      targetPort?.postMessage({
+        type: "browser_handoff_metadata",
+        epoch, browser_instance_id: browserInstanceId,
+        coordinate_units: "browser_dip",
+        revision: queryRevision,
+        ...(requestId ? { request_id: requestId } : {}),
+        windows: windows.map((window) => ({
+          window_id: window.id, focused: window.focused === true,
+          incognito: window.incognito === true, state: window.state,
+          left: window.left, top: window.top, width: window.width, height: window.height,
+        })),
+      });
+    } catch { /* correlation owns bounded refresh retries; other events coalesce */ }
+  };
+  const coalescer = new MetadataCoalescer({ publish: () => publishMetadata() });
   const bumpRevision = () => { revision += 1; coalescer.request(); };
   // Register every listener before connecting or awaiting any browser work.
   for (const event of [
@@ -145,6 +147,7 @@ export function installWorker(chrome, {
       type: "browser_handoff_hello", browser_instance_id: browserInstanceId,
     });
     connectedPort.onMessage.addListener(async (message) => {
+      if (port !== connectedPort) return;
       if (message?.type === "bridge_ready") {
         receiverEpoch = typeof message.bridge_epoch === "string" && message.bridge_epoch
           ? message.bridge_epoch : null;
@@ -155,6 +158,13 @@ export function installWorker(chrome, {
             receiver_epoch: receiverEpoch,
           });
           bumpRevision();
+        }
+        return;
+      }
+      if (message?.type === "browser_handoff_metadata_request") {
+        if (receiverEpoch && typeof message.request_id === "string" && message.request_id) {
+          revision += 1;
+          await publishMetadata(message.request_id, connectedPort);
         }
         return;
       }

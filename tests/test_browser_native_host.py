@@ -5,6 +5,7 @@ import struct
 import subprocess
 import sys
 import unittest
+import uuid
 
 from app.browser_handoff.native_host import (
     MAX_NATIVE_MESSAGE_BYTES,
@@ -80,8 +81,15 @@ class NativeHostTests(unittest.TestCase):
             "type": "browser_handoff_hello", "browser_instance_id": "instance-1",
             "url": "https://secret.example/never-log-this",
         }, separators=(",", ":")).encode("utf-8")
+        script = Path(__file__).resolve().parents[1] / "scripts" / "conduit_browser_host.py"
+        pipe = rf"\\.\pipe\Conduit-test-{uuid.uuid4().hex}"
+        command = (
+            "import runpy; from unittest.mock import patch; "
+            f"p = patch('app.browser_handoff.local_bridge.default_pipe_name', return_value={pipe!r}); "
+            f"p.start(); runpy.run_path({str(script)!r}, run_name='__main__')"
+        )
         completed = subprocess.run(
-            [sys.executable, str(Path(__file__).resolve().parents[1] / "scripts" / "conduit_browser_host.py")],
+            [sys.executable, "-c", command],
             input=struct.pack("<I", len(payload)) + payload,
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False, timeout=5,
         )

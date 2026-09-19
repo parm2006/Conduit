@@ -1,49 +1,51 @@
-"""Asynchronous source-side browser-window capture coordination."""
+"""Single-use native move ownership and bounded asynchronous correlation."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import logging
 import secrets
 import threading
 import time
 
 from .window_match import NativeWindowObservation, match_window
+from .windows_drag import reread_move_bounds
 
 
 logger = logging.getLogger(__name__)
 
 
-@dataclass(frozen=True)
-class PendingCapture:
+@dataclass
+class CorrelationTask:
     gesture_id: str
-    request_id: str
+    token: object
     source_display_id: str
     source_side: str
     topology_version: int
-    instance_id: str
-    window_id: int
-    bridge_epoch: str | None
-    metadata_revision: int | None
     expires_at: float
+    cancelled: threading.Event = field(default_factory=threading.Event)
+    stages: dict = field(default_factory=dict)
+    request_id: str | None = None
+    matched: object = None
+    candidate: dict | None = None
+    failure: str | None = None
+    dispatch_started: bool = False
+
+
+def _spawn(callback):
+    threading.Thread(target=callback, name="browser-handoff-correlation", daemon=True).start()
 
 
 class BrowserHandoffCoordinator:
-    """Join a claimed native move to one exact extension window snapshot.
+    """The input callback claims once; its task owns that token until completion.
 
-    The coordinator only schedules bridge work from the input callback. URL
-    validation and network publication happen after the bridge replies.
+    No metadata or native rectangle I/O occurs on the input callback. Cancellation
+    invalidates queued snapshots/publications, without ever unclaiming a move.
+    Clock, wait, scheduling and native reads are injected for deterministic tests.
     """
 
-    def __init__(
-        self,
-        *,
-        desktop,
-        move_tracker,
-        to_physical,
-        send_candidate,
-        now=time.monotonic,
-        token_ttl_seconds=1.0,
-        max_pending=8,
-    ):
+    def __init__(self, *, desktop, move_tracker, to_physical, send_candidate,
+                 now=time.monotonic, token_ttl_seconds=1.0, max_pending=8,
+                 read_bounds=reread_move_bounds, spawn=_spawn,
+                 wait=lambda event, seconds: event.wait(seconds)):
         self.desktop = desktop
         self.move_tracker = move_tracker
         self.to_physical = to_physical
@@ -51,6 +53,10 @@ class BrowserHandoffCoordinator:
         self.now = now
         self.token_ttl_seconds = float(token_ttl_seconds)
         self.max_pending = int(max_pending)
+        self.read_bounds = read_bounds
+        self.spawn = spawn
+        self.wait = wait
+        self._tasks = {}
         self._pending = {}
         self._lock = threading.RLock()
         previous = getattr(desktop, "on_snapshot", None)
@@ -65,211 +71,210 @@ class BrowserHandoffCoordinator:
 
         desktop.on_snapshot = on_snapshot
 
+    def _stage(self, task, stage, **details):
+        task.stages[stage] = self.now()
+        logger.info("browser_handoff stage=%s gesture=%s details=%s", stage, task.gesture_id[:8], details)
+
+    def _alive(self, task):
+        return not task.cancelled.is_set() and self.now() < task.expires_at
+
     def claim_edge(self, *, display_rect, edge_region, source_display_id, source_side, topology_version):
-        logger.info(
-            "browser_handoff stage=edge_claim display=%s side=%s topology=%s",
-            source_display_id, source_side, topology_version,
-        )
-        if (
-            type(topology_version) is not int or topology_version < 0
-            or type(source_display_id) is not str or not source_display_id
-            or source_side not in {"left", "right", "top", "bottom"}
-        ):
-            return None
-        claim_now = self.now()
-        token = self.move_tracker.claim_active_move(now=claim_now)
-        if token is None:
-            consume = getattr(self.move_tracker, "consume_eligible_move", None)
-            if consume is not None:
-                try:
-                    token = consume(now=claim_now)
-                except Exception:
-                    token = None
-                if token is not None:
-                    logger.info(
-                        "browser_handoff stage=completed_move_token_consumed"
-                    )
-        if token is None:
-            diagnostics = None
-            snapshot = getattr(self.move_tracker, "diagnostic_snapshot", None)
-            if snapshot is not None:
-                try:
-                    diagnostics = snapshot()
-                except Exception:
-                    diagnostics = {"error": "tracker_diagnostics_failed"}
-            logger.info(
-                "browser_handoff stage=move_token_missing diagnostics=%s",
-                diagnostics,
-            )
-            return None
-        # The input router has already established that the cursor is on this
-        # configured topology edge.  The dragged browser window may remain
-        # well inside the display because the user can grab any point on its
-        # title bar; requiring one of its outer edges to be at the display edge
-        # would reject valid title-bar drags based on the grab offset.
-        observed_at = self.now()
-        native = NativeWindowObservation(
-            hwnd=token.hwnd,
-            process_id=token.process_id,
-            process_created=token.process_created,
-            bounds=token.bounds,
-            observed_at=observed_at,
-        )
-        candidates = self.desktop.browser_candidates(self.to_physical)
-        matched = match_window(native, candidates, now=observed_at)
-        if matched is None:
-            native_bounds = (
-                native.bounds.left,
-                native.bounds.top,
-                native.bounds.right,
-                native.bounds.bottom,
-            )
-            candidate_bounds = [
-                (
-                    candidate.bounds.left,
-                    candidate.bounds.top,
-                    candidate.bounds.right,
-                    candidate.bounds.bottom,
-                )
-                for candidate in candidates
-            ]
-            logger.info(
-                "browser_handoff stage=window_match_rejected hwnd=%s candidates=%d "
-                "native_bounds=%s candidate_bounds=%s",
-                token.hwnd,
-                len(candidates),
-                native_bounds,
-                candidate_bounds,
-            )
+        logger.info("browser_handoff stage=edge_claim display=%s side=%s topology=%s", source_display_id, source_side, topology_version)
+        if (type(topology_version) is not int or topology_version < 0
+                or type(source_display_id) is not str or not source_display_id
+                or source_side not in {"left", "right", "top", "bottom"}):
             return None
         with self._lock:
-            now = self.now()
-            for request_id, pending in tuple(self._pending.items()):
-                if pending.expires_at <= now:
-                    self._pending.pop(request_id, None)
-            if len(self._pending) >= self.max_pending:
+            for key, task in tuple(self._tasks.items()):
+                if not task.dispatch_started and not self._alive(task):
+                    task.cancelled.set()
+                    self._tasks.pop(key, None)
+                    self._pending.pop(task.request_id, None)
+            if len(self._tasks) >= self.max_pending:
                 logger.info("browser_handoff stage=pending_capacity_rejected")
                 return None
-            gesture_id = secrets.token_hex(16)
-            request_id = secrets.token_hex(16)
-            pending = PendingCapture(
-                gesture_id=gesture_id,
-                request_id=request_id,
-                source_display_id=source_display_id,
-                source_side=source_side,
-                topology_version=topology_version,
-                instance_id=matched.browser_instance_id,
-                window_id=matched.window_id,
-                bridge_epoch=matched.bridge_epoch,
-                metadata_revision=matched.metadata_revision,
-                expires_at=now + self.token_ttl_seconds,
-            )
-            self._pending[request_id] = pending
-        logger.info(
-            "browser_handoff stage=snapshot_requested gesture=%s instance=%s window=%s",
-            gesture_id, matched.browser_instance_id, matched.window_id,
-        )
-        threading.Thread(
-            target=self._request_snapshot,
-            args=(pending,),
-            name="browser-handoff-snapshot",
-            daemon=True,
-        ).start()
-        return gesture_id
+            claim_now = self.now()
+            token = self.move_tracker.claim_active_move(now=claim_now)
+            completed = False
+            if token is None:
+                consume = getattr(self.move_tracker, "consume_eligible_move", None)
+                token = consume(now=claim_now) if consume else None
+                completed = token is not None
+            if token is None:
+                diagnostic = getattr(self.move_tracker, "diagnostic_snapshot", lambda: None)
+                logger.info("browser_handoff stage=move_token_missing diagnostics=%s", diagnostic())
+                return None
+            task = CorrelationTask(secrets.token_hex(16), token, source_display_id,
+                                   source_side, topology_version, claim_now + self.token_ttl_seconds)
+            self._tasks[task.gesture_id] = task
+            self._stage(task, "edge_claimed")
+            if completed:
+                self._stage(task, "completed_move_token_consumed")
+        self.spawn(lambda: self._correlate(task))
+        return task.gesture_id
+
+    def _pause(self, task, seconds=0.01):
+        self.wait(task.cancelled, max(0, min(seconds, task.expires_at - self.now())))
+
+    def _correlate(self, task):
+        outcome = "deadline_expired"
+        refresh_id = None
+        try:
+            completion = task.token.completion
+            while self._alive(task) and completion is not None and completion.ended_at is None:
+                if completion.invalidated:
+                    outcome = "move_invalidated"
+                    return
+                self._pause(task)
+            if not self._alive(task):
+                return
+            if completion is not None and completion.invalidated:
+                outcome = "move_invalidated"
+                return
+            ended_at = completion.ended_at if completion is not None else task.token.completed_at
+            task.stages["move_end"] = ended_at
+            self._stage(task, "move_end_observed", ended_at=ended_at)
+            bounds = self.read_bounds(task.token)
+            self._stage(task, "native_rect_read")
+            native = NativeWindowObservation(task.token.hwnd, task.token.process_id,
+                                             task.token.process_created, bounds, self.now())
+            # One initial refresh plus at most two short-backoff revisions.
+            for attempt in range(3):
+                if not self._alive(task):
+                    return
+                refresh_id = secrets.token_hex(16)
+                if not self.desktop.request_metadata_refresh(refresh_id):
+                    outcome = "metadata_request_failed"
+                    return
+                self._stage(task, "metadata_requested", attempt=attempt)
+                candidates = None
+                while self._alive(task):
+                    candidates = self.desktop.browser_candidates(self.to_physical, refresh_id=refresh_id)
+                    if candidates is not None:
+                        break
+                    self._pause(task)
+                if not self._alive(task):
+                    return
+                matched = match_window(native, candidates, now=self.now())
+                native_rect = (bounds.left, bounds.top, bounds.right, bounds.bottom)
+                for candidate in candidates:
+                    rect = (candidate.bounds.left, candidate.bounds.top, candidate.bounds.right, candidate.bounds.bottom)
+                    self._stage(task, "correlation_rect", instance=candidate.browser_instance_id,
+                                window=candidate.window_id, bridge_epoch=candidate.bridge_epoch,
+                                revision=candidate.metadata_revision, received_at=candidate.observed_at,
+                                native_bounds=native_rect, browser_bounds=rect,
+                                edge_delta=tuple(b - n for b, n in zip(rect, native_rect)))
+                self.desktop.release_metadata_refresh(refresh_id)
+                refresh_id = None
+                if matched is not None:
+                    self._stage(task, "window_matched", move_end_to_revision_ms=round((matched.observed_at - ended_at) * 1000, 3))
+                    task.matched = matched
+                    break
+                self._stage(task, "window_match_rejected", candidates=len(candidates))
+                if attempt < 2:
+                    self._pause(task, 0.025 * (attempt + 1))
+            if task.matched is None:
+                outcome = "window_match_rejected"
+                return
+            with self._lock:
+                if not self._alive(task):
+                    return
+                task.request_id = secrets.token_hex(16)
+                self._pending[task.request_id] = task
+            matched = task.matched
+            if not self.desktop.bridge_is_current(matched.browser_instance_id, matched.bridge_epoch):
+                outcome = "bridge_lost"
+                return
+            self._stage(task, "snapshot_requested", instance=matched.browser_instance_id, window=matched.window_id)
+            if not self.desktop.request_snapshot(matched.browser_instance_id, matched.window_id, task.request_id,
+                                                 expected_epoch=matched.bridge_epoch):
+                outcome = "snapshot_request_failed"
+                return
+            while self._alive(task) and task.candidate is None and task.failure is None:
+                if not self.desktop.bridge_is_current(matched.browser_instance_id, matched.bridge_epoch):
+                    outcome = "bridge_lost"
+                    return
+                self._pause(task)
+            with self._lock:
+                if not self._alive(task):
+                    return
+                if task.failure:
+                    outcome = task.failure
+                    return
+                if not self.desktop.bridge_is_current(matched.browser_instance_id, matched.bridge_epoch):
+                    outcome = "bridge_lost"
+                    return
+                # Cancellation and commitment have one ordering point. A
+                # committed send cannot be recalled; topology validation at the
+                # server still applies. Never hold the input lock over transport.
+                task.dispatch_started = True
+                self._stage(task, "candidate_dispatch_committed")
+            sent = bool(self.send_candidate(task.candidate))
+            self._stage(task, "candidate_sent", sent=sent)
+            outcome = "candidate_sent" if sent else "candidate_send_failed"
+        except ConnectionError:
+            outcome = "bridge_lost"
+        except Exception as error:
+            outcome = "correlation_exception"
+            self._stage(task, outcome, error_type=type(error).__name__)
+        finally:
+            if refresh_id is not None:
+                self.desktop.release_metadata_refresh(refresh_id)
+            with self._lock:
+                self._pending.pop(task.request_id, None)
+                self._tasks.pop(task.gesture_id, None)
+            if task.cancelled.is_set():
+                outcome = "cancelled"
+            task.stages["finished"] = self.now()
+            logger.info("browser_handoff stage=gesture_summary gesture=%s outcome=%s timestamps=%s",
+                        task.gesture_id[:8], outcome, task.stages)
 
     def handle_snapshot(self, instance_id, message):
         if type(message) is not dict or type(instance_id) is not str:
             return False
-        request_id = message.get("request_id")
         with self._lock:
-            pending = self._pending.get(request_id)
-            if pending is None:
-                logger.info("browser_handoff stage=snapshot_rejected reason=unknown_request")
+            task = self._pending.get(message.get("request_id"))
+            if task is None or not self._alive(task) or task.candidate is not None or task.failure:
                 return False
-            if pending.expires_at < self.now():
-                logger.info("browser_handoff stage=snapshot_rejected reason=expired")
-                self._pending.pop(request_id, None)
-                return False
-            if instance_id != pending.instance_id:
-                logger.info("browser_handoff stage=snapshot_rejected reason=instance_mismatch")
-                return False
-            if pending.bridge_epoch is not None and message.get("_bridge_epoch") != pending.bridge_epoch:
-                logger.info("browser_handoff stage=snapshot_rejected reason=bridge_epoch_mismatch")
-                self._pending.pop(request_id, None)
+            matched = task.matched
+            if instance_id != matched.browser_instance_id:
                 return False
             snapshot = message.get("snapshot")
-            if type(snapshot) is not dict:
-                logger.info("browser_handoff stage=snapshot_rejected reason=missing_snapshot")
-                self._pending.pop(request_id, None)
+            reason = None
+            if message.get("_bridge_epoch") != matched.bridge_epoch:
+                reason = "bridge_epoch_mismatch"
+            elif type(snapshot) is not dict:
+                reason = "missing_snapshot"
+            elif snapshot.get("window_id") != matched.window_id:
+                reason = "window_mismatch"
+            elif snapshot.get("revision") != matched.metadata_revision:
+                reason = "revision_mismatch"
+            elif message.get("epoch") is not None and message["epoch"] != instance_id:
+                reason = "instance_epoch_mismatch"
+            elif snapshot.get("complete_capture") is not True:
+                reason = "incomplete"
+            elif snapshot.get("incognito") is True:
+                reason = "incognito_unsupported"
+            if reason:
+                task.failure = reason
+                self._stage(task, "snapshot_rejected", reason=reason)
                 return False
-            if snapshot.get("window_id") != pending.window_id:
-                logger.info("browser_handoff stage=snapshot_rejected reason=window_mismatch")
-                self._pending.pop(request_id, None)
-                return False
-            if pending.metadata_revision is not None and snapshot.get("revision") != pending.metadata_revision:
-                logger.info("browser_handoff stage=snapshot_rejected reason=revision_mismatch")
-                self._pending.pop(request_id, None)
-                return False
-            if message.get("epoch") is not None and message.get("epoch") != pending.instance_id:
-                logger.info("browser_handoff stage=snapshot_rejected reason=instance_epoch_mismatch")
-                self._pending.pop(request_id, None)
-                return False
-            if snapshot.get("complete_capture") is not True:
-                logger.info("browser_handoff stage=snapshot_rejected reason=incomplete")
-                self._pending.pop(request_id, None)
-                return False
-            if snapshot.get("incognito") is True:
-                logger.info("browser_handoff stage=snapshot_rejected reason=incognito_unsupported")
-                self._pending.pop(request_id, None)
-                return False
-            candidate = {
-                "protocol": 1,
-                "gesture_id": pending.gesture_id,
-                "source_display_id": pending.source_display_id,
-                "source_side": pending.source_side,
-                "topology_version": pending.topology_version,
+            self._stage(task, "snapshot_received")
+            task.candidate = {
+                "protocol": 1, "gesture_id": task.gesture_id,
+                "source_display_id": task.source_display_id, "source_side": task.source_side,
+                "topology_version": task.topology_version,
                 "incognito": snapshot.get("incognito") is True,
-                "total_count": snapshot.get("total_count"),
-                "entries": snapshot.get("entries"),
+                "total_count": snapshot.get("total_count"), "entries": snapshot.get("entries"),
                 "complete_capture": True,
             }
-            self._pending.pop(request_id, None)
-        logger.info(
-            "browser_handoff stage=candidate_ready gesture=%s tabs=%s",
-            candidate["gesture_id"], candidate["total_count"],
-        )
-        threading.Thread(
-            target=self._publish_candidate,
-            args=(candidate,),
-            name="browser-handoff-candidate",
-            daemon=True,
-        ).start()
-        return True
+            self._stage(task, "candidate_ready", tabs=snapshot.get("total_count"))
+            return True
 
     def cancel(self):
         with self._lock:
+            for task in self._tasks.values():
+                if not task.dispatch_started:
+                    task.cancelled.set()
             self._pending.clear()
-
-    def _request_snapshot(self, pending):
-        try:
-            submitted = self.desktop.request_snapshot(
-                pending.instance_id, pending.window_id, pending.request_id,
-            )
-            if not submitted:
-                logger.info("browser_handoff stage=snapshot_request_failed instance=%s window=%s", pending.instance_id, pending.window_id)
-                with self._lock:
-                    self._pending.pop(pending.request_id, None)
-        except Exception:
-            logger.info("browser_handoff stage=snapshot_request_exception instance=%s window=%s", pending.instance_id, pending.window_id)
-            with self._lock:
-                self._pending.pop(pending.request_id, None)
-
-    def _publish_candidate(self, candidate):
-        try:
-            sent = bool(self.send_candidate(candidate))
-            logger.info(
-                "browser_handoff stage=candidate_sent gesture=%s sent=%s",
-                candidate.get("gesture_id"), sent,
-            )
-        except Exception:
-            logger.info("browser_handoff stage=candidate_send_exception gesture=%s", candidate.get("gesture_id"))
+            self._tasks = {key: task for key, task in self._tasks.items() if task.dispatch_started}

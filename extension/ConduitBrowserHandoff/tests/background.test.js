@@ -3,6 +3,38 @@ import assert from "node:assert/strict";
 
 import { MetadataCoalescer, RequestCoordinator, installWorker, resultEnvelope } from "../background.js";
 
+test("explicit refresh queries fresh bounds and echoes its request without relabelling an older query", async () => {
+  const responses = [];
+  const queries = [];
+  const listeners = [];
+  const port = { onMessage: { addListener(listener) { this.listener = listener; } }, onDisconnect: { addListener() {} }, postMessage(value) { responses.push(value); } };
+  const event = () => ({ addListener(listener) { listeners.push(listener); } });
+  const chrome = {
+    runtime: { connectNative() { return port; } },
+    windows: { onCreated: event(), onRemoved: event(), onFocusChanged: event(), onBoundsChanged: event(), getAll(options) {
+      assert.deepEqual(options, { populate: false });
+      return new Promise(resolve => queries.push(resolve));
+    } },
+    tabs: { onCreated: event(), onRemoved: event(), onMoved: event(), onAttached: event(), onDetached: event(), onReplaced: event(), onUpdated: event() },
+  };
+  installWorker(chrome, { epoch: "instance-1" });
+  await port.onMessage.listener({ type: "bridge_ready", bridge_epoch: "bridge-1" });
+  assert.equal(queries.length, 1);
+  const refreshing = port.onMessage.listener({ type: "browser_handoff_metadata_request", request_id: "fresh-query" });
+  assert.equal(queries.length, 2);
+  queries[1]([{ id: 7, left: 500, top: 200, width: 800, height: 700, incognito: false }]);
+  await refreshing;
+  const fresh = responses.at(-1);
+  assert.equal(fresh.request_id, "fresh-query");
+  assert.equal(fresh.revision, 2);
+  assert.equal(fresh.windows[0].left, 500);
+  queries[0]([{ id: 7, left: -8, top: -8, width: 1920, height: 1080 }]);
+  await new Promise(resolve => queueMicrotask(resolve));
+  assert.equal(responses.at(-1).revision, 1);
+  assert.equal(responses.at(-1).request_id, undefined);
+  assert.equal(JSON.stringify(responses).includes("url"), false);
+});
+
 test("coalesces an event burst into one metadata publish", async () => {
   const callbacks = [];
   let publishes = 0;
