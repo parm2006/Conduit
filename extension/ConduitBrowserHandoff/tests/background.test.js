@@ -197,3 +197,25 @@ test("reconnects the native channel with bounded backoff without replaying reque
   assert.equal(ports.length, 3);
   assert.equal(timers.length, 0);
 });
+
+test("consumes the native disconnect error before scheduling a reconnect", () => {
+  const timers = [];
+  const port = { onMessage: { addListener() {} }, onDisconnect: { addListener(listener) { this.listener = listener; } }, postMessage() {} };
+  const event = () => ({ addListener() {} });
+  let lastErrorReads = 0;
+  const runtime = { connectNative() { return port; } };
+  Object.defineProperty(runtime, "lastError", {
+    get() { lastErrorReads += 1; return { message: "Native host has exited." }; },
+  });
+  const chrome = {
+    runtime,
+    windows: { onCreated: event(), onRemoved: event(), onFocusChanged: event(), onBoundsChanged: event() },
+    tabs: { onCreated: event(), onRemoved: event(), onMoved: event(), onAttached: event(), onDetached: event(), onReplaced: event(), onUpdated: event() },
+  };
+
+  installWorker(chrome, { epoch: "epoch-1", setTimeoutFn: (callback, delay) => timers.push({ callback, delay }) });
+  port.onDisconnect.listener();
+
+  assert.equal(lastErrorReads, 1);
+  assert.equal(timers[0].delay, 250);
+});

@@ -183,6 +183,7 @@ export function installWorker(chrome, {
       }
     });
     connectedPort.onDisconnect.addListener(() => {
+      void chrome.runtime.lastError;
       if (port === connectedPort) connected = false;
       if (reconnects >= maxReconnects) return;
       const delay = 250 * (2 ** reconnects);
