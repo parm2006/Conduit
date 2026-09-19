@@ -76,7 +76,19 @@ class BrowserHandoffCoordinator:
             or source_side not in {"left", "right", "top", "bottom"}
         ):
             return None
-        token = self.move_tracker.claim_active_move(now=self.now())
+        claim_now = self.now()
+        token = self.move_tracker.claim_active_move(now=claim_now)
+        if token is None:
+            consume = getattr(self.move_tracker, "consume_eligible_move", None)
+            if consume is not None:
+                try:
+                    token = consume(now=claim_now)
+                except Exception:
+                    token = None
+                if token is not None:
+                    logger.info(
+                        "browser_handoff stage=completed_move_token_consumed"
+                    )
         if token is None:
             diagnostics = None
             snapshot = getattr(self.move_tracker, "diagnostic_snapshot", None)
@@ -106,7 +118,29 @@ class BrowserHandoffCoordinator:
         candidates = self.desktop.browser_candidates(self.to_physical)
         matched = match_window(native, candidates, now=observed_at)
         if matched is None:
-            logger.info("browser_handoff stage=window_match_rejected hwnd=%s candidates=%d", token.hwnd, len(candidates))
+            native_bounds = (
+                native.bounds.left,
+                native.bounds.top,
+                native.bounds.right,
+                native.bounds.bottom,
+            )
+            candidate_bounds = [
+                (
+                    candidate.bounds.left,
+                    candidate.bounds.top,
+                    candidate.bounds.right,
+                    candidate.bounds.bottom,
+                )
+                for candidate in candidates
+            ]
+            logger.info(
+                "browser_handoff stage=window_match_rejected hwnd=%s candidates=%d "
+                "native_bounds=%s candidate_bounds=%s",
+                token.hwnd,
+                len(candidates),
+                native_bounds,
+                candidate_bounds,
+            )
             return None
         with self._lock:
             now = self.now()

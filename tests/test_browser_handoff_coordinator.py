@@ -34,6 +34,18 @@ class DiagnosticTracker(FakeTracker):
         }
 
 
+class CompletedOnlyTracker:
+    def __init__(self, token):
+        self.token = token
+
+    def claim_active_move(self, *, now):
+        return None
+
+    def consume_eligible_move(self, *, now):
+        token, self.token = self.token, None
+        return token
+
+
 class FakeDesktop:
     def __init__(self):
         self.on_snapshot = lambda instance, message: None
@@ -147,6 +159,54 @@ class BrowserHandoffCoordinatorTests(unittest.TestCase):
             display_rect=PhysicalRect(0, 0, 2000, 1000),
             edge_region=configured_edge_region(PhysicalRect(0, 0, 2000, 1000), "left"),
             source_display_id="display-1", source_side="left", topology_version=4,
+        )
+
+        self.assertIsInstance(gesture_id, str)
+        self.assertEqual(desktop.requests[0][0:2], ("browser-1", 7))
+
+    def test_logs_geometry_when_exact_window_match_is_rejected(self):
+        desktop = FakeDesktop()
+        desktop.candidate = replace(
+            desktop.candidate,
+            bounds=PhysicalRect(1000, 200, 1800, 900),
+        )
+        coordinator = BrowserHandoffCoordinator(
+            desktop=desktop,
+            move_tracker=FakeTracker(MoveToken(
+                1, 11, 12, PhysicalRect(0, 0, 800, 700), 100.0,
+            )),
+            to_physical=lambda window: window,
+            send_candidate=lambda candidate: None,
+            now=lambda: 100.0,
+        )
+
+        with self.assertLogs("app.browser_handoff.coordinator", level="INFO") as captured:
+            result = coordinator.claim_edge(
+                display_rect=PhysicalRect(0, 0, 2000, 1000),
+                edge_region=configured_edge_region(PhysicalRect(0, 0, 2000, 1000), "left"),
+                source_display_id="display-1", source_side="left", topology_version=4,
+            )
+
+        self.assertIsNone(result)
+        output = "\n".join(captured.output)
+        self.assertIn("native_bounds=(0, 0, 800, 700)", output)
+        self.assertIn("candidate_bounds=[(1000, 200, 1800, 900)]", output)
+
+    def test_consumes_completed_move_when_edge_arrives_after_source_release(self):
+        desktop = FakeDesktop()
+        token = MoveToken(1, 11, 12, desktop.candidate.bounds, 100.0)
+        coordinator = BrowserHandoffCoordinator(
+            desktop=desktop,
+            move_tracker=CompletedOnlyTracker(token),
+            to_physical=lambda window: window,
+            send_candidate=lambda candidate: None,
+            now=lambda: 100.0,
+        )
+
+        gesture_id = coordinator.claim_edge(
+            display_rect=PhysicalRect(0, 0, 2000, 1000),
+            edge_region=configured_edge_region(PhysicalRect(0, 0, 2000, 1000), "right"),
+            source_display_id="display-1", source_side="right", topology_version=4,
         )
 
         self.assertIsInstance(gesture_id, str)
