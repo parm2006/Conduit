@@ -20,6 +20,20 @@ class FakeTracker:
         return token
 
 
+class DiagnosticTracker(FakeTracker):
+    def diagnostic_snapshot(self):
+        return {
+            "events": {"move_start": 2, "location_change": 12, "move_end": 2, "other": 0},
+            "events_without_session": 4,
+            "active_sessions": 0,
+            "tokens_pending": 0,
+            "tokens_created": 0,
+            "tokens_consumed": 0,
+            "tokens_expired": 0,
+            "last_decision": "rejected_resize",
+        }
+
+
 class FakeDesktop:
     def __init__(self):
         self.on_snapshot = lambda instance, message: None
@@ -58,6 +72,27 @@ class BrowserHandoffCoordinatorTests(unittest.TestCase):
             )
         self.assertIsNone(result)
         self.assertIn("move_token_missing", "\n".join(captured.output))
+
+    def test_logs_move_tracker_diagnostics_when_no_active_move_token_is_available(self):
+        desktop = FakeDesktop()
+        coordinator = BrowserHandoffCoordinator(
+            desktop=desktop,
+            move_tracker=DiagnosticTracker(None),
+            to_physical=lambda window: window,
+            send_candidate=lambda candidate: None,
+            now=lambda: 100.0,
+        )
+
+        with self.assertLogs("app.browser_handoff.coordinator", level="INFO") as captured:
+            coordinator.claim_edge(
+                display_rect=PhysicalRect(0, 0, 2000, 1000),
+                edge_region=configured_edge_region(PhysicalRect(0, 0, 2000, 1000), "right"),
+                source_display_id="display-1", source_side="right", topology_version=4,
+            )
+
+        output = "\n".join(captured.output)
+        self.assertIn("move_token_missing", output)
+        self.assertIn("rejected_resize", output)
 
     def test_matches_exact_window_and_publishes_after_snapshot_without_blocking_claim(self):
         desktop = FakeDesktop()

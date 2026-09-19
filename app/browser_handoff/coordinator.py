@@ -79,7 +79,17 @@ class BrowserHandoffCoordinator:
             return None
         token = self.move_tracker.claim_active_move(now=self.now())
         if token is None:
-            logger.info("browser_handoff stage=move_token_missing")
+            diagnostics = None
+            snapshot = getattr(self.move_tracker, "diagnostic_snapshot", None)
+            if snapshot is not None:
+                try:
+                    diagnostics = snapshot()
+                except Exception:
+                    diagnostics = {"error": "tracker_diagnostics_failed"}
+            logger.info(
+                "browser_handoff stage=move_token_missing diagnostics=%s",
+                diagnostics,
+            )
             return None
         if not window_in_activation_band(token.bounds, display_rect, edge_region):
             logger.info("browser_handoff stage=edge_band_rejected hwnd=%s", token.hwnd)
