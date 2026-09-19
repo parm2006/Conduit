@@ -129,6 +129,30 @@ test("metadata contains no URLs and stays bound to the native-host browser insta
   });
 });
 
+test("publishes initial metadata when the desktop bridge becomes ready", async () => {
+  const responses = [];
+  const port = { onMessage: { addListener(listener) { this.listener = listener; } }, onDisconnect: { addListener() {} }, postMessage(value) { responses.push(value); } };
+  const event = () => ({ addListener() {} });
+  const chrome = {
+    runtime: { connectNative() { return port; } },
+    windows: { onCreated: event(), onRemoved: event(), onFocusChanged: event(), onBoundsChanged: event(), async getAll() { return [{ id: 7, left: 1, top: 2, width: 3, height: 4, focused: true, incognito: false, state: "normal" }]; } },
+    tabs: { onCreated: event(), onRemoved: event(), onMoved: event(), onAttached: event(), onDetached: event(), onReplaced: event(), onUpdated: event() },
+  };
+
+  installWorker(chrome, { epoch: "instance-1" });
+  await port.onMessage.listener({ type: "bridge_ready", bridge_epoch: "desktop-epoch" });
+  await new Promise((resolve) => queueMicrotask(resolve));
+
+  assert.equal(responses[1].type, "browser_handoff_capabilities");
+  assert.deepEqual(responses[2], {
+    type: "browser_handoff_metadata", epoch: "instance-1", browser_instance_id: "instance-1",
+    revision: 1, coordinate_units: "browser_dip", windows: [{
+      window_id: 7, focused: true, incognito: false, state: "normal",
+      left: 1, top: 2, width: 3, height: 4,
+    }],
+  });
+});
+
 test("uses the desktop-issued bridge epoch for a receiver result", async () => {
   const responses = [];
   const port = { onMessage: { addListener(listener) { this.listener = listener; } }, onDisconnect: { addListener() {} }, postMessage(value) { responses.push(value); } };

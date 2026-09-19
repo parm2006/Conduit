@@ -154,6 +154,7 @@ export function installWorker(chrome, {
             browser_instance_id: browserInstanceId,
             receiver_epoch: receiverEpoch,
           });
+          bumpRevision();
         }
         return;
       }
