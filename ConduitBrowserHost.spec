@@ -14,7 +14,7 @@ a = Analysis(
     datas=[],
     hiddenimports=[
         "pywintypes", "ntsecuritycon", "win32api", "win32con", "win32file",
-        "win32pipe", "win32security", "win32ts",
+        "win32pipe", "win32security", "win32ts", "win32event",
     ],
     hookspath=[], hooksconfig={}, runtime_hooks=[], excludes=[], noarchive=False,
 )

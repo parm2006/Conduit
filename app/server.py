@@ -585,9 +585,13 @@ class ConduitServer:
         return accepted
 
     def on_browser_handoff_result(self, data):
-        if not isinstance(data, dict):
+        if not isinstance(data, dict) or data.get("type") != "browser_handoff_result":
             return False
-        accepted = self.cluster_browser_router.accept_result(data.get("session_id"), data)
+        # Transport fields are supplied by the authenticated NetworkServer;
+        # keep them out of the strict browser result payload validator.
+        payload = {key: value for key, value in data.items()
+                   if key not in {"type", "session_id", "peer_identity", "addr"}}
+        accepted = self.cluster_browser_router.accept_result(data.get("session_id"), payload)
         logger.info(
             "browser_handoff stage=result_received request=%s accepted=%s",
             data.get("request_id"), accepted,
@@ -603,8 +607,10 @@ class ConduitServer:
         )
 
     def _on_server_browser_result(self, _browser_instance_id, message):
+        if not isinstance(message, dict) or message.get("type") != "browser_handoff_result":
+            return False
         return self.cluster_browser_router.accept_result(
-            self.server_machine_id, message,
+            self.server_machine_id, {key: value for key, value in message.items() if key != "type"},
         )
 
     def _stage_local_browser_candidate(self, candidate):

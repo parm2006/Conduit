@@ -99,7 +99,9 @@ def _read_exact(handle, size):
     chunks = []
     remaining = size
     while remaining:
-        _error, chunk = win32file.ReadFile(handle, remaining)
+        buffer = win32file.AllocateReadBuffer(remaining)
+        count = _overlapped_transfer(handle, buffer, write=False)
+        chunk = bytes(buffer[:count])
         if not chunk:
             raise BridgeProtocolError("truncated_frame")
         chunks.append(chunk)
@@ -115,8 +117,41 @@ def read_pipe_message(handle):
 
 
 def write_pipe_message(handle, message):
-    _pywintypes, _ntsecuritycon, _win32api, _win32con, win32file, _win32pipe, _win32security, _win32ts = _win32()
-    win32file.WriteFile(handle, _encode_message(message))
+    payload = _encode_message(message)
+    if _overlapped_transfer(handle, payload, write=True) != len(payload):
+        raise BridgeProtocolError("incomplete_write")
+
+
+def _overlapped_transfer(handle, buffer, *, write):
+    """Independent read/write operations, each with its own completion event.
+
+    Synchronous handles serialize ReadFile and WriteFile even across threads:
+    an idle read can prevent the very request needed to produce its reply.
+    Keep the buffer and OVERLAPPED alive until this operation completes.
+    """
+    import win32event
+    pywintypes, _ntsecuritycon, _win32api, _win32con, win32file, _win32pipe, _win32security, _win32ts = _win32()
+    operation = pywintypes.OVERLAPPED()
+    operation.hEvent = win32event.CreateEvent(None, True, False, None)
+    try:
+        transfer = win32file.WriteFile if write else win32file.ReadFile
+        status, _result = transfer(handle, buffer, operation)
+        if status == 997:  # ERROR_IO_PENDING
+            # Wait on this operation, not the pipe handle. A concurrent close
+            # may invalidate the handle before GetOverlappedResult is called;
+            # the buffer must nevertheless survive until cancellation completes.
+            win32event.WaitForSingleObject(operation.hEvent, win32event.INFINITE)
+        return win32file.GetOverlappedResult(handle, operation, True)
+    finally:
+        operation.hEvent.Close()
+
+
+def _cancel_io(handle):
+    if handle is not None and os.name == "nt":
+        try:
+            _win32()[4].CancelIoEx(handle, None)
+        except Exception:
+            pass
 
 
 class BridgeConnection:
@@ -150,6 +185,7 @@ class BridgeConnection:
         if self._closed.is_set():
             return
         self._closed.set()
+        _cancel_io(self.handle)
         try:
             self._outbound.put_nowait(None)
         except queue.Full:
@@ -189,7 +225,7 @@ class NamedPipeClient:
                 self._handle = win32file.CreateFile(
                     self.pipe_name,
                     win32con.GENERIC_READ | win32con.GENERIC_WRITE,
-                    0, None, win32con.OPEN_EXISTING, 0, None,
+                    0, None, win32con.OPEN_EXISTING, win32con.FILE_FLAG_OVERLAPPED, None,
                 )
                 write_pipe_message(self._handle, hello)
                 return True
@@ -220,6 +256,7 @@ class NamedPipeClient:
     def close(self):
         handle, self._handle = self._handle, None
         if handle is not None and os.name == "nt":
+            _cancel_io(handle)
             try:
                 _pywintypes, _ntsecuritycon, _win32api, _win32con, win32file, _win32pipe, _win32security, _win32ts = _win32()
                 win32file.CloseHandle(handle)
@@ -278,8 +315,7 @@ class DesktopBridge:
         with self._lock:
             pending = self._pending_handle
             connections = tuple(self._connections)
-        # The listener uses PIPE_NOWAIT so it observes this event without a
-        # cross-thread CloseHandle (which can deadlock a synchronous connect).
+        # The listener owns cancellation/draining of its overlapped connect.
         for connection in connections:
             connection.close()
             if connection.handle is not None:
@@ -319,7 +355,6 @@ class DesktopBridge:
                 if self._stop.is_set():
                     self._close_handle(handle)
                     return
-                self._set_wait_mode(handle)
                 threading.Thread(
                     target=self._serve_connection,
                     args=(handle,),
@@ -381,9 +416,9 @@ class DesktopBridge:
         _pywintypes, _ntsecuritycon, _win32api, _win32con, _win32file, win32pipe, _win32security, _win32ts = _win32()
         return win32pipe.CreateNamedPipe(
             self.pipe_name,
-            win32pipe.PIPE_ACCESS_DUPLEX,
+            win32pipe.PIPE_ACCESS_DUPLEX | _win32con.FILE_FLAG_OVERLAPPED,
             win32pipe.PIPE_TYPE_BYTE | win32pipe.PIPE_READMODE_BYTE |
-            win32pipe.PIPE_NOWAIT | win32pipe.PIPE_REJECT_REMOTE_CLIENTS,
+            win32pipe.PIPE_WAIT | win32pipe.PIPE_REJECT_REMOTE_CLIENTS,
             self.max_connections,
             MAX_BRIDGE_MESSAGE_BYTES,
             MAX_BRIDGE_MESSAGE_BYTES,
@@ -392,36 +427,40 @@ class DesktopBridge:
         )
 
     def _connect_pipe(self, handle):
-        pywintypes, _ntsecuritycon, _win32api, _win32con, _win32file, win32pipe, _win32security, _win32ts = _win32()
-        while not self._stop.is_set():
+        import win32event
+        pywintypes, _ntsecuritycon, _win32api, _win32con, win32file, win32pipe, _win32security, _win32ts = _win32()
+        operation = pywintypes.OVERLAPPED()
+        operation.hEvent = win32event.CreateEvent(None, True, False, None)
+        pending = False
+        try:
             try:
-                win32pipe.ConnectNamedPipe(handle, None)
-                return True
+                result = win32pipe.ConnectNamedPipe(handle, operation)
+                pending = result == 997  # ERROR_IO_PENDING
             except pywintypes.error as error:
                 code = getattr(error, "winerror", None)
                 if code == 535:  # ERROR_PIPE_CONNECTED
                     return True
-                if code == 536:  # ERROR_PIPE_LISTENING
-                    time.sleep(0.025)
-                    continue
-                if code == 232:  # ERROR_NO_DATA, disconnected before hello
-                    try:
-                        win32pipe.DisconnectNamedPipe(handle)
-                    except Exception:
-                        pass
-                    continue
-                raise
-        return False
+                if code != 997:
+                    raise
+                pending = True
+            while pending and not self._stop.is_set():
+                if win32event.WaitForSingleObject(operation.hEvent, 50) == win32event.WAIT_OBJECT_0:
+                    win32file.GetOverlappedResult(handle, operation, True)
+                    pending = False
+            return not self._stop.is_set()
+        finally:
+            if pending:
+                _cancel_io(handle)
+                try:
+                    win32file.GetOverlappedResult(handle, operation, True)
+                except pywintypes.error:
+                    pass
+            operation.hEvent.Close()
 
     @staticmethod
     def _client_pid(handle):
         _pywintypes, _ntsecuritycon, _win32api, _win32con, _win32file, win32pipe, _win32security, _win32ts = _win32()
         return int(win32pipe.GetNamedPipeClientProcessId(handle))
-
-    @staticmethod
-    def _set_wait_mode(handle):
-        _pywintypes, _ntsecuritycon, _win32api, _win32con, _win32file, win32pipe, _win32security, _win32ts = _win32()
-        win32pipe.SetNamedPipeHandleState(handle, win32pipe.PIPE_WAIT, None, None)
 
     @staticmethod
     def _close_handle(handle):

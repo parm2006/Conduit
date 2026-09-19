@@ -3,6 +3,24 @@ import assert from "node:assert/strict";
 
 import { MetadataCoalescer, RequestCoordinator, installWorker, resultEnvelope } from "../background.js";
 
+test("desktop pipe loss disconnects the native port so bounded reconnect can run", async () => {
+  const timers = [];
+  let disconnected = 0;
+  const port = { onMessage: { addListener(listener) { this.listener = listener; } }, onDisconnect: { addListener(listener) { this.listener = listener; } },
+    postMessage() {}, disconnect() { disconnected += 1; } };
+  const event = () => ({ addListener() {} });
+  const chrome = {
+    runtime: { connectNative() { return port; } },
+    windows: { onCreated: event(), onRemoved: event(), onFocusChanged: event(), onBoundsChanged: event() },
+    tabs: { onCreated: event(), onRemoved: event(), onMoved: event(), onAttached: event(), onDetached: event(), onReplaced: event(), onUpdated: event() },
+  };
+  installWorker(chrome, { epoch: "instance-1", setTimeoutFn: (callback, delay) => timers.push({ callback, delay }) });
+  await port.onMessage.listener({ type: "browser_handoff_error", reason: "bridge_disconnected" });
+  assert.equal(disconnected, 1);
+  assert.equal(timers.length, 1);
+  assert.equal(timers[0].delay, 250);
+});
+
 test("explicit refresh queries fresh bounds and echoes its request without relabelling an older query", async () => {
   const responses = [];
   const queries = [];

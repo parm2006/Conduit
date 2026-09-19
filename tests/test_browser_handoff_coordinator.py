@@ -333,7 +333,9 @@ class BrowserHandoffCoordinatorTests(unittest.TestCase):
         self.claim()
         self.tracker.observe(EVENT_SYSTEM_MOVESIZEEND, hwnd=1, process_id=99, process_created=100,
                              bounds=self.desktop.candidate.bounds, timestamp=self.clock.now(), left_button_down=False)
-        self.assertIn("outcome=move_invalidated", self.run_task())
+        logs = self.run_task()
+        self.assertIn("outcome=move_invalidated", logs)
+        self.assertIn("process_identity_changed", logs)
         self.assertEqual(self.sent, [])
 
 

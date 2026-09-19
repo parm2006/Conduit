@@ -140,6 +140,7 @@ export function installWorker(chrome, {
     });
   }
   const connect = () => {
+    receiverEpoch = null;
     const connectedPort = chrome.runtime.connectNative("com.conduit.browser_handoff");
     port = connectedPort;
     connected = true;
@@ -148,6 +149,12 @@ export function installWorker(chrome, {
     });
     connectedPort.onMessage.addListener(async (message) => {
       if (port !== connectedPort) return;
+      if (message?.type === "browser_handoff_error" && message.reason === "bridge_disconnected") {
+        connectedPort.disconnect();
+        // Local disconnect does not fire onDisconnect on this end of a Port.
+        handleDisconnect();
+        return;
+      }
       if (message?.type === "bridge_ready") {
         receiverEpoch = typeof message.bridge_epoch === "string" && message.bridge_epoch
           ? message.bridge_epoch : null;
@@ -192,14 +199,18 @@ export function installWorker(chrome, {
         }
       }
     });
-    connectedPort.onDisconnect.addListener(() => {
+    function handleDisconnect() {
       void chrome.runtime.lastError;
-      if (port === connectedPort) connected = false;
+      if (port !== connectedPort) return;
+      connected = false;
+      receiverEpoch = null;
+      port = null;
       if (reconnects >= maxReconnects) return;
       const delay = 250 * (2 ** reconnects);
       reconnects += 1;
       setTimeoutFn(connect, delay);
-    });
+    }
+    connectedPort.onDisconnect.addListener(handleDisconnect);
   };
   connect();
   return { epoch, coordinator, get port() { return port; } };

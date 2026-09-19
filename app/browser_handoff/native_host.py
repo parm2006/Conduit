@@ -144,8 +144,14 @@ class NativeHost:
             try:
                 message = bridge.receive()
             except (StopIteration, BrokenPipeError, OSError):
-                return
+                message = None
             if message is None:
+                if not stop_reader.is_set():
+                    try:
+                        with stdout_lock:
+                            write_message(stdout, NativeHost._error("bridge_disconnected"))
+                    except (NativeMessageError, BrokenPipeError, OSError):
+                        pass
                 return
             try:
                 with stdout_lock:

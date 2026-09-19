@@ -136,14 +136,23 @@ class ClusterBrowserRouter:
             return None
         dispatch = None
         with self._lock:
-            if self._stopped or not self.endpoint_available(destination_session_id):
+            if self._stopped:
+                logger.info("browser_handoff stage=edge_authorization_rejected reason=router_stopped")
+                return None
+            if not self.endpoint_available(destination_session_id):
+                logger.info("browser_handoff stage=edge_authorization_rejected reason=destination_endpoint_unavailable")
                 return None
             destination = self._capabilities.get(destination_session_id)
-            if destination is None or destination.machine_id != destination_machine_id:
+            if destination is None:
+                logger.info("browser_handoff stage=edge_authorization_rejected reason=destination_capability_missing")
+                return None
+            if destination.machine_id != destination_machine_id:
+                logger.info("browser_handoff stage=edge_authorization_rejected reason=destination_identity_mismatch")
                 return None
             if source_session_id != self.server_session_id:
                 source = self._capabilities.get(source_session_id)
                 if source is None or source.machine_id != source_machine_id:
+                    logger.info("browser_handoff stage=edge_authorization_rejected reason=source_capability_missing_or_mismatched")
                     return None
             self._topology_version = topology_version
             ticket = secrets.token_hex(16)

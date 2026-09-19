@@ -8,6 +8,15 @@ EXTENSION = ROOT / "extension" / "ConduitBrowserHandoff"
 
 
 class BrowserHandoffPackagingTests(unittest.TestCase):
+    def test_host_updater_rebuilds_to_unique_path_and_preserves_registration_origins(self):
+        updater = ROOT / "scripts" / "update_browser_handoff_dev.ps1"
+        self.assertTrue(updater.is_file(), "both PCs need a native-host rebuild command")
+        script = updater.read_text(encoding="utf-8")
+        for required in ("BuildOnly", "NewGuid", "PyInstaller", "ConduitBrowserHost.spec", "allowed_origins", "Copy-Item", "$Manifest.path =", "build_browser_extension.ps1"):
+            self.assertIn(required, script)
+        self.assertNotIn("Stop-Process", script)
+        self.assertNotIn("Remove-Item", script)
+
     def test_shipping_manifest_and_popup_are_present_without_diagnostic_probe(self):
         manifest = json.loads((EXTENSION / "manifest.json").read_text(encoding="utf-8"))
 
@@ -33,4 +42,3 @@ class BrowserHandoffPackagingTests(unittest.TestCase):
         self.assertIn("conduit_browser_host.py", spec)
         self.assertIn("ValidatePattern", registration)
         self.assertIn("chrome-extension://", registration)
-

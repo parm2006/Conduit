@@ -6,6 +6,7 @@ import subprocess
 import sys
 import unittest
 import uuid
+import threading
 
 from app.browser_handoff.native_host import (
     MAX_NATIVE_MESSAGE_BYTES,
@@ -76,6 +77,12 @@ class FakeBridge:
 
 
 class NativeHostTests(unittest.TestCase):
+    def test_desktop_disconnect_is_reported_without_waiting_for_more_browser_input(self):
+        stdout = io.BytesIO()
+        NativeHost._relay_desktop_messages(FakeBridge(incoming=(None,)), stdout, threading.Lock(), threading.Event())
+        stdout.seek(0)
+        self.assertEqual(read_message(stdout), {"type": "browser_handoff_error", "reason": "bridge_disconnected"})
+
     def test_console_entrypoint_uses_binary_stdout_and_never_echoes_url_on_disconnect(self):
         payload = json.dumps({
             "type": "browser_handoff_hello", "browser_instance_id": "instance-1",

@@ -124,12 +124,14 @@ class BrowserHandoffCoordinator:
             while self._alive(task) and completion is not None and completion.ended_at is None:
                 if completion.invalidated:
                     outcome = "move_invalidated"
+                    self._log_invalidation(task, completion)
                     return
                 self._pause(task)
             if not self._alive(task):
                 return
             if completion is not None and completion.invalidated:
                 outcome = "move_invalidated"
+                self._log_invalidation(task, completion)
                 return
             ended_at = completion.ended_at if completion is not None else task.token.completed_at
             task.stages["move_end"] = ended_at
@@ -228,6 +230,11 @@ class BrowserHandoffCoordinator:
             task.stages["finished"] = self.now()
             logger.info("browser_handoff stage=gesture_summary gesture=%s outcome=%s timestamps=%s",
                         task.gesture_id[:8], outcome, task.stages)
+
+    def _log_invalidation(self, task, completion):
+        self._stage(task, "move_invalidated", reason=completion.invalidation_reason,
+                    start_size=(completion.start_bounds.width, completion.start_bounds.height),
+                    end_size=(completion.latest_bounds.width, completion.latest_bounds.height))
 
     def handle_snapshot(self, instance_id, message):
         if type(message) is not dict or type(instance_id) is not str:

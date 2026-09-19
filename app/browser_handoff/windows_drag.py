@@ -52,6 +52,7 @@ class _MoveSession:
     claimed: bool = False
     ended_at: float | None = None
     invalidated: bool = False
+    invalidation_reason: str | None = None
 
 
 class MoveTracker:
@@ -93,6 +94,7 @@ class MoveTracker:
                 previous = self._sessions.get(hwnd)
                 if previous is not None:
                     previous.invalidated = True
+                    previous.invalidation_reason = "session_replaced"
                 self._event_counts["move_start"] += 1
                 self._sessions[hwnd] = _MoveSession(
                     hwnd,
@@ -134,6 +136,10 @@ class MoveTracker:
             self._sessions.pop(hwnd, None)
             session.latest_bounds = bounds
             session.invalidated = session.resized or (process_id, process_created) != (session.process_id, session.process_created)
+            if (process_id, process_created) != (session.process_id, session.process_created):
+                session.invalidation_reason = "process_identity_changed"
+            elif session.resized:
+                session.invalidation_reason = "size_changed"
             session.ended_at = timestamp
             if session.claimed:
                 self._last_decision = "token_already_claimed"

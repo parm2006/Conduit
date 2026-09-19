@@ -21,6 +21,35 @@ def result(ticket, *, request_id="a" * 32, epoch="receiver-1"):
 
 
 class ClusterBrowserRouterTests(unittest.TestCase):
+    def test_network_result_boundary_removes_only_transport_fields(self):
+        from app.server import ConduitServer
+        from types import SimpleNamespace
+        ticket = self.router.authorize_edge("client-a-session", "client-a", "client-b-session", "client-b", 7)
+        self.assertTrue(self.router.accept_request("client-a-session", request(ticket)))
+        server = SimpleNamespace(cluster_browser_router=self.router)
+        message = {**result(ticket), "type": "browser_handoff_result", "session_id": "client-b-session",
+                   "peer_identity": "client-b", "addr": ("127.0.0.1", 123)}
+        self.assertFalse(ConduitServer.on_browser_handoff_result(server, {**message, "url": "https://unexpected.test"}))
+        self.assertFalse(ConduitServer.on_browser_handoff_result(server, {**message, "session_id": "attacker"}))
+        self.assertTrue(ConduitServer.on_browser_handoff_result(server, message))
+
+    def test_local_result_boundary_removes_native_message_type(self):
+        from app.server import ConduitServer
+        from types import SimpleNamespace
+        self.router.register_capability("server", "server", "receiver-1", "browser-server")
+        ticket = self.router.authorize_edge("client-a-session", "client-a", "server", "server", 7)
+        self.assertTrue(self.router.accept_request("client-a-session", request(ticket, destination="server")))
+        server = SimpleNamespace(cluster_browser_router=self.router, server_machine_id="server")
+        message = {**result(ticket), "type": "browser_handoff_result"}
+        self.assertTrue(ConduitServer._on_server_browser_result(server, "browser-server", message))
+
+    def test_missing_receiver_capability_logs_specific_rejection(self):
+        router = ClusterBrowserRouter(server_session_id="server", endpoint_available=lambda session: True,
+                                      send=lambda *args: True, enqueue=lambda job: None, now=lambda: 100.0)
+        with self.assertLogs("app.browser_handoff.cluster_router", level="INFO") as logs:
+            self.assertIsNone(router.authorize_edge("server", "server", "client-session", "client", 7))
+        self.assertIn("destination_capability_missing", str(logs.output))
+
     def setUp(self):
         self.clock = [100.0]
         self.queued = []
