@@ -3,7 +3,7 @@ import { captureWindow } from "./snapshot.js";
 import { validateRequest } from "./protocol.js";
 
 export class MetadataCoalescer {
-  constructor({ schedule = queueMicrotask, publish }) {
+  constructor({ schedule = (callback) => queueMicrotask(callback), publish }) {
     this.schedule = schedule;
     this.publish = publish;
     this.pending = false;

@@ -15,6 +15,23 @@ test("coalesces an event burst into one metadata publish", async () => {
   assert.equal(publishes, 1);
 });
 
+test("uses queueMicrotask without binding the browser global as a method", () => {
+  const original = globalThis.queueMicrotask;
+  let invoked = false;
+  globalThis.queueMicrotask = function (callback) {
+    assert.equal(this, undefined);
+    invoked = true;
+    callback();
+  };
+  try {
+    const coalescer = new MetadataCoalescer({ publish: async () => {} });
+    coalescer.request();
+    assert.equal(invoked, true);
+  } finally {
+    globalThis.queueMicrotask = original;
+  }
+});
+
 test("normalizes internal outcomes into the URL-free result envelope", () => {
   const envelope = resultEnvelope("a".repeat(32), "epoch-1", "ticket-1", {
     status: "partial", opened_count: 1, total_count: 2,
