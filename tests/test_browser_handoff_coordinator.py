@@ -41,6 +41,24 @@ class FakeDesktop:
 
 
 class BrowserHandoffCoordinatorTests(unittest.TestCase):
+    def test_logs_when_no_active_move_token_is_available(self):
+        desktop = FakeDesktop()
+        coordinator = BrowserHandoffCoordinator(
+            desktop=desktop,
+            move_tracker=FakeTracker(None),
+            to_physical=lambda window: window,
+            send_candidate=lambda candidate: None,
+            now=lambda: 100.0,
+        )
+        with self.assertLogs("app.browser_handoff.coordinator", level="INFO") as captured:
+            result = coordinator.claim_edge(
+                display_rect=PhysicalRect(0, 0, 2000, 1000),
+                edge_region=configured_edge_region(PhysicalRect(0, 0, 2000, 1000), "right"),
+                source_display_id="display-1", source_side="right", topology_version=4,
+            )
+        self.assertIsNone(result)
+        self.assertIn("move_token_missing", "\n".join(captured.output))
+
     def test_matches_exact_window_and_publishes_after_snapshot_without_blocking_claim(self):
         desktop = FakeDesktop()
         published = []

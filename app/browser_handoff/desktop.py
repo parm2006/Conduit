@@ -1,5 +1,6 @@
 """Desktop-side lifecycle for authenticated local browser connections."""
 
+import logging
 import threading
 import time
 
@@ -9,6 +10,7 @@ from .window_match import BrowserWindowCandidate
 
 SNAPSHOT_RETENTION_SECONDS = 5.0
 MAX_RETAINED_SNAPSHOTS = 8
+logger = logging.getLogger(__name__)
 
 
 class BrowserHandoffDesktop:
@@ -59,6 +61,7 @@ class BrowserHandoffDesktop:
             if previous is not None and previous is not connection:
                 previous.close()
             self._connections[instance] = connection
+        logger.info("browser_handoff stage=bridge_connected instance=%s", instance)
 
     def on_disconnected(self, connection):
         instance = connection.hello.browser_instance_id
@@ -70,6 +73,7 @@ class BrowserHandoffDesktop:
                 for key in tuple(self._snapshots):
                     if key[0] == instance:
                         self._snapshots.pop(key, None)
+        logger.info("browser_handoff stage=bridge_disconnected instance=%s", instance)
 
     def on_message(self, connection, message):
         if type(message) is not dict:
@@ -87,6 +91,10 @@ class BrowserHandoffDesktop:
                     return False
                 self._metadata[instance] = dict(message)
                 self._metadata_received_at[instance] = time.monotonic()
+            logger.info(
+                "browser_handoff stage=metadata_received instance=%s windows=%d revision=%s",
+                instance, len(message["windows"]), message.get("revision"),
+            )
             return True
         if message.get("type") == "browser_handoff_snapshot":
             request_id = message.get("request_id")
@@ -105,6 +113,7 @@ class BrowserHandoffDesktop:
             callback_message = dict(message)
             callback_message["_bridge_epoch"] = connection.epoch
             self._notify(self.on_snapshot, instance, callback_message)
+            logger.info("browser_handoff stage=snapshot_received instance=%s request=%s", instance, request_id)
             return True
         if message.get("type") == "browser_handoff_capabilities":
             if (

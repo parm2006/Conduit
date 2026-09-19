@@ -1007,6 +1007,7 @@ class ConduitClient:
     def on_client_edge_hit(self, direction, ratio, region=None):
         with self._get_paste_route_lock():
             if not self.is_active:
+                logger.info("browser_handoff stage=client_edge_ignored reason=not_active")
                 return
 
             if region is not None or direction == self.input_handler.client_edge:
@@ -1039,8 +1040,16 @@ class ConduitClient:
                                 or (getattr(self, "active_topology_config", None) or {}).get("topology_version")
                             ),
                         )
-                    except Exception:
+                    except Exception as error:
+                        logger.info(
+                            "browser_handoff stage=client_edge_claim_exception reason=%s",
+                            type(error).__name__,
+                        )
                         browser_gesture_id = None
+                logger.info(
+                    "browser_handoff stage=client_edge_claimed gesture=%s direction=%s",
+                    browser_gesture_id, direction,
+                )
                 coordinator = getattr(self, "paste_coordinator", None)
                 if coordinator is not None:
                     coordinator.set_route(None, "client")
@@ -1075,7 +1084,19 @@ class ConduitClient:
 
     def _send_browser_candidate(self, candidate):
         message = {"type": "browser_handoff_candidate", "candidate": dict(candidate)}
-        return bool(self.control_network.send_message(message))
+        try:
+            sent = bool(self.control_network.send_message(message))
+        except Exception as error:
+            logger.info(
+                "browser_handoff stage=candidate_transport_exception reason=%s",
+                type(error).__name__,
+            )
+            return False
+        logger.info(
+            "browser_handoff stage=candidate_transport_sent gesture=%s sent=%s",
+            candidate.get("gesture_id"), sent,
+        )
+        return sent
 
     def on_local_copy(self, snapshot):
         work = {"snapshot": snapshot}

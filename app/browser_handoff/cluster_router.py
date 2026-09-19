@@ -7,6 +7,7 @@ lock so a cursor edge cannot wait for browser or network work.
 
 from dataclasses import dataclass
 import json
+import logging
 import secrets
 import threading
 
@@ -27,6 +28,7 @@ from .protocol import (
 MAX_STAGED_CANDIDATES_PER_SOURCE = 8
 MAX_STAGED_CANDIDATE_BYTES_PER_SOURCE = 4 * MAX_REQUEST_BYTES
 MAX_STAGED_CANDIDATES = 64
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -160,6 +162,10 @@ class ClusterBrowserRouter:
         if dispatch is not None:
             route, outbound = dispatch
             self.enqueue(lambda: self._deliver_request(route, outbound))
+        logger.info(
+            "browser_handoff stage=edge_route_created gesture=%s destination=%s dispatched=%s",
+            gesture_id, destination_session_id, dispatch is not None,
+        )
         return ticket
 
     def stage_candidate(self, source_session_id, source_machine_id, message):
@@ -214,6 +220,10 @@ class ClusterBrowserRouter:
         if dispatch is not None:
             route, outbound = dispatch
             self.enqueue(lambda: self._deliver_request(route, outbound))
+        logger.info(
+            "browser_handoff stage=candidate_staged gesture=%s source=%s dispatched=%s",
+            candidate.gesture_id, source_session_id, dispatch is not None,
+        )
         return True
 
     def accept_request(self, source_session_id, message):
@@ -355,6 +365,10 @@ class ClusterBrowserRouter:
         route.deadline_at = self.now() + OPERATION_DEADLINE_SECONDS
         self._active[request_id] = route
         self._candidates.pop(key, None)
+        logger.info(
+            "browser_handoff stage=request_dispatched gesture=%s request=%s destination=%s",
+            candidate.gesture_id, request_id, route.destination_session_id,
+        )
         return route, {
             "type": "browser_handoff_request",
             "request": request,

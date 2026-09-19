@@ -498,44 +498,76 @@ class ConduitServer:
         if session_id == self.server_machine_id:
             instance = message.get("browser_instance_id")
             request = message.get("request")
-            return bool(
+            sent = bool(
                 isinstance(instance, str)
                 and isinstance(request, dict)
                 and self.browser_handoff_desktop.submit_receiver_request(instance, request)
             )
+            logger.info(
+                "browser_handoff stage=destination_local_send type=%s instance=%s sent=%s",
+                message.get("type"), instance, sent,
+            )
+            return sent
         try:
-            return bool(self.control_network.send_message(message, session_id=session_id))
-        except Exception:
+            sent = bool(self.control_network.send_message(message, session_id=session_id))
+            logger.info(
+                "browser_handoff stage=destination_remote_send type=%s session=%s sent=%s",
+                message.get("type"), str(session_id)[:12], sent,
+            )
+            return sent
+        except Exception as error:
+            logger.info(
+                "browser_handoff stage=destination_remote_send_exception type=%s session=%s reason=%s",
+                message.get("type"), str(session_id)[:12], type(error).__name__,
+            )
             return False
 
     def on_browser_handoff_capabilities(self, data):
         if not isinstance(data, dict):
             return False
-        return self.cluster_browser_router.register_capability(
+        accepted = self.cluster_browser_router.register_capability(
             data.get("session_id"),
             data.get("peer_identity"),
             data.get("receiver_epoch"),
             data.get("browser_instance_id"),
         )
+        logger.info(
+            "browser_handoff stage=capability_received instance=%s accepted=%s",
+            data.get("browser_instance_id"), accepted,
+        )
+        return accepted
 
     def on_browser_handoff_request(self, data):
         if not isinstance(data, dict):
             return False
-        return self.cluster_browser_router.accept_request(data.get("session_id"), data)
+        accepted = self.cluster_browser_router.accept_request(data.get("session_id"), data)
+        request = data.get("request")
+        logger.info(
+            "browser_handoff stage=request_received request=%s accepted=%s",
+            request.get("request_id") if isinstance(request, dict) else None,
+            accepted,
+        )
+        return accepted
 
     def on_browser_handoff_candidate(self, data):
         if not isinstance(data, dict):
             return False
-        return self.cluster_browser_router.stage_candidate(
+        accepted = self.cluster_browser_router.stage_candidate(
             data.get("session_id"), data.get("peer_identity"), data.get("candidate"),
         )
+        candidate = data.get("candidate") or {}
+        logger.info(
+            "browser_handoff stage=candidate_received gesture=%s accepted=%s",
+            candidate.get("gesture_id"), accepted,
+        )
+        return accepted
 
     def _on_browser_handoff_accepted_edge(self, event):
         if not isinstance(event, dict) or not event.get("gesture_id"):
             return False
         source_session_id = event.get("source_session_id") or self.server_machine_id
         destination_session_id = event.get("destination_session_id") or self.server_machine_id
-        return self.cluster_browser_router.authorize_edge(
+        ticket = self.cluster_browser_router.authorize_edge(
             source_session_id,
             event.get("source_machine_id"),
             destination_session_id,
@@ -544,12 +576,23 @@ class ConduitServer:
             gesture_id=event.get("gesture_id"),
             source_display_id=event.get("source_display_id"),
             source_side=event.get("source_side"),
-        ) is not None
+        )
+        accepted = ticket is not None
+        logger.info(
+            "browser_handoff stage=edge_authorized gesture=%s accepted=%s",
+            event.get("gesture_id"), accepted,
+        )
+        return accepted
 
     def on_browser_handoff_result(self, data):
         if not isinstance(data, dict):
             return False
-        return self.cluster_browser_router.accept_result(data.get("session_id"), data)
+        accepted = self.cluster_browser_router.accept_result(data.get("session_id"), data)
+        logger.info(
+            "browser_handoff stage=result_received request=%s accepted=%s",
+            data.get("request_id"), accepted,
+        )
+        return accepted
 
     def _on_server_browser_capability(self, browser_instance_id, receiver_epoch):
         return self.cluster_browser_router.register_capability(
@@ -565,11 +608,16 @@ class ConduitServer:
         )
 
     def _stage_local_browser_candidate(self, candidate):
-        return self.cluster_browser_router.stage_candidate(
+        accepted = self.cluster_browser_router.stage_candidate(
             self.server_machine_id,
             self.server_machine_id,
             candidate,
         )
+        logger.info(
+            "browser_handoff stage=local_candidate_staged gesture=%s accepted=%s",
+            candidate.get("gesture_id"), accepted,
+        )
+        return accepted
 
     def _restore_topology(self, topology):
         if topology is not None:
@@ -1096,8 +1144,16 @@ class ConduitServer:
                         source_side=region.source_side,
                         topology_version=router.topology.version,
                     )
-                except Exception:
+                except Exception as error:
+                    logger.info(
+                        "browser_handoff stage=server_edge_claim_exception reason=%s",
+                        type(error).__name__,
+                    )
                     browser_gesture_id = None
+            logger.info(
+                "browser_handoff stage=server_edge_claimed gesture=%s display=%s side=%s",
+                browser_gesture_id, region.source_display_id, region.source_side,
+            )
             edge_kwargs = {"topology_version": router.topology.version}
             if browser_gesture_id is not None:
                 edge_kwargs["gesture_id"] = browser_gesture_id
@@ -1107,6 +1163,10 @@ class ConduitServer:
                 region.source_side,
                 ratio,
                 **edge_kwargs,
+            )
+            logger.info(
+                "browser_handoff stage=server_edge_routed gesture=%s switched=%s",
+                browser_gesture_id, switched,
             )
             return switched
 

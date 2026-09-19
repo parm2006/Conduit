@@ -53,6 +53,16 @@ class Lifecycle:
 
 
 class TopologyProtocolTests(unittest.TestCase):
+    def test_client_browser_candidate_send_is_logged_with_transport_result(self):
+        client = ConduitClient.__new__(ConduitClient)
+        client.control_network = RecordingNetwork()
+        candidate = {"gesture_id": "a" * 32, "total_count": 2}
+
+        with self.assertLogs("app.client", level="INFO") as captured:
+            self.assertTrue(client._send_browser_candidate(candidate))
+
+        self.assertIn("candidate_transport_sent", "\n".join(captured.output))
+
     def test_client_topology_suspend_releases_input_and_disables_edges(self):
         events = []
         client = ConduitClient.__new__(ConduitClient)
