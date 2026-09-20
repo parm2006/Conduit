@@ -263,7 +263,7 @@ class WinEventMoveObserver:
     def start(self):
         if os.name != "nt":
             raise RuntimeError("WinEventMoveObserver is only available on Windows")
-        if self._thread is not None:
+        if self._thread is not None and self._thread.is_alive():
             raise RuntimeError("observer is already running")
         self._stop.clear()
         self._ready.clear()

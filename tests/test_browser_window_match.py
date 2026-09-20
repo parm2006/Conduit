@@ -3,6 +3,7 @@ import subprocess
 import sys
 import unittest
 from io import BytesIO
+from types import SimpleNamespace
 
 from app.browser_handoff.window_match import (
     BrowserWindowCandidate,
@@ -31,6 +32,19 @@ from scripts.probe_browser_handoff import (
 
 
 class MoveObserverLifecycleTests(unittest.TestCase):
+    @unittest.skipUnless(sys.platform == "win32", "requires Windows WinEvent hooks")
+    def test_restart_reaps_a_thread_that_exited_after_stop_timed_out(self):
+        observer = WinEventMoveObserver()
+        self.addCleanup(observer.stop)
+        alive = [True]
+        observer._thread = SimpleNamespace(join=lambda timeout: None, is_alive=lambda: alive[0])
+        observer.stop()
+        with self.assertRaises(RuntimeError):
+            observer.start()
+        alive[0] = False
+        observer.start()
+        self.assertTrue(observer.diagnostic_snapshot()["running"])
+
     @unittest.skipUnless(sys.platform == "win32", "requires Windows WinEvent hooks")
     def test_stopped_observer_can_start_with_fresh_stop_and_ready_state(self):
         observer = WinEventMoveObserver()
