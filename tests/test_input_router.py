@@ -1,5 +1,6 @@
 import threading
 import unittest
+from unittest.mock import patch
 from types import SimpleNamespace
 
 from app.display_topology import (
@@ -146,6 +147,74 @@ def acknowledge_latest(router, session, log, *, topology_version=None):
 
 
 class InputRouterTests(unittest.TestCase):
+    def record_browser_events(self):
+        events, received = [], threading.Event()
+        def record(event):
+            events.append(event)
+            received.set()
+        self.router._accepted_edge = record
+        return events, received
+
+    def test_browser_authorization_preserves_cursor_and_held_input(self):
+        self.router._held_buttons.add('left')
+        original = self.router.state
+        events, received = self.record_browser_events()
+        self.assertTrue(self.router.authorize_browser_edge('server', 'server-primary',
+            'right', 0.5, topology_version=7, gesture_id='gesture'))
+        self.assertEqual(self.router.state, original)
+        self.assertEqual(self.router.held_buttons, ('left',))
+        self.assertEqual(self.log, [])
+        self.assertTrue(received.wait(1))
+        self.assertEqual(events[0]['destination_session_id'], 'session-1')
+
+    def test_browser_authorization_rejects_wrong_owner_version_and_destination(self):
+        events = []
+        self.router._accepted_edge = lambda event: events.append(event) or True
+        for kwargs in ({'session_id': 'forged'}, {'topology_version': 6},
+                       {'topology_version': True}):
+            options = dict(topology_version=7, gesture_id='gesture')
+            options.update(kwargs)
+            self.assertFalse(self.router.authorize_browser_edge('server',
+                'server-primary', 'right', 0.5, **options))
+        self.sessions['client-1'].ready = False
+        self.assertFalse(self.router.authorize_browser_edge('server', 'server-primary',
+            'right', 0.5, topology_version=7, gesture_id='gesture'))
+        self.assertEqual(events, [])
+        self.assertEqual(self.log, [])
+
+    def test_browser_authorization_remote_owner_stays_active(self):
+        original = RemoteClient('session-1', 'client-1', 'client-1-primary', (80, 700))
+        self.router.state = original
+        events, received = self.record_browser_events()
+        for session in ('stale-session', 'session-1'):
+            self.assertEqual(self.router.authorize_browser_edge('client-1',
+                'client-1-primary', 'left', 0.5, session_id=session,
+                topology_version=7, gesture_id='gesture'), session == 'session-1')
+        self.assertEqual(self.router.state, original)
+        self.assertEqual(self.log, [])
+        self.assertTrue(received.wait(1))
+        self.assertEqual(len(events), 1)
+        self.assertIsNone(events[0]['destination_session_id'])
+
+    def test_browser_edge_on_client_other_monitor_uses_machine_ownership(self):
+        self.router.state = RemoteClient('session-1', 'client-1', 'entry-monitor', (80, 700))
+        self.router._accepted_edge = lambda event: True
+        self.assertTrue(self.router.authorize_browser_edge('client-1',
+            'client-1-primary', 'left', 0.5, session_id='session-1',
+            topology_version=7, gesture_id='gesture'))
+
+    def test_browser_authorization_revalidates_before_queued_callback(self):
+        events = []
+        self.router._accepted_edge = events.append
+        with patch('app.input_router.threading.Thread') as thread:
+            self.assertTrue(self.router.authorize_browser_edge('server', 'server-primary',
+                'right', 0.5, topology_version=7, gesture_id='gesture'))
+            callback = thread.call_args.kwargs['target']
+            args = thread.call_args.kwargs.get('args', ())
+        self.router.state = Paused('topology apply')
+        callback(*args)
+        self.assertEqual(events, [])
+
     def setUp(self):
         self.log = []
         self.sessions = {

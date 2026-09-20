@@ -185,6 +185,7 @@ class ConduitClient:
         # Setup data network callbacks
         # Setup input callbacks
         self.input_handler.register_callback('client_edge_hit', self.on_client_edge_hit)
+        self.input_handler.register_callback('client_browser_edge_hit', self.on_client_browser_edge_hit)
 
         # Setup clipboard
         self.clipboard = ClipboardHandler(
@@ -1007,6 +1008,25 @@ class ConduitClient:
             self.input_handler.inject_key_release(key_data)
             return True
         return False
+
+    def on_client_browser_edge_hit(self, direction, ratio, region=None):
+        coordinator = getattr(self, 'browser_handoff_coordinator', None)
+        if (not self.is_active or region is None or coordinator is None
+                or not coordinator.move_tracker.has_active_move()):
+            return False
+        from app.browser_handoff.edge_band import configured_edge_region
+        topology = getattr(self, 'active_topology_config', None) or {}
+        version = topology.get('version', topology.get('topology_version'))
+        gesture = coordinator.claim_edge(
+            display_rect=region.source_rect,
+            edge_region=configured_edge_region(region.source_rect, direction),
+            source_display_id=region.source_display_id, source_side=direction,
+            topology_version=version, capture_active=True)
+        if gesture is not None:
+            self.control_network.send_message(dict(type='browser_handoff_edge',
+                source_display_id=region.source_display_id, source_side=direction, ratio=ratio,
+                topology_version=version, gesture_id=gesture))
+        return True
 
     def on_client_edge_hit(self, direction, ratio, region=None):
         with self._get_paste_route_lock():

@@ -102,7 +102,7 @@ class BrowserHandoffCoordinatorTests(unittest.TestCase):
     def observe(self, event, bounds=None):
         self.tracker.observe(event, hwnd=1, process_id=11, process_created=12,
                              bounds=bounds or self.desktop.candidate.bounds,
-                             timestamp=self.clock.now(), left_button_down=True)
+                             timestamp=self.clock.now(), left_button_down=True, browser_move=True)
 
     def start(self, completed=True):
         self.observe(EVENT_SYSTEM_MOVESIZESTART, PhysicalRect(0, 0, 800, 700))
@@ -110,9 +110,59 @@ class BrowserHandoffCoordinatorTests(unittest.TestCase):
         if completed:
             self.observe(EVENT_SYSTEM_MOVESIZEEND)
 
-    def claim(self):
+    def claim(self, **kwargs):
         return self.coordinator.claim_edge(display_rect=None, edge_region=None,
-            source_display_id="display-1", source_side="left", topology_version=4)
+            source_display_id="display-1", source_side="left", topology_version=4, **kwargs)
+
+    def test_active_capture_dispatches_without_move_end_and_only_once(self):
+        self.start(completed=False)
+        gesture = self.claim(capture_active=True)
+        self.assertIsNotNone(gesture)
+        self.assertIsNone(self.claim(capture_active=True))
+        self.assertIn("active_move_captured", self.run_task())
+        self.assertEqual(self.sent[0]["gesture_id"], gesture)
+        self.assertLess(self.clock.now(), 100.1)
+        self.assertIsNone(self.claim(capture_active=True))
+
+    def test_active_capture_does_not_consume_completed_move(self):
+        self.start()
+        self.assertIsNone(self.claim(capture_active=True))
+        self.assertEqual(self.work, [])
+
+    def test_active_capture_ignores_non_chrome_move(self):
+        self.tracker.observe(EVENT_SYSTEM_MOVESIZESTART, hwnd=1, process_id=11,
+            process_created=12, bounds=PhysicalRect(0, 0, 800, 700),
+            timestamp=100.0, left_button_down=True, browser_move=False)
+        self.observe(EVENT_OBJECT_LOCATIONCHANGE)
+        self.assertFalse(self.tracker.has_active_move())
+        self.assertIsNone(self.claim(capture_active=True))
+
+    def test_active_capture_rejects_resize_before_dispatch(self):
+        self.start(completed=False)
+        self.desktop.on_request = lambda: self.observe(
+            EVENT_OBJECT_LOCATIONCHANGE, PhysicalRect(0, 0, 900, 700))
+        self.claim(capture_active=True)
+        self.run_task()
+        self.assertEqual(self.sent, [])
+
+    def test_active_capture_rejects_process_change_before_dispatch(self):
+        self.start(completed=False)
+        def replace_process():
+            self.tracker.observe(EVENT_OBJECT_LOCATIONCHANGE, hwnd=1,
+                process_id=22, process_created=33, bounds=self.desktop.candidate.bounds,
+                timestamp=self.clock.now(), left_button_down=True)
+        self.desktop.on_request = replace_process
+        self.claim(capture_active=True)
+        self.run_task()
+        self.assertEqual(self.sent, [])
+
+    def test_active_capture_checks_native_size_again_before_dispatch(self):
+        self.start(completed=False)
+        self.desktop.on_request = lambda: setattr(self.coordinator, 'read_bounds',
+            lambda token: PhysicalRect(0, 0, 900, 700))
+        self.claim(capture_active=True)
+        self.run_task()
+        self.assertEqual(self.sent, [])
 
     def run_task(self):
         with self.assertLogs("app.browser_handoff.coordinator", level="INFO") as logs:

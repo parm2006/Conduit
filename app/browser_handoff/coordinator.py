@@ -28,6 +28,7 @@ class CorrelationTask:
     candidate: dict | None = None
     failure: str | None = None
     dispatch_started: bool = False
+    capture_active: bool = False
 
 
 def _spawn(callback):
@@ -77,9 +78,12 @@ class BrowserHandoffCoordinator:
         logger.info("browser_handoff stage=%s gesture=%s details=%s", stage, task.gesture_id[:8], details)
 
     def _alive(self, task):
-        return not task.cancelled.is_set() and self.now() < task.expires_at
+        completion = task.token.completion
+        return (not task.cancelled.is_set() and self.now() < task.expires_at
+                and not (completion is not None and completion.invalidated))
 
-    def claim_edge(self, *, display_rect, edge_region, source_display_id, source_side, topology_version):
+    def claim_edge(self, *, display_rect, edge_region, source_display_id, source_side, topology_version,
+                   capture_active=False):
         logger.info("browser_handoff stage=edge_claim display=%s side=%s topology=%s", source_display_id, source_side, topology_version)
         if (type(topology_version) is not int or topology_version < 0
                 or type(source_display_id) is not str or not source_display_id
@@ -95,9 +99,10 @@ class BrowserHandoffCoordinator:
                 logger.info("browser_handoff stage=pending_capacity_rejected")
                 return None
             claim_now = self.now()
-            token = self.move_tracker.claim_active_move(now=claim_now)
+            token = (self.move_tracker.claim_active_move(now=claim_now, browser_only=True)
+                     if capture_active else self.move_tracker.claim_active_move(now=claim_now))
             completed = False
-            if token is None:
+            if token is None and not capture_active:
                 consume = getattr(self.move_tracker, "consume_eligible_move", None)
                 token = consume(now=claim_now) if consume else None
                 completed = token is not None
@@ -105,7 +110,8 @@ class BrowserHandoffCoordinator:
                 logger.info("browser_handoff stage=move_token_missing diagnostics=%s", self.move_diagnostics())
                 return None
             task = CorrelationTask(secrets.token_hex(16), token, source_display_id,
-                                   source_side, topology_version, claim_now + self.token_ttl_seconds)
+                                   source_side, topology_version, claim_now + self.token_ttl_seconds,
+                                   capture_active=capture_active)
             self._tasks[task.gesture_id] = task
             self._stage(task, "edge_claimed")
             if completed:
@@ -121,7 +127,8 @@ class BrowserHandoffCoordinator:
         refresh_id = None
         try:
             completion = task.token.completion
-            while self._alive(task) and completion is not None and completion.ended_at is None:
+            while (not task.capture_active and self._alive(task)
+                   and completion is not None and completion.ended_at is None):
                 if completion.invalidated:
                     outcome = "move_invalidated"
                     self._log_invalidation(task, completion)
@@ -133,9 +140,9 @@ class BrowserHandoffCoordinator:
                 outcome = "move_invalidated"
                 self._log_invalidation(task, completion)
                 return
-            ended_at = completion.ended_at if completion is not None else task.token.completed_at
+            ended_at = (completion.ended_at if completion is not None else None) or task.token.completed_at
             task.stages["move_end"] = ended_at
-            self._stage(task, "move_end_observed", ended_at=ended_at)
+            self._stage(task, "active_move_captured" if task.capture_active else "move_end_observed", ended_at=ended_at)
             bounds = self.read_bounds(task.token)
             self._stage(task, "native_rect_read")
             native = NativeWindowObservation(task.token.hwnd, task.token.process_id,
@@ -157,6 +164,15 @@ class BrowserHandoffCoordinator:
                     self._pause(task)
                 if not self._alive(task):
                     return
+                if task.capture_active:
+                    # A native move continues while metadata crosses the pipe.
+                    # Correlate each revision against fresh, identity-checked bounds.
+                    bounds = self.read_bounds(task.token)
+                    if (bounds.width, bounds.height) != (task.token.bounds.width, task.token.bounds.height):
+                        outcome = "move_invalidated"
+                        return
+                    native = NativeWindowObservation(task.token.hwnd, task.token.process_id,
+                                                     task.token.process_created, bounds, self.now())
                 matched = match_window(native, candidates, now=self.now())
                 native_rect = (bounds.left, bounds.top, bounds.right, bounds.bottom)
                 for candidate in candidates:
@@ -197,6 +213,13 @@ class BrowserHandoffCoordinator:
                     outcome = "bridge_lost"
                     return
                 self._pause(task)
+            if task.capture_active and self._alive(task) and not task.failure:
+                # WinEvent delivery can lag the snapshot reply. Recheck native
+                # identity and size before committing a still-moving source.
+                bounds = self.read_bounds(task.token)
+                if (bounds.width, bounds.height) != (task.token.bounds.width, task.token.bounds.height):
+                    outcome = "move_invalidated"
+                    return
             with self._lock:
                 if not self._alive(task):
                     return
@@ -227,6 +250,9 @@ class BrowserHandoffCoordinator:
                 self._tasks.pop(task.gesture_id, None)
             if task.cancelled.is_set():
                 outcome = "cancelled"
+            elif task.token.completion is not None and task.token.completion.invalidated:
+                outcome = "move_invalidated"
+                self._log_invalidation(task, task.token.completion)
             task.stages["finished"] = self.now()
             logger.info("browser_handoff stage=gesture_summary gesture=%s outcome=%s timestamps=%s",
                         task.gesture_id[:8], outcome, task.stages)

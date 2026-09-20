@@ -236,6 +236,65 @@ class InputRouter:
             ).start()
         return accepted
 
+    def authorize_browser_edge(self, source_machine_id, source_display_id, side, ratio,
+                               *, session_id=None, topology_version=None, gesture_id=None):
+        """Authorize a browser transfer without any cursor or held-input effects."""
+        args = (source_machine_id, source_display_id, side, ratio)
+        kwargs = dict(session_id=session_id, topology_version=topology_version, gesture_id=gesture_id)
+        event = self._browser_edge_event(*args, **kwargs)
+        if not event or self._accepted_edge is None:
+            return False
+
+        def publish():
+            # Topology Apply/disconnect may run before this worker is scheduled.
+            # Revalidate and publish under the same ownership lock.
+            with self._lock:
+                if self._browser_edge_event(*args, **kwargs) == event:
+                    self._notify_accepted_edge(event)
+
+        threading.Thread(target=publish, name='browser-handoff-authorization', daemon=True).start()
+        return True
+
+    def _browser_edge_event(self, source_machine_id, source_display_id, side, ratio,
+                            *, session_id, topology_version, gesture_id):
+        with self._lock:
+            if (self._pause_requested.is_set() or isinstance(self.state, (Paused, Transitioning))
+                    or type(topology_version) is not int or topology_version != self.topology.version
+                    or type(gesture_id) is not str or not 1 <= len(gesture_id) <= 128
+                    or type(ratio) not in (int, float) or not 0 <= ratio <= 1):
+                return False
+            if isinstance(self.state, LocalServer):
+                if source_machine_id != self.topology.server_id or session_id is not None:
+                    return False
+            else:
+                if source_machine_id != self.state.machine_id or session_id != self.state.session_id:
+                    return False
+                if self.remote_viewport is not None and source_display_id != self.state.display_id:
+                    return False
+                source = self._session_for_machine(source_machine_id)
+                if (source is None or not getattr(source, 'ready', False)
+                        or source.session_id != session_id
+                        or source.peer_identity != source_machine_id):
+                    return False
+            try:
+                edge = self.topology.resolve_edge(source_machine_id, source_display_id, side, ratio)
+            except (KeyError, ValueError, TypeError):
+                return False
+            destination_id = edge.mapping.destination_machine_id
+            destination = None
+            if destination_id != self.topology.server_id:
+                destination = self._session_for_machine(destination_id)
+                if (destination is None or not getattr(destination, 'ready', False)
+                        or getattr(destination, 'control_lane', None) is None
+                        or destination.peer_identity != destination_id):
+                    return False
+            event = dict(source_machine_id=source_machine_id, source_display_id=source_display_id,
+                         source_side=side, source_session_id=session_id,
+                         destination_machine_id=destination_id,
+                         destination_session_id=destination.session_id if destination else None,
+                         topology_version=topology_version, gesture_id=gesture_id)
+        return event
+
     def forward_mouse_move(self, dx, dy):
         state = self._active_remote_snapshot()
         if state is None:

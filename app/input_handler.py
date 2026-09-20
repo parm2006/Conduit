@@ -309,7 +309,34 @@ class InputHandler:
         if detector is not None:
             detector.reset()
 
+    def _ctrl_drag_down(self):
+        if os.name != 'nt':
+            return False
+        import ctypes
+        return bool(ctypes.windll.user32.GetAsyncKeyState(0x11) & 0x8000
+                    and ctypes.windll.user32.GetAsyncKeyState(0x01) & 0x8000)
+
+    def _check_browser_edge(self, x, y, regions_name, event):
+        callbacks = getattr(self, 'callbacks', {}).get(event, ())
+        if not callbacks or not self._ctrl_drag_down():
+            return False
+        from app.browser_handoff.edge_band import activation_band, configured_edge_region
+        for region in getattr(self, regions_name, ()):
+            band = activation_band(region.source_rect,
+                                   configured_edge_region(region.source_rect, region.source_side))
+            if band.left <= x < band.right and band.top <= y < band.bottom:
+                for callback in callbacks:
+                    try:
+                        if callback(region.source_side,
+                                    edge_ratio(region.source_rect, region.source_side, x, y), region):
+                            return True
+                    except Exception as error:
+                        logger.error('Browser edge callback failed (%s)', error_name(error))
+        return False
+
     def _on_move_edge(self, x, y):
+        if self._check_browser_edge(x, y, 'topology_edge_regions', 'browser_edge_hit'):
+            return
         if hasattr(self, "topology_edge_regions"):
             for region in self.topology_edge_regions:
                 if self._point_hits_region(region, x, y):
@@ -466,6 +493,8 @@ class InputHandler:
         self.check_edge_hit(x, y)
 
     def check_edge_hit(self, x, y):
+        if self._check_browser_edge(x, y, 'client_topology_edge_regions', 'client_browser_edge_hit'):
+            return
         if hasattr(self, "client_topology_edge_regions"):
             for region in self.client_topology_edge_regions:
                 if self._point_hits_region(region, x, y):

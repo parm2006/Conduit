@@ -229,6 +229,7 @@ class ConduitServer:
         self.control_network.register_callback('connected', lambda d: self._on_socket_connected('control', d))
         self.control_network.register_callback('disconnected', lambda d: self._on_socket_disconnected('control', d))
         self.control_network.register_callback('switch_back', self.on_switch_back)
+        self.control_network.register_callback('browser_handoff_edge', self.on_browser_handoff_edge)
         self.control_network.register_callback('switch_ack', self.on_switch_ack)
         self.control_network.register_callback(
             'browser_handoff_capabilities', self.on_browser_handoff_capabilities,
@@ -276,6 +277,7 @@ class ConduitServer:
         
         # Setup input callbacks
         self.input_handler.register_callback('edge_hit', self.on_edge_hit)
+        self.input_handler.register_callback('browser_edge_hit', self.on_browser_edge_hit)
         self.input_handler.register_callback('mouse_move', self.on_mouse_move)
         self.input_handler.register_callback('mouse_click', self.on_mouse_click)
         self.input_handler.register_callback('mouse_scroll', self.on_mouse_scroll)
@@ -1117,6 +1119,34 @@ class ConduitServer:
 
     def _on_cursor_ownership_changed(self, _state):
         self._apply_clipboard_offer_route()
+
+    def on_browser_handoff_edge(self, data):
+        router = getattr(self, 'input_router', None)
+        if (getattr(self, 'routing_suspended', False) or router is None
+                or type(data) is not dict or data.get('type') != 'browser_handoff_edge'):
+            return False
+        return router.authorize_browser_edge(
+            data.get('peer_identity'), data.get('source_display_id'), data.get('source_side'),
+            data.get('ratio'), session_id=data.get('session_id'),
+            topology_version=data.get('topology_version'), gesture_id=data.get('gesture_id'))
+
+    def on_browser_edge_hit(self, direction, ratio, region=None):
+        router = getattr(self, 'input_router', None)
+        coordinator = getattr(self, 'browser_handoff_coordinator', None)
+        if (getattr(self, 'routing_suspended', False) or router is None or region is None
+                or coordinator is None or not coordinator.move_tracker.has_active_move()):
+            return False
+        from app.browser_handoff.edge_band import configured_edge_region
+        gesture = coordinator.claim_edge(
+            display_rect=region.source_rect,
+            edge_region=configured_edge_region(region.source_rect, direction),
+            source_display_id=region.source_display_id, source_side=direction,
+            topology_version=router.topology.version, capture_active=True)
+        if gesture is not None:
+            router.authorize_browser_edge(region.source_machine_id, region.source_display_id,
+                direction, ratio, topology_version=router.topology.version, gesture_id=gesture)
+        # A claimed native move stays reserved even after asynchronous dispatch.
+        return True
 
     def on_edge_hit(self, direction, ratio, region=None):
         if getattr(self, "routing_suspended", False):

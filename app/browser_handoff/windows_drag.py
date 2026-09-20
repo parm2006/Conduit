@@ -53,6 +53,7 @@ class _MoveSession:
     ended_at: float | None = None
     invalidated: bool = False
     invalidation_reason: str | None = None
+    browser_move: bool = False
 
 
 class MoveTracker:
@@ -87,6 +88,7 @@ class MoveTracker:
         bounds,
         timestamp,
         left_button_down,
+        browser_move=False,
     ):
         """Record one normalized WinEvent without touching the desktop."""
         with self._lock:
@@ -104,6 +106,7 @@ class MoveTracker:
                     bounds,
                     timestamp,
                     bool(left_button_down),
+                    browser_move=browser_move,
                 )
                 self._last_decision = "session_started"
                 return
@@ -125,6 +128,11 @@ class MoveTracker:
                 )
                 if bounds.width != session.start_bounds.width or bounds.height != session.start_bounds.height:
                     session.resized = True
+                    session.invalidated = True
+                    session.invalidation_reason = "size_changed"
+                if (process_id, process_created) != (session.process_id, session.process_created):
+                    session.invalidated = True
+                    session.invalidation_reason = "process_identity_changed"
                 if bounds.left != session.start_bounds.left or bounds.top != session.start_bounds.top:
                     session.moved = True
                 session.latest_bounds = bounds
@@ -141,7 +149,7 @@ class MoveTracker:
                 bounds.width != session.start_bounds.width
                 or bounds.height != session.start_bounds.height
             )
-            session.invalidated = session.resized or (process_id, process_created) != (session.process_id, session.process_created)
+            session.invalidated = session.invalidated or session.resized or (process_id, process_created) != (session.process_id, session.process_created)
             if (process_id, process_created) != (session.process_id, session.process_created):
                 session.invalidation_reason = "process_identity_changed"
             elif session.resized:
@@ -170,7 +178,13 @@ class MoveTracker:
                 self._tokens_created += 1
                 self._last_decision = "token_created"
 
-    def claim_active_move(self, *, now):
+    def has_active_move(self):
+        """Include claimed moves so Ctrl keeps suppressing KVM until drag end."""
+        with self._lock:
+            return any(session.browser_move and session.moved and session.left_button_observed and not session.invalidated
+                       for session in self._sessions.values())
+
+    def claim_active_move(self, *, now, browser_only=False):
         """Claim one qualifying in-progress move before injected button release.
 
         The claim is metadata-only. It does not touch the cursor or browser and
@@ -180,7 +194,8 @@ class MoveTracker:
         with self._lock:
             eligible = [
                 session for session in self._sessions.values()
-                if session.moved and session.left_button_observed and not session.resized and not session.claimed
+                if session.moved and session.left_button_observed and not session.invalidated and not session.resized and not session.claimed
+                and (not browser_only or session.browser_move)
             ]
             if not eligible:
                 return None
@@ -342,6 +357,7 @@ class WinEventMoveObserver:
                     bounds=bounds,
                     timestamp=time.monotonic(),
                     left_button_down=bool(user32.GetAsyncKeyState(VK_LBUTTON) & 0x8000),
+                    browser_move=(event == EVENT_SYSTEM_MOVESIZESTART and _is_chrome_process(process_id)),
                 )
             except Exception as error:  # callback errors must not disrupt input
                 self._increment_diagnostic("callback_errors")
@@ -381,6 +397,26 @@ class WinEventMoveObserver:
             for hook in self._hooks:
                 user32.UnhookWinEvent(hook)
             self._hooks.clear()
+
+
+def _is_chrome_process(process_id):
+    """Identify Chrome once at move start, off the input callback thread."""
+    kernel32 = ctypes.WinDLL('kernel32', use_last_error=True)
+    kernel32.OpenProcess.argtypes = [ctypes.wintypes.DWORD, ctypes.wintypes.BOOL, ctypes.wintypes.DWORD]
+    kernel32.OpenProcess.restype = ctypes.wintypes.HANDLE
+    kernel32.QueryFullProcessImageNameW.argtypes = [ctypes.wintypes.HANDLE, ctypes.wintypes.DWORD,
+                                                 ctypes.wintypes.LPWSTR, ctypes.POINTER(ctypes.wintypes.DWORD)]
+    kernel32.CloseHandle.argtypes = [ctypes.wintypes.HANDLE]
+    process = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, process_id)
+    if not process:
+        return False
+    try:
+        size = ctypes.wintypes.DWORD(32768)
+        path = ctypes.create_unicode_buffer(size.value)
+        return bool(kernel32.QueryFullProcessImageNameW(process, 0, path, ctypes.byref(size))
+                    and os.path.basename(path.value).lower() == 'chrome.exe')
+    finally:
+        kernel32.CloseHandle(process)
 
 
 def _event_name(event):

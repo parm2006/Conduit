@@ -114,10 +114,14 @@ export function installWorker(chrome, {
   const bumpRevision = () => { revision += 1; coalescer.request(); };
   // Register every listener before connecting or awaiting any browser work.
   for (const event of [
-    chrome.windows.onCreated, chrome.windows.onRemoved, chrome.windows.onFocusChanged, chrome.windows.onBoundsChanged,
+    chrome.windows.onCreated, chrome.windows.onRemoved, chrome.windows.onFocusChanged,
     chrome.tabs.onCreated, chrome.tabs.onRemoved, chrome.tabs.onMoved, chrome.tabs.onAttached,
     chrome.tabs.onDetached, chrome.tabs.onReplaced, chrome.tabs.onUpdated,
   ]) event.addListener(bumpRevision);
+  // Geometry is refreshed independently from tab-snapshot consistency. A
+  // continuing native drag must not invalidate an otherwise stable tab list.
+  // Native correlation checks current bounds and rejects resizing separately.
+  chrome.windows.onBoundsChanged.addListener(() => coalescer.request());
 
   const coordinator = new RequestCoordinator({
     open: (request) => openDestinationWindow(chrome, request, { browser }),

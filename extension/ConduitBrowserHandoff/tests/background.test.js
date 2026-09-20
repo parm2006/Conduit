@@ -90,6 +90,27 @@ test("explicit refresh queries fresh bounds and echoes its request without relab
   assert.equal(JSON.stringify(responses).includes("url"), false);
 });
 
+test("drag bounds changes publish geometry without invalidating a stable tab snapshot", async () => {
+  const h = connectionHarness();
+  const port = h.ports[0];
+  await port.onMessage.listener({ type: "bridge_ready", bridge_epoch: "desktop" });
+  await port.onMessage.listener({ type: "browser_handoff_metadata_request", request_id: "moving" });
+  const matchedRevision = port.messages.find(m => m.request_id === "moving").revision;
+  h.chrome.windows.onBoundsChanged.listener();
+  h.chrome.windows.get = async () => {
+    h.chrome.windows.onBoundsChanged.listener();
+    return { id: 7, incognito: false, tabs: [{ url: "https://example.test", active: true }] };
+  };
+  await port.onMessage.listener({ type: "browser_handoff_snapshot_request", window_id: 7, request_id: "snapshot" });
+  const snapshot = port.messages.find(m => m.request_id === "snapshot").snapshot;
+  assert.equal(snapshot.complete_capture, true);
+  assert.equal(snapshot.revision, matchedRevision);
+  assert.ok(port.messages.filter(m => m.type === "browser_handoff_metadata").length >= 3);
+  h.chrome.tabs.onUpdated.listener();
+  await port.onMessage.listener({ type: "browser_handoff_snapshot_request", window_id: 7, request_id: "changed" });
+  assert.notEqual(port.messages.find(m => m.request_id === "changed").snapshot.revision, matchedRevision);
+});
+
 test("coalesces an event burst into one metadata publish", async () => {
   const callbacks = [];
   let publishes = 0;
