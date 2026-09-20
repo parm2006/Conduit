@@ -1128,8 +1128,11 @@ class ConduitServer:
     def on_browser_edge_hit(self, direction, ratio, region=None):
         router = getattr(self, 'input_router', None)
         coordinator = getattr(self, 'browser_handoff_coordinator', None)
+        desktop = getattr(coordinator, 'desktop', None)
         if (getattr(self, 'routing_suspended', False) or router is None or region is None
-                or coordinator is None or not coordinator.move_tracker.has_active_move()):
+                or coordinator is None
+                or (desktop is not None and hasattr(desktop, "has_connections") and not desktop.has_connections)
+                or not coordinator.move_tracker.has_active_move()):
             return False
         from app.browser_handoff.edge_band import configured_edge_region
         gesture = coordinator.claim_edge(
@@ -1138,10 +1141,10 @@ class ConduitServer:
             source_display_id=region.source_display_id, source_side=direction,
             topology_version=router.topology.version, capture_active=True)
         if gesture is not None:
-            router.authorize_browser_edge(region.source_machine_id, region.source_display_id,
-                direction, ratio, topology_version=router.topology.version, gesture_id=gesture)
-        # A claimed native move stays reserved even after asynchronous dispatch.
-        return True
+            if router.authorize_browser_edge(region.source_machine_id, region.source_display_id,
+                direction, ratio, topology_version=router.topology.version, gesture_id=gesture):
+                return True
+        return False
 
     def on_edge_hit(self, direction, ratio, region=None):
         if getattr(self, "routing_suspended", False):

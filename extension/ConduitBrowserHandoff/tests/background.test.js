@@ -347,3 +347,21 @@ test("consumes the native disconnect error before scheduling a reconnect", () =>
   assert.equal(lastErrorReads, 1);
   assert.equal(timers[0].delay, 250);
 });
+
+test("closes window on browser_handoff_close_window message", async () => {
+  const removed = [];
+  const event = () => ({ addListener(listener) { this.listener = listener; } });
+  const port = { onMessage: event(), onDisconnect: event(), postMessage() {} };
+  const chrome = {
+    runtime: { connectNative() { return port; } },
+    windows: {
+      onCreated: event(), onRemoved: event(), onFocusChanged: event(), onBoundsChanged: event(),
+      async remove(windowId) { removed.push(windowId); },
+    },
+    tabs: { onCreated: event(), onRemoved: event(), onMoved: event(), onAttached: event(), onDetached: event(), onReplaced: event(), onUpdated: event() },
+  };
+  installWorker(chrome, { epoch: "instance" });
+  await port.onMessage.listener({ type: "browser_handoff_close_window", window_id: 123 });
+  assert.deepEqual(removed, [123]);
+});
+

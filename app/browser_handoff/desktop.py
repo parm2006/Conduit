@@ -238,6 +238,22 @@ class BrowserHandoffDesktop:
             connection = self._connections.get(instance)
             return connection is not None and connection.epoch == epoch
 
+    @property
+    def has_connections(self):
+        with self._lock:
+            return bool(self._connections)
+
+    def close_window(self, browser_instance_id, window_id, *, expected_epoch=None):
+        if type(window_id) is not int:
+            return False
+        with self._lock:
+            connection = self._connections.get(browser_instance_id)
+            if connection is None or (expected_epoch is not None and connection.epoch != expected_epoch):
+                return False
+            return bool(connection.send({
+                "type": "browser_handoff_close_window", "window_id": window_id,
+            }))
+
     def request_snapshot(self, browser_instance_id, window_id, request_id, *, expected_epoch=None):
         if type(window_id) is not int or type(request_id) is not str or not request_id:
             return False

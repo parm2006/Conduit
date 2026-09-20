@@ -36,6 +36,7 @@ class MoveToken:
     bounds: PhysicalRect
     completed_at: float
     completion: object = field(default=None, compare=False, repr=False)
+    close_requested: bool = False
 
 
 @dataclass
@@ -55,6 +56,7 @@ class _MoveSession:
     invalidation_reason: str | None = None
     browser_move: bool = False
     was_maximized: bool = False
+    close_requested: bool = False
 
 
 class MoveTracker:
@@ -90,6 +92,7 @@ class MoveTracker:
         timestamp,
         left_button_down,
         browser_move=False,
+        close_requested=False,
     ):
         """Record one normalized WinEvent without touching the desktop."""
         with self._lock:
@@ -115,6 +118,7 @@ class MoveTracker:
                     bool(left_button_down),
                     browser_move=browser_move,
                     was_maximized=was_maximized,
+                    close_requested=bool(close_requested),
                 )
                 self._last_decision = "session_started"
                 return
@@ -134,6 +138,8 @@ class MoveTracker:
                 session.left_button_observed = (
                     session.left_button_observed or bool(left_button_down)
                 )
+                if close_requested:
+                    session.close_requested = True
                 if bounds.width != session.start_bounds.width or bounds.height != session.start_bounds.height:
                     if session.was_maximized and session.browser_move:
                         session.was_maximized = False
@@ -186,6 +192,7 @@ class MoveTracker:
                         process_created=session.process_created,
                         bounds=session.latest_bounds,
                         completed_at=timestamp,
+                        close_requested=session.close_requested,
                     )
                 )
                 self._tokens_created += 1
@@ -214,6 +221,12 @@ class MoveTracker:
                 return None
             session = max(eligible, key=lambda item: item.started_at)
             session.claimed = True
+            if os.name == "nt":
+                try:
+                    if ctypes.windll.user32.GetAsyncKeyState(0x57) & 0x8000:
+                        session.close_requested = True
+                except Exception:
+                    pass
             self._tokens_created += 1
             self._last_decision = "active_token_claimed"
             return MoveToken(
@@ -223,6 +236,7 @@ class MoveTracker:
                 bounds=session.latest_bounds,
                 completed_at=now,
                 completion=session,
+                close_requested=session.close_requested,
             )
 
     def consume_eligible_move(self, *, now):
@@ -371,6 +385,7 @@ class WinEventMoveObserver:
                     timestamp=time.monotonic(),
                     left_button_down=bool(user32.GetAsyncKeyState(VK_LBUTTON) & 0x8000),
                     browser_move=(event == EVENT_SYSTEM_MOVESIZESTART and _is_chrome_process(process_id)),
+                    close_requested=bool(user32.GetAsyncKeyState(0x57) & 0x8000),
                 )
             except Exception as error:  # callback errors must not disrupt input
                 self._increment_diagnostic("callback_errors")

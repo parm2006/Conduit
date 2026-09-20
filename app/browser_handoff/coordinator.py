@@ -2,6 +2,7 @@
 
 from dataclasses import dataclass, field
 import logging
+import os
 import secrets
 import threading
 import time
@@ -29,6 +30,7 @@ class CorrelationTask:
     failure: str | None = None
     dispatch_started: bool = False
     capture_active: bool = False
+    close_source: bool = False
 
 
 def _spawn(callback):
@@ -89,6 +91,9 @@ class BrowserHandoffCoordinator:
                 or type(source_display_id) is not str or not source_display_id
                 or source_side not in {"left", "right", "top", "bottom"}):
             return None
+        if hasattr(self.desktop, "has_connections") and not self.desktop.has_connections:
+            logger.info("browser_handoff stage=claim_rejected reason=no_connected_extension")
+            return None
         with self._lock:
             for key, task in tuple(self._tasks.items()):
                 if not task.dispatch_started and not self._alive(task):
@@ -109,9 +114,16 @@ class BrowserHandoffCoordinator:
             if token is None:
                 logger.info("browser_handoff stage=move_token_missing diagnostics=%s", self.move_diagnostics())
                 return None
+            w_down = bool(getattr(token, "close_requested", False))
+            if not w_down and os.name == "nt":
+                try:
+                    import ctypes
+                    w_down = bool(ctypes.windll.user32.GetAsyncKeyState(0x57) & 0x8000)
+                except Exception:
+                    pass
             task = CorrelationTask(secrets.token_hex(16), token, source_display_id,
                                    source_side, topology_version, claim_now + self.token_ttl_seconds,
-                                   capture_active=capture_active)
+                                   capture_active=capture_active, close_source=w_down)
             self._tasks[task.gesture_id] = task
             self._stage(task, "edge_claimed")
             if completed:
@@ -237,6 +249,8 @@ class BrowserHandoffCoordinator:
             sent = bool(self.send_candidate(task.candidate))
             self._stage(task, "candidate_submitted", accepted=sent)
             outcome = "candidate_submitted" if sent else "candidate_submit_failed"
+            if sent and task.close_source:
+                self._close_source_window(task)
         except ConnectionError:
             outcome = "bridge_lost"
         except Exception as error:
@@ -256,6 +270,25 @@ class BrowserHandoffCoordinator:
             task.stages["finished"] = self.now()
             logger.info("browser_handoff stage=gesture_summary gesture=%s outcome=%s timestamps=%s",
                         task.gesture_id[:8], outcome, task.stages)
+
+    def _close_source_window(self, task):
+        matched = task.matched
+        closed = False
+        if matched and hasattr(self.desktop, "close_window"):
+            try:
+                closed = bool(self.desktop.close_window(
+                    matched.browser_instance_id, matched.window_id, expected_epoch=matched.bridge_epoch,
+                ))
+            except Exception:
+                closed = False
+        if os.name == "nt" and task.token and getattr(task.token, "hwnd", None):
+            try:
+                import ctypes
+                ctypes.windll.user32.PostMessageW(task.token.hwnd, 0x0010, 0, 0)  # WM_CLOSE
+                closed = True
+            except Exception:
+                pass
+        self._stage(task, "source_window_closed", success=closed)
 
     def _log_invalidation(self, task, completion):
         self._stage(task, "move_invalidated", reason=completion.invalidation_reason,

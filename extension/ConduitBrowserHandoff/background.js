@@ -182,6 +182,14 @@ export function installWorker(chrome, {
         }
         return;
       }
+      if (message?.type === "browser_handoff_close_window") {
+        if (typeof message.window_id === "number") {
+          try {
+            await chrome.windows.remove(message.window_id);
+          } catch { /* window may already be closed */ }
+        }
+        return;
+      }
       if (message?.type === "browser_handoff_snapshot_request") {
         try {
           const snapshot = await captureWindow(chrome, message.window_id, { revision: () => revision });

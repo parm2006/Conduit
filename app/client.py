@@ -1003,7 +1003,9 @@ class ConduitClient:
 
     def on_client_browser_edge_hit(self, direction, ratio, region=None):
         coordinator = getattr(self, 'browser_handoff_coordinator', None)
+        desktop = getattr(coordinator, 'desktop', None)
         if (not self.is_active or region is None or coordinator is None
+                or (desktop is not None and hasattr(desktop, "has_connections") and not desktop.has_connections)
                 or not coordinator.move_tracker.has_active_move()):
             return False
         from app.browser_handoff.edge_band import configured_edge_region
@@ -1018,7 +1020,8 @@ class ConduitClient:
             self.control_network.send_message(dict(type='browser_handoff_edge',
                 source_display_id=region.source_display_id, source_side=direction, ratio=ratio,
                 topology_version=version, gesture_id=gesture))
-        return True
+            return True
+        return False
 
     def on_client_edge_hit(self, direction, ratio, region=None):
         with self._get_paste_route_lock():
