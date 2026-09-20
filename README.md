@@ -1,6 +1,6 @@
-# Conduit 7.2.2
+# Conduit 7.3.0
 
-A fast Windows wireless KVM for sharing your mouse, keyboard, newest clipboard item, on-paste file relay, and low-latency native hardware video streaming across one Server and up to two Clients on the same local network.
+A fast Windows wireless KVM for sharing your mouse, keyboard, newest clipboard item, on-paste file relay, low-latency native hardware video streaming, and cross-machine browser window handoff across one Server and up to two Clients on the same local network.
 
 [![Download Latest Release](https://img.shields.io/github/v/release/parm2006/Conduit?label=Download%20Latest%20Release)](https://github.com/parm2006/Conduit/releases/latest)
 
@@ -8,6 +8,7 @@ A fast Windows wireless KVM for sharing your mouse, keyboard, newest clipboard i
 
 ## ✨ Features
 
+- **Cross-Machine Browser Window Handoff (Chrome Preview)**: Drag Google Chrome tabs and windows across connected PCs by simply dragging them to the screen edge. Copy tabs or cut/move windows across displays with dedicated keybinds.
 - **Multi-PC Control**: Seamless cursor and keyboard routing across one Server and up to two Clients with multi-monitor support.
 - **Hardware Input Pipeline**: Native hardware scan-code injection and 1:1 synchronized absolute cursor coordinate projection across machines.
 - **Native Hardware Video Streaming**: Native 60 FPS DXGI Desktop Duplication capture, hardware H.264 MFT encoding/decoding, AES-GCM encrypted UDP transport, and Direct3D 11 swapchain presentation.
@@ -30,6 +31,30 @@ Connection reload waits three seconds for Clients, restores accepted positions b
 2. **Start Server**: On your host PC, select **Server (Host)**, enter a shared password, and click **Start Server**.
 3. **Connect Clients**: On client PCs, enter the Server IP, port, and password, then click **Connect** (a third Client may replace one of the two connected Clients; unanswered requests close after 15 seconds).
 4. **Pair & Arrange**: Approve the pairing code on first connect, arrange the screens so edges touch, and select **Apply**.
+
+---
+
+## 🌐 Browser Window Handoff (Chrome Preview)
+
+Conduit supports bidirectional transfer of active Google Chrome tabs and windows across connected computers.
+
+### 🖱️ Gestures & Keybinds
+
+| Gesture / Hotkey | Action | Description |
+| --- | --- | --- |
+| **`Ctrl` + Drag Tab to Edge** | **Copy Window / Tabs** | Drag a Chrome tab or window to the configured screen edge while holding `Ctrl`. Opens the tabs on the adjacent PC while keeping your original window intact. |
+| **`Ctrl + W` + Drag Tab to Edge** | **Move Window / Tabs (Cut)** | Drag a Chrome tab or window to the screen edge while holding `Ctrl + W`. Opens the tabs on the adjacent PC and automatically closes the source window. |
+| **Normal Edge Transition** | **Standard KVM** | Moving the mouse or dragging any regular window to the screen edge seamlessly transitions the cursor/input without touching your browser. Conduit automatically falls back to standard KVM if the extension is not installed. |
+
+### 🔌 Chrome Extension Setup
+
+1. Open Google Chrome and navigate to:
+   ```text
+   chrome://extensions
+   ```
+2. Enable **Developer mode** using the toggle switch in the top-right corner.
+3. Click **Load unpacked** (top-left) and select the `build/browser-handoff-extension` directory from the Conduit folder (or extract `ConduitBrowserHandoff-dev.zip` from the release assets).
+4. Once loaded, the extension automatically connects to Conduit's local native messaging host (`com.conduit.browser_handoff`). When Conduit starts, the extension icon indicates a connected state.
 
 ---
 
