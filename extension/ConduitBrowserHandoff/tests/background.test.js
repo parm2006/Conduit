@@ -306,6 +306,26 @@ test("reconnects the native channel with bounded backoff without replaying reque
   assert.equal(timers.length, 0);
 });
 
+test("retries native channel indefinitely with capped backoff by default", () => {
+  const timers = [];
+  const ports = [];
+  const event = () => ({ addListener() {} });
+  const chrome = {
+    runtime: { connectNative() { const port = { onMessage: { addListener() {} }, onDisconnect: { addListener(listener) { this.listener = listener; } }, postMessage() {} }; ports.push(port); return port; } },
+    windows: { onCreated: event(), onRemoved: event(), onFocusChanged: event(), onBoundsChanged: event() },
+    tabs: { onCreated: event(), onRemoved: event(), onMoved: event(), onAttached: event(), onDetached: event(), onReplaced: event(), onUpdated: event() },
+  };
+
+  installWorker(chrome, { epoch: "epoch-1", setTimeoutFn: (callback, delay) => timers.push({ callback, delay }) });
+  for (let i = 0; i < 8; i++) {
+    ports[i].onDisconnect.listener();
+    timers.shift().callback();
+  }
+  // After multiple disconnects, backoff is capped at 3000ms
+  ports[8].onDisconnect.listener();
+  assert.equal(timers[0].delay, 3000);
+});
+
 test("consumes the native disconnect error before scheduling a reconnect", () => {
   const timers = [];
   const port = { onMessage: { addListener() {} }, onDisconnect: { addListener(listener) { this.listener = listener; } }, postMessage() {} };

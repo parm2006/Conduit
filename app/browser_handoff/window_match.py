@@ -73,6 +73,7 @@ def _bounds_are_compatible(native, candidate):
     )
 
 
+
 def match_window(native, candidates, *, now):
     """Return the sole defensible candidate, otherwise abstain.
 

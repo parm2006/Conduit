@@ -83,7 +83,7 @@ export class RequestCoordinator {
 }
 
 export function installWorker(chrome, {
-  epoch = crypto.randomUUID(), browser = "chrome", maxReconnects = 3,
+  epoch = crypto.randomUUID(), browser = "chrome", maxReconnects = null,
   setTimeoutFn = setTimeout,
 } = {}) {
   // The native host binds this opaque ID to its browser parent process.  It is
@@ -212,8 +212,8 @@ export function installWorker(chrome, {
       connected = false;
       receiverEpoch = null;
       port = null;
-      if (reconnects >= maxReconnects) return;
-      const delay = 250 * (2 ** reconnects);
+      if (maxReconnects !== null && reconnects >= maxReconnects) return;
+      const delay = Math.min(250 * (2 ** Math.min(reconnects, 6)), 3000);
       reconnects += 1;
       setTimeoutFn(connect, delay);
     }

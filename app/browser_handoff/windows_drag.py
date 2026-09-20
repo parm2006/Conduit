@@ -54,6 +54,7 @@ class _MoveSession:
     invalidated: bool = False
     invalidation_reason: str | None = None
     browser_move: bool = False
+    was_maximized: bool = False
 
 
 class MoveTracker:
@@ -98,6 +99,12 @@ class MoveTracker:
                     previous.invalidated = True
                     previous.invalidation_reason = "session_replaced"
                 self._event_counts["move_start"] += 1
+                was_maximized = False
+                if os.name == "nt" and hwnd:
+                    try:
+                        was_maximized = bool(ctypes.windll.user32.IsZoomed(hwnd))
+                    except Exception:
+                        was_maximized = False
                 self._sessions[hwnd] = _MoveSession(
                     hwnd,
                     process_id,
@@ -107,6 +114,7 @@ class MoveTracker:
                     timestamp,
                     bool(left_button_down),
                     browser_move=browser_move,
+                    was_maximized=was_maximized,
                 )
                 self._last_decision = "session_started"
                 return
@@ -127,9 +135,14 @@ class MoveTracker:
                     session.left_button_observed or bool(left_button_down)
                 )
                 if bounds.width != session.start_bounds.width or bounds.height != session.start_bounds.height:
-                    session.resized = True
-                    session.invalidated = True
-                    session.invalidation_reason = "size_changed"
+                    if session.was_maximized and session.browser_move:
+                        session.was_maximized = False
+                        session.start_bounds = bounds
+                        session.moved = True
+                    else:
+                        session.resized = True
+                        session.invalidated = True
+                        session.invalidation_reason = "size_changed"
                 if (process_id, process_created) != (session.process_id, session.process_created):
                     session.invalidated = True
                     session.invalidation_reason = "process_identity_changed"

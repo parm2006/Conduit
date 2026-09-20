@@ -50,15 +50,7 @@ def _message_rect(values):
     return NativeRect(left, top, right, bottom)
 
 
-def _browser_bounds_to_physical(window):
-    values = (
-        window.get("left"), window.get("top"),
-        window.get("left", 0) + window.get("width", 0),
-        window.get("top", 0) + window.get("height", 0),
-    )
-    if any(type(value) is not int for value in values):
-        raise ValueError("browser bounds are unavailable")
-    return NativeRect(*values)
+from app.browser_handoff.bounds import browser_bounds_to_physical as _browser_bounds_to_physical
 
 class ConduitClient:
     def __init__(

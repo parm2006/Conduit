@@ -41,12 +41,7 @@ from app.display_topology import NativeRect
 logger = logging.getLogger(__name__)
 
 
-def _browser_bounds_to_physical(window):
-    left, top = window.get("left"), window.get("top")
-    width, height = window.get("width"), window.get("height")
-    if any(type(value) is not int for value in (left, top, width, height)):
-        raise ValueError("browser bounds are unavailable")
-    return NativeRect(left, top, left + width, top + height)
+from app.browser_handoff.bounds import browser_bounds_to_physical as _browser_bounds_to_physical
 
 
 class _ServerInputEffects:
