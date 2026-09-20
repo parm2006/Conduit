@@ -46,15 +46,30 @@ Conduit supports bidirectional transfer of active Google Chrome tabs and windows
 | **`Ctrl + W` + Drag Tab to Edge** | **Move Window / Tabs (Cut)** | Drag a Chrome tab or window to the screen edge while holding `Ctrl + W`. Opens the tabs on the adjacent PC and automatically closes the source window. |
 | **Normal Edge Transition** | **Standard KVM** | Moving the mouse or dragging any regular window to the screen edge seamlessly transitions the cursor/input without touching your browser. Conduit automatically falls back to standard KVM if the extension is not installed. |
 
-### 🔌 Chrome Extension Setup
+### 🔌 Chrome Extension Setup (Step-by-Step)
 
-1. Open Google Chrome and navigate to:
+Chrome requires loading the extension as an **unpacked folder** (not uploading the `.zip` file directly):
+
+#### Option A: From Release Download
+1. Download **`ConduitBrowserHandoff-v7.3.0.zip`** from the [Releases page](https://github.com/parm2006/Conduit/releases/latest).
+2. Right-click the `.zip` file and select **Extract All...** to extract it into a folder (e.g., `Downloads\ConduitBrowserHandoff-v7.3.0`).
+3. In Google Chrome, go to:
    ```text
    chrome://extensions
    ```
-2. Enable **Developer mode** using the toggle switch in the top-right corner.
-3. Click **Load unpacked** (top-left) and select the `build/browser-handoff-extension` directory from the Conduit folder (or extract `ConduitBrowserHandoff-dev.zip` from the release assets).
-4. Once loaded, the extension automatically connects to Conduit's local native messaging host (`com.conduit.browser_handoff`). When Conduit starts, the extension icon indicates a connected state.
+4. Turn **ON** the **Developer mode** toggle in the top-right corner.
+5. Click the **Load unpacked** button in the top-left toolbar.
+6. In the folder picker dialog, select the extracted folder (the directory containing `manifest.json`) and click **Select Folder**.
+
+#### Option B: From Git Repository / Source
+1. In `chrome://extensions` with **Developer mode ON**, click **Load unpacked**.
+2. Select the repository folder path:
+   ```text
+   build\browser-handoff-extension
+   ```
+   *(This folder is built automatically by `scripts\build_browser_extension.ps1` or `run.bat`).*
+
+Once loaded, the extension connects automatically to Conduit's local native messaging host (`com.conduit.browser_handoff`). When Conduit starts, the extension icon indicates a connected state.
 
 ---
 
