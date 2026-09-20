@@ -82,6 +82,7 @@ class ConduitClient:
         self.browser_handoff_coordinator = BrowserHandoffCoordinator(
             desktop=self.browser_handoff_desktop,
             move_tracker=self.browser_move_observer.tracker,
+            move_diagnostics=self.browser_move_observer.diagnostic_snapshot,
             to_physical=_browser_bounds_to_physical,
             send_candidate=self._send_browser_candidate,
         )
@@ -176,6 +177,9 @@ class ConduitClient:
         self.control_network.register_callback('reload_connection', lambda data: self.reload_connection())
         self.control_network.register_callback(
             'browser_handoff_request', self.browser_handoff_endpoint.on_control_message,
+        )
+        self.control_network.register_callback(
+            'browser_handoff_result', self.browser_handoff_endpoint.on_control_message,
         )
         
         # Setup data network callbacks

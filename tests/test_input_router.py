@@ -547,6 +547,29 @@ class InputRouterTests(unittest.TestCase):
             ("server", "local", (960, 540)),
         ])
 
+    def test_overlay_focus_loss_recovers_held_button_and_allows_next_handoff(self):
+        from app.gui import ConduitGUI
+
+        self.assertTrue(self.router.handle_edge(
+            "server", "server-primary", "right", 0.5, topology_version=7))
+        self.assertTrue(acknowledge_latest(self.router, self.sessions["client-1"], self.log))
+        self.assertTrue(self.router.forward_button("left", True))
+        server = SimpleNamespace(input_router=self.router, control_connected=True)
+        server._return_cursor_to_server = lambda: ConduitServer._return_cursor_to_server(server)
+        gui = object.__new__(ConduitGUI)
+        gui.server = server
+        gui.overlay_active = True
+
+        gui.on_overlay_focus_out(None)
+
+        self.assertIsInstance(self.router.state, LocalServer)
+        self.assertEqual(self.router.held_buttons, ())
+        self.assertIn(("server", "local", (960, 540)), self.log)
+        self.assertTrue(self.router.handle_edge(
+            "server", "server-primary", "right", 0.5, topology_version=7))
+        self.assertTrue(acknowledge_latest(self.router, self.sessions["client-1"], self.log))
+        self.assertIsInstance(self.router.state, RemoteClient)
+
     def test_repeated_local_return_uses_actual_server_primary_center(self):
         topology = DraftTopology(
             "server",

@@ -1,4 +1,5 @@
 import unittest
+from types import SimpleNamespace
 
 from app.browser_handoff.endpoint import BrowserHandoffEndpoint
 
@@ -54,3 +55,43 @@ class BrowserHandoffEndpointTests(unittest.TestCase):
 
         self.assertTrue(self.endpoint.announce_all())
         self.assertEqual(self.sent[0]["browser_instance_id"], "browser-1")
+
+    def test_delivery_diagnostics_distinguish_control_and_bridge_acceptance(self):
+        with self.assertLogs("app.browser_handoff.endpoint", level="INFO") as captured:
+            self.desktop.on_capability("browser-1", "epoch-1")
+            self.endpoint.on_control_message({
+                "type": "browser_handoff_request", "browser_instance_id": "browser-1",
+                "request": {"request_id": "a" * 32, "entries": [{"url": "https://private.example/"}]},
+            })
+            self.desktop.on_result("browser-1", {
+                "type": "browser_handoff_result", "request_id": "a" * 32,
+                "status": "complete", "opened_count": 1,
+            })
+        logs = "\n".join(captured.output)
+        self.assertIn("stage=capability_sent", logs)
+        self.assertIn("stage=receiver_request_received", logs)
+        self.assertIn("bridge_accepted=True", logs)
+        self.assertIn("stage=receiver_result_sent", logs)
+        self.assertNotIn("private.example", logs)
+
+    def test_failed_control_send_is_explicit(self):
+        self.endpoint.send_control = lambda message: False
+        with self.assertLogs("app.browser_handoff.endpoint", level="INFO") as captured:
+            self.assertFalse(self.desktop.on_capability("browser-1", "epoch-1"))
+        self.assertIn("sent=False", "\n".join(captured.output))
+
+    def test_source_result_is_reported_not_treated_as_an_open_request(self):
+        from app.server import ConduitServer
+        message = {
+            "type": "browser_handoff_result", "request_id": "a" * 32,
+            "route_ticket": "ticket", "receiver_epoch": "epoch-1",
+            "status": "complete", "opened_count": 2, "total_count": 2, "entries": [],
+        }
+        server = SimpleNamespace(server_machine_id="server", browser_handoff_desktop=self.desktop)
+        with self.assertLogs("app.browser_handoff.endpoint", level="INFO") as captured:
+            self.assertTrue(ConduitServer._send_browser_control(server, "server", message))
+            self.assertTrue(self.endpoint.on_control_message(message))
+        self.assertEqual(self.desktop.requests, [])
+        logs = "\n".join(captured.output)
+        self.assertIn("stage=transfer_result", logs)
+        self.assertIn("status=complete opened=2 total=2", logs)

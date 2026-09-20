@@ -44,10 +44,11 @@ class BrowserHandoffCoordinator:
 
     def __init__(self, *, desktop, move_tracker, to_physical, send_candidate,
                  now=time.monotonic, token_ttl_seconds=1.0, max_pending=8,
-                 read_bounds=reread_move_bounds, spawn=_spawn,
+                 read_bounds=reread_move_bounds, spawn=_spawn, move_diagnostics=None,
                  wait=lambda event, seconds: event.wait(seconds)):
         self.desktop = desktop
         self.move_tracker = move_tracker
+        self.move_diagnostics = move_diagnostics or getattr(move_tracker, "diagnostic_snapshot", lambda: None)
         self.to_physical = to_physical
         self.send_candidate = send_candidate
         self.now = now
@@ -101,8 +102,7 @@ class BrowserHandoffCoordinator:
                 token = consume(now=claim_now) if consume else None
                 completed = token is not None
             if token is None:
-                diagnostic = getattr(self.move_tracker, "diagnostic_snapshot", lambda: None)
-                logger.info("browser_handoff stage=move_token_missing diagnostics=%s", diagnostic())
+                logger.info("browser_handoff stage=move_token_missing diagnostics=%s", self.move_diagnostics())
                 return None
             task = CorrelationTask(secrets.token_hex(16), token, source_display_id,
                                    source_side, topology_version, claim_now + self.token_ttl_seconds)
@@ -212,8 +212,8 @@ class BrowserHandoffCoordinator:
                 task.dispatch_started = True
                 self._stage(task, "candidate_dispatch_committed")
             sent = bool(self.send_candidate(task.candidate))
-            self._stage(task, "candidate_sent", sent=sent)
-            outcome = "candidate_sent" if sent else "candidate_send_failed"
+            self._stage(task, "candidate_submitted", accepted=sent)
+            outcome = "candidate_submitted" if sent else "candidate_submit_failed"
         except ConnectionError:
             outcome = "bridge_lost"
         except Exception as error:

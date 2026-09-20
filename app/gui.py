@@ -2302,13 +2302,27 @@ class ConduitGUI(ctk.CTk):
         view.set_primary(primary)
 
     def show_overlay(self):
+        from app.input_router import RemoteClient, Transitioning
+        requested_router = getattr(self.server, 'input_router', None)
+        requested_handoff = getattr(getattr(requested_router, 'state', None), 'handoff_id', None)
+
         def _show():
             try:
-                if self.__dict__.get('remote_view') is not None:
-                    from app.input_router import RemoteClient
-                    router = getattr(self.server, 'input_router', None)
-                    if router is None or not isinstance(router.state, RemoteClient):
-                        return
+                router = getattr(self.server, 'input_router', None)
+                # Capture notifications are queued on Tk. Ownership may have
+                # returned locally before this callback gets to run.
+                if router is None or router is not requested_router:
+                    return
+                state = router.state
+                if getattr(state, 'handoff_id', None) != requested_handoff:
+                    return
+                if isinstance(state, Transitioning) and state.acknowledged:
+                    # begin_remote_capture posts this callback before the
+                    # acknowledgement commits RemoteClient. Don't lose it.
+                    self.after(10, _show)
+                    return
+                if not isinstance(state, RemoteClient):
+                    return
                 if self.overlay and self.overlay.winfo_exists():
                     self.overlay_active = True
                     self.overlay.deiconify() # Show it
@@ -2498,7 +2512,10 @@ class ConduitGUI(ctk.CTk):
                 # Keyboard remains captured and forwarded while the GUI is hidden.
                 return
             logger.info("Overlay lost focus (e.g. Snipping Tool). Switching back to Server.")
-            self.server.on_switch_back({'ratio': 0.5})
+            # This is a local recovery, not an authenticated topology edge
+            # from a Client. The edge path rejects a missing session/topology
+            # and otherwise leaves the overlay capturing subsequent drags.
+            self.server._return_cursor_to_server()
 
 def run_mainloop(app):
     try:

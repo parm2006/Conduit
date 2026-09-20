@@ -32,6 +32,7 @@ from app.ports import DEFAULT_BASE_PORT
 from app.input_router import InputRouter, LocalServer
 from app.machine_identity import windows_machine_id
 from app.browser_handoff.desktop import BrowserHandoffDesktop
+from app.browser_handoff.endpoint import report_source_result
 from app.browser_handoff.cluster_router import ClusterBrowserRouter
 from app.browser_handoff.coordinator import BrowserHandoffCoordinator
 from app.browser_handoff.windows_drag import WinEventMoveObserver
@@ -159,6 +160,7 @@ class ConduitServer:
         self.browser_handoff_coordinator = BrowserHandoffCoordinator(
             desktop=self.browser_handoff_desktop,
             move_tracker=self.browser_move_observer.tracker,
+            move_diagnostics=self.browser_move_observer.diagnostic_snapshot,
             to_physical=_browser_bounds_to_physical,
             send_candidate=self._stage_local_browser_candidate,
         )
@@ -496,6 +498,8 @@ class ConduitServer:
 
     def _send_browser_control(self, session_id, message):
         if session_id == self.server_machine_id:
+            if message.get("type") == "browser_handoff_result":
+                return report_source_result(message)
             instance = message.get("browser_instance_id")
             request = message.get("request")
             sent = bool(

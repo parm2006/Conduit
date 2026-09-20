@@ -16,6 +16,7 @@ from app.browser_handoff.windows_drag import (
     EVENT_SYSTEM_MOVESIZESTART,
     MoveToken,
     MoveTracker,
+    WinEventMoveObserver,
 )
 import scripts.probe_browser_handoff as browser_probe
 from scripts.probe_browser_handoff import (
@@ -27,6 +28,45 @@ from scripts.probe_browser_handoff import (
     read_native_message,
     write_native_message,
 )
+
+
+class MoveObserverLifecycleTests(unittest.TestCase):
+    @unittest.skipUnless(sys.platform == "win32", "requires Windows WinEvent hooks")
+    def test_stopped_observer_can_start_with_fresh_stop_and_ready_state(self):
+        observer = WinEventMoveObserver()
+        self.addCleanup(observer.stop)
+        observer.start()
+        self.assertTrue(observer.diagnostic_snapshot()["running"])
+        observer.stop()
+        observer.start()
+        self.assertFalse(observer._stop.is_set())
+        self.assertTrue(observer.diagnostic_snapshot()["running"])
+
+    def test_stop_invalidates_old_claimed_and_unclaimed_moves(self):
+        tracker = MoveTracker()
+        observer = WinEventMoveObserver(tracker)
+        for event, bounds in ((EVENT_SYSTEM_MOVESIZESTART, PhysicalRect(0, 0, 800, 600)),
+                              (EVENT_OBJECT_LOCATIONCHANGE, PhysicalRect(100, 0, 900, 600))):
+            tracker.observe(event, hwnd=1, process_id=2, process_created=3,
+                            bounds=bounds, timestamp=1.0, left_button_down=True)
+        token = tracker.claim_active_move(now=1.0)
+        observer.stop()
+        self.assertTrue(token.completion.invalidated)
+        self.assertEqual(tracker.diagnostic_snapshot()["active_sessions"], 0)
+
+    def test_resize_at_move_end_is_rejected_without_location_notification(self):
+        tracker = MoveTracker()
+        def observe(event, bounds):
+            tracker.observe(event, hwnd=1, process_id=2, process_created=3,
+                            bounds=bounds, timestamp=1.0, left_button_down=True)
+        observe(EVENT_SYSTEM_MOVESIZESTART, PhysicalRect(0, 0, 800, 600))
+        observe(EVENT_OBJECT_LOCATIONCHANGE, PhysicalRect(100, 0, 900, 600))
+        token = tracker.claim_active_move(now=1.0)
+        observe(EVENT_SYSTEM_MOVESIZEEND, PhysicalRect(0, 0, 960, 1080))
+        self.assertTrue(token.completion.invalidated)
+        self.assertEqual(token.completion.invalidation_reason, "size_changed")
+        self.assertTrue(token.completion.claimed)
+        self.assertIsNone(tracker.consume_eligible_move(now=1.0))
 
 ProbeHostDiagnostics = getattr(browser_probe, "ProbeHostDiagnostics", None)
 

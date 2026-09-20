@@ -124,9 +124,11 @@ class BrowserHandoffCoordinatorTests(unittest.TestCase):
         return "\n".join(logs.output)
 
     def test_missing_move_logs_diagnostics(self):
+        self.coordinator.move_diagnostics = lambda: {"running": True, "callback_errors": 2, "filtered_non_window_object": 3}
         with self.assertLogs("app.browser_handoff.coordinator", level="INFO") as logs:
             self.assertIsNone(self.claim())
         self.assertIn("move_token_missing", str(logs.output))
+        self.assertIn("'callback_errors': 2", str(logs.output))
         self.assertEqual(self.work, [])
 
     def test_completed_move_returns_gesture_before_any_io_and_publishes_once(self):
@@ -141,7 +143,7 @@ class BrowserHandoffCoordinatorTests(unittest.TestCase):
         self.assertIn("move_end_to_revision_ms", logs)
         self.assertIn("edge_delta", logs)
         self.assertNotIn("example.test", logs)
-        self.assertIn("outcome=candidate_sent", logs)
+        self.assertIn("outcome=candidate_submitted", logs)
 
     def test_active_move_waits_for_end_then_reads_rect_then_refreshes(self):
         self.start(completed=False)

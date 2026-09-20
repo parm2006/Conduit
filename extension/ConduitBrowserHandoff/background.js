@@ -140,10 +140,11 @@ export function installWorker(chrome, {
     });
   }
   const connect = () => {
+    if (port) return;
     receiverEpoch = null;
     const connectedPort = chrome.runtime.connectNative("com.conduit.browser_handoff");
     port = connectedPort;
-    connected = true;
+    connected = false;
     connectedPort.postMessage({
       type: "browser_handoff_hello", browser_instance_id: browserInstanceId,
     });
@@ -164,6 +165,8 @@ export function installWorker(chrome, {
             browser_instance_id: browserInstanceId,
             receiver_epoch: receiverEpoch,
           });
+          connected = true;
+          reconnects = 0;
           bumpRevision();
         }
         return;

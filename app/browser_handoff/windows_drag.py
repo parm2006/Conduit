@@ -135,6 +135,12 @@ class MoveTracker:
 
             self._sessions.pop(hwnd, None)
             session.latest_bounds = bounds
+            # Snap/resize may be visible first at MOVESIZEEND, without a final
+            # LOCATIONCHANGE. Apply the same guard regardless of event order.
+            session.resized = session.resized or (
+                bounds.width != session.start_bounds.width
+                or bounds.height != session.start_bounds.height
+            )
             session.invalidated = session.resized or (process_id, process_created) != (session.process_id, session.process_created)
             if (process_id, process_created) != (session.process_id, session.process_created):
                 session.invalidation_reason = "process_identity_changed"
@@ -205,6 +211,15 @@ class MoveTracker:
             self._last_decision = "token_consumed"
             return self._completed.pop()
 
+    def invalidate_all(self):
+        """Discard moves across observer lifetimes; never make a claim reusable."""
+        with self._lock:
+            for session in self._sessions.values():
+                session.invalidated = True
+                session.invalidation_reason = "observer_stopped"
+            self._sessions.clear()
+            self._completed.clear()
+
     def diagnostic_snapshot(self):
         """Return bounded URL-free evidence about move-token decisions."""
         with self._lock:
@@ -250,6 +265,10 @@ class WinEventMoveObserver:
             raise RuntimeError("WinEventMoveObserver is only available on Windows")
         if self._thread is not None:
             raise RuntimeError("observer is already running")
+        self._stop.clear()
+        self._ready.clear()
+        self._startup_error = None
+        self._thread_id = None
         self._thread = threading.Thread(target=self._run, name="browser-window-move-observer", daemon=True)
         self._thread.start()
         if not self._ready.wait(2):
@@ -266,7 +285,10 @@ class WinEventMoveObserver:
             ctypes.windll.user32.PostThreadMessageW(self._thread_id, WM_QUIT, 0, 0)
         if self._thread is not None:
             self._thread.join(2)
-            self._thread = None
+            if not self._thread.is_alive():
+                self._thread = None
+                self._thread_id = None
+        self.tracker.invalidate_all()
 
     def diagnostic_snapshot(self):
         """Return observer and tracker state without desktop content."""

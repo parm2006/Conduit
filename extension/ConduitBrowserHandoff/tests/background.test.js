@@ -3,6 +3,43 @@ import assert from "node:assert/strict";
 
 import { MetadataCoalescer, RequestCoordinator, installWorker, resultEnvelope } from "../background.js";
 
+function connectionHarness(options = {}) {
+  const timers = [], ports = [];
+  const event = () => ({ addListener(listener) { this.listener = listener; } });
+  const chrome = {
+    runtime: { onMessage: event(), connectNative() {
+      const port = { onMessage: event(), onDisconnect: event(), messages: [],
+        postMessage(message) { this.messages.push(message); } };
+      ports.push(port);
+      return port;
+    } },
+    windows: { onCreated: event(), onRemoved: event(), onFocusChanged: event(), onBoundsChanged: event(), async getAll() { return []; } },
+    tabs: { onCreated: event(), onRemoved: event(), onMoved: event(), onAttached: event(), onDetached: event(), onReplaced: event(), onUpdated: event() },
+  };
+  installWorker(chrome, { epoch: "instance", setTimeoutFn: (callback, delay) => timers.push({ callback, delay }), ...options });
+  const status = () => new Promise(resolve => chrome.runtime.onMessage.listener({ type: "browser_handoff_status" }, {}, resolve));
+  return { chrome, timers, ports, status };
+}
+
+test("connected status requires a completed desktop handshake", async () => {
+  const h = connectionHarness();
+  assert.equal((await h.status()).connected, false);
+  await h.ports[0].onMessage.listener({ type: "bridge_ready", bridge_epoch: "desktop" });
+  assert.equal((await h.status()).connected, true);
+  h.ports[0].onDisconnect.listener();
+  assert.equal((await h.status()).connected, false);
+});
+
+test("successful handshake resets consecutive reconnect failures", async () => {
+  const h = connectionHarness({ maxReconnects: 1 });
+  h.ports[0].onDisconnect.listener();
+  h.timers.shift().callback();
+  await h.ports[1].onMessage.listener({ type: "bridge_ready", bridge_epoch: "desktop" });
+  h.ports[1].onDisconnect.listener();
+  assert.equal(h.timers.length, 1);
+  assert.equal(h.timers[0].delay, 250);
+});
+
 test("desktop pipe loss disconnects the native port so bounded reconnect can run", async () => {
   const timers = [];
   let disconnected = 0;
