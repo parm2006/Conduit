@@ -365,3 +365,15 @@ test("closes window on browser_handoff_close_window message", async () => {
   assert.deepEqual(removed, [123]);
 });
 
+test("window bounds and tab events reconnect the native port if disconnected", async () => {
+  const h = connectionHarness();
+  assert.equal(h.ports.length, 1);
+  h.ports[0].onDisconnect.listener();
+  // Simulating user moving/dragging a window
+  h.chrome.windows.onBoundsChanged.listener();
+  assert.equal(h.ports.length, 2);
+  await h.ports[1].onMessage.listener({ type: "bridge_ready", bridge_epoch: "desktop" });
+  assert.equal((await h.status()).connected, true);
+});
+
+

@@ -90,59 +90,12 @@ export function installWorker(chrome, {
   // never a profile identifier or authority for network routing.
   const browserInstanceId = epoch;
   let revision = 0;
-  let port;
-  const publishMetadata = async (requestId, targetPort = port) => {
-    const queryRevision = revision;
-    try {
-      const windows = await chrome.windows.getAll({ populate: false });
-      if (targetPort !== port) return;
-      targetPort?.postMessage({
-        type: "browser_handoff_metadata",
-        epoch, browser_instance_id: browserInstanceId,
-        coordinate_units: "browser_dip",
-        revision: queryRevision,
-        ...(requestId ? { request_id: requestId } : {}),
-        windows: windows.map((window) => ({
-          window_id: window.id, focused: window.focused === true,
-          incognito: window.incognito === true, state: window.state,
-          left: window.left, top: window.top, width: window.width, height: window.height,
-        })),
-      });
-    } catch { /* correlation owns bounded refresh retries; other events coalesce */ }
-  };
-  const coalescer = new MetadataCoalescer({ publish: () => publishMetadata() });
-  const bumpRevision = () => { revision += 1; coalescer.request(); };
-  // Register every listener before connecting or awaiting any browser work.
-  for (const event of [
-    chrome.windows.onCreated, chrome.windows.onRemoved, chrome.windows.onFocusChanged,
-    chrome.tabs.onCreated, chrome.tabs.onRemoved, chrome.tabs.onMoved, chrome.tabs.onAttached,
-    chrome.tabs.onDetached, chrome.tabs.onReplaced, chrome.tabs.onUpdated,
-  ]) event.addListener(bumpRevision);
-  // Geometry is refreshed independently from tab-snapshot consistency. A
-  // continuing native drag must not invalidate an otherwise stable tab list.
-  // Native correlation checks current bounds and rejects resizing separately.
-  chrome.windows.onBoundsChanged.addListener(() => coalescer.request());
-
-  const coordinator = new RequestCoordinator({
-    open: (request) => openDestinationWindow(chrome, request, { browser }),
-  });
   let reconnects = 0;
   let connected = false;
   let lastResult = null;
   let receiverEpoch = null;
-  if (chrome.runtime.onMessage?.addListener) {
-    chrome.runtime.onMessage.addListener((message, _sender, respond) => {
-      if (message?.type !== "browser_handoff_status") return undefined;
-      Promise.resolve(chrome.extension?.isAllowedIncognitoAccess?.() ?? false)
-        .then((incognitoAllowed) => respond({
-          connected, browser_instance_id: browserInstanceId,
-          incognito_allowed: incognitoAllowed === true,
-          last_result: lastResult,
-        }))
-        .catch(() => respond({ connected, browser_instance_id: browserInstanceId, incognito_allowed: false, last_result: lastResult }));
-      return true;
-    });
-  }
+  let port;
+
   const connect = () => {
     if (port) return;
     receiverEpoch = null;
@@ -227,6 +180,73 @@ export function installWorker(chrome, {
     }
     connectedPort.onDisconnect.addListener(handleDisconnect);
   };
+
+  const ensureConnected = () => {
+    if (!port) {
+      reconnects = 0;
+      connect();
+    }
+  };
+
+  const publishMetadata = async (requestId, targetPort = port) => {
+    ensureConnected();
+    const activePort = targetPort || port;
+    const queryRevision = revision;
+    try {
+      const windows = await chrome.windows.getAll({ populate: false });
+      if (activePort !== port) return;
+      activePort?.postMessage({
+        type: "browser_handoff_metadata",
+        epoch, browser_instance_id: browserInstanceId,
+        coordinate_units: "browser_dip",
+        revision: queryRevision,
+        ...(requestId ? { request_id: requestId } : {}),
+        windows: windows.map((window) => ({
+          window_id: window.id, focused: window.focused === true,
+          incognito: window.incognito === true, state: window.state,
+          left: window.left, top: window.top, width: window.width, height: window.height,
+        })),
+      });
+    } catch { /* correlation owns bounded refresh retries; other events coalesce */ }
+  };
+  const coalescer = new MetadataCoalescer({ publish: () => publishMetadata() });
+  const bumpRevision = () => {
+    ensureConnected();
+    revision += 1;
+    coalescer.request();
+  };
+  // Register every listener before connecting or awaiting any browser work.
+  for (const event of [
+    chrome.windows.onCreated, chrome.windows.onRemoved, chrome.windows.onFocusChanged,
+    chrome.tabs.onCreated, chrome.tabs.onRemoved, chrome.tabs.onMoved, chrome.tabs.onAttached,
+    chrome.tabs.onDetached, chrome.tabs.onReplaced, chrome.tabs.onUpdated,
+  ]) event.addListener(bumpRevision);
+  // Geometry is refreshed independently from tab-snapshot consistency. A
+  // continuing native drag must not invalidate an otherwise stable tab list.
+  // Native correlation checks current bounds and rejects resizing separately.
+  chrome.windows.onBoundsChanged.addListener(() => {
+    ensureConnected();
+    coalescer.request();
+  });
+
+  const coordinator = new RequestCoordinator({
+    open: (request) => openDestinationWindow(chrome, request, { browser }),
+  });
+  if (chrome.runtime.onMessage?.addListener) {
+    chrome.runtime.onMessage.addListener((message, _sender, respond) => {
+      if (message?.type !== "browser_handoff_status") return undefined;
+      ensureConnected();
+      Promise.resolve(chrome.extension?.isAllowedIncognitoAccess?.() ?? false)
+        .then((incognitoAllowed) => respond({
+          connected, browser_instance_id: browserInstanceId,
+          incognito_allowed: incognitoAllowed === true,
+          last_result: lastResult,
+        }))
+        .catch(() => respond({ connected, browser_instance_id: browserInstanceId, incognito_allowed: false, last_result: lastResult }));
+      return true;
+    });
+  }
+
   connect();
   return { epoch, coordinator, get port() { return port; } };
 }
