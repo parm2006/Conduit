@@ -4,6 +4,8 @@
 
 ### Fixed
 
+- Fixed first-time installation failing to create the approved launch task.
+- Kept native video resize and cleanup off the GUI thread to prevent a renderer deadlock from blocking background-mode recovery and exit.
 - Conduit now runs elevated to control apps such as Windhawk; direct executable and portable launches request administrator approval.
 
 ### Added

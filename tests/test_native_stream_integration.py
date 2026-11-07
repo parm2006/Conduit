@@ -113,6 +113,14 @@ class NativeStreamIntegrationTests(unittest.TestCase):
             receiver.stop()
             self.assertFalse(receiver.is_native_active())
 
+            # Cleanup belongs to the video worker; keep the window message
+            # pump alive while DXGI finishes presenting and releases resources.
+            deadline = time.monotonic() + 2.0
+            while receiver._thread.is_alive() and time.monotonic() < deadline:
+                self.root.update()
+                receiver._thread.join(0.01)
+            self.assertFalse(receiver._thread.is_alive())
+
             # Verify stream_stop was sent
             stream_stop_msgs = [m for m in self.server_sent_messages if m.get("type") == "stream_stop"]
             self.assertEqual(len(stream_stop_msgs), 1)

@@ -8,6 +8,55 @@ from PIL import Image
 
 
 class RemoteVideoTests(unittest.TestCase):
+    def test_replacement_waits_for_previous_cleanup_without_blocking_gui(self):
+        from unittest.mock import Mock
+        receiver = self.receiver()
+        receiver._previous_cleanup = threading.Event()
+        receiver._run_loop = Mock()
+        receiver._stop_native = Mock()
+        worker = threading.Thread(target=receiver._run, daemon=True)
+        worker.start()
+        try:
+            receiver._run_loop.assert_not_called()
+            receiver.stop()
+            # Even canceled replacements preserve the cleanup chain so a
+            # third viewer cannot overtake the first receiver's port release.
+            self.assertTrue(worker.is_alive())
+        finally:
+            receiver._previous_cleanup.set()
+            worker.join(1)
+        self.assertFalse(worker.is_alive())
+        receiver._stop_native.assert_called_once_with()
+
+    def test_gui_resize_and_stop_never_call_native_renderer(self):
+        from unittest.mock import Mock
+        receiver = self.receiver()
+        receiver._latest = None
+        native = receiver._native_receiver = Mock()
+        receiver._native_stream_id = None
+        receiver.resize(800, 600)
+        receiver.stop()
+        native.resize.assert_not_called()
+        native.stop.assert_not_called()
+        self.assertTrue(receiver._stop.is_set())
+        self.assertEqual(receiver.viewport, (800, 600))
+
+    def test_video_worker_applies_latest_resize_and_cleans_up_on_exit(self):
+        from unittest.mock import Mock
+        receiver = self.receiver()
+        receiver._native_receiver = Mock()
+        receiver.resize(800, 600)
+        receiver.resize(1024, 768)
+        receiver._apply_native_resize()
+        receiver._native_receiver.resize.assert_called_once_with(1024, 768)
+        receiver._apply_native_resize()
+        receiver._native_receiver.resize.assert_called_once()
+        receiver._run_loop = Mock(side_effect=RuntimeError('worker failed'))
+        receiver._stop_native = Mock()
+        with self.assertRaises(RuntimeError):
+            receiver._run()
+        receiver._stop_native.assert_called_once_with()
+
     def test_monitor_handoff_during_capture_serves_newest_request(self):
         video = self.module()
         from app.display_topology import NativeRect
