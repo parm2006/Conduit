@@ -18,6 +18,11 @@ from app.input_router import RemoteClient
 from app.ports import DEFAULT_STREAM_PORT
 
 logger = logging.getLogger(__name__)
+
+# Replacement viewers must wait off-thread until the old receiver releases
+# its UDP port. Tk remains free to process DXGI window messages during cleanup.
+_receiver_cleanup_lock = threading.Lock()
+_receiver_cleanup = {}
 MAX_DIMENSION = 8192
 MAX_PIXELS = 34_000_000
 MAX_JPEG_BYTES = 12 * 1024 * 1024
@@ -180,6 +185,11 @@ class ServerVideoReceiver:
         self._native_failed_selection = None
         self._native_started_event = threading.Event()
         self._native_started_success = False
+        self._pending_native_size = None
+        self._cleanup_complete = threading.Event()
+        with _receiver_cleanup_lock:
+            self._previous_cleanup = _receiver_cleanup.get(self.stream_port)
+            _receiver_cleanup[self.stream_port] = self._cleanup_complete
 
         server.data_network.register_callback('remote_video_frame', self.receive)
         server.control_network.register_callback('stream_started', self._on_stream_started)
@@ -193,14 +203,21 @@ class ServerVideoReceiver:
             self._native_started_event.set()
 
     def is_native_active(self):
-        return bool(getattr(self, '_native_active', False))
+        return bool(getattr(self, '_native_active', False) and not self._stop.is_set())
 
     def resize(self, width, height):
         self.viewport = (width, height)
+        with self._lock:
+            self._pending_native_size = (width, height)
+
+    def _apply_native_resize(self):
+        with self._lock:
+            size = getattr(self, '_pending_native_size', None)
+            self._pending_native_size = None
         receiver = getattr(self, '_native_receiver', None)
-        if receiver is not None:
+        if receiver is not None and size is not None:
             try:
-                receiver.resize(width, height)
+                receiver.resize(*size)
             except Exception as error:
                 logger.debug("Native receiver resize failed: %s", error)
 
@@ -320,7 +337,8 @@ class ServerVideoReceiver:
     def stop(self):
         self._stop.set()
         self._wake.set()
-        self._stop_native()
+        # Tk must keep pumping window messages while DXGI Present completes.
+        # Only the video worker may resize, stop, or destroy the renderer.
         with self._lock:
             self._expected = self._incoming = self._latest = None
 
@@ -359,13 +377,6 @@ class ServerVideoReceiver:
         selection = self.current_selection()
         if selection is None or selection != self.selection:
             return False
-        if getattr(self, '_native_active', False):
-            receiver = getattr(self, '_native_receiver', None)
-            if receiver is not None:
-                count = receiver.get_frame_count()
-                if count > getattr(self, '_last_polled_frame_count', 0):
-                    self._last_polled_frame_count = count
-                    self.last_frame_at = now
         elapsed = now - self.last_frame_at if self.last_frame_at > 0.0 else now - self.started_at
         timeout = FRAME_TIMEOUT if self.last_frame_at > 0.0 else 2.5
         if selection == self.failed_selection:
@@ -373,6 +384,23 @@ class ServerVideoReceiver:
         return elapsed >= timeout
 
     def _run(self):
+        try:
+            previous = getattr(self, '_previous_cleanup', None)
+            if previous is not None:
+                previous.wait()
+            self._run_loop()
+        finally:
+            try:
+                self._stop_native()
+            finally:
+                complete = getattr(self, '_cleanup_complete', None)
+                if complete is not None:
+                    complete.set()
+                    with _receiver_cleanup_lock:
+                        if _receiver_cleanup.get(self.stream_port) is complete:
+                            del _receiver_cleanup[self.stream_port]
+
+    def _run_loop(self):
         while not self._stop.is_set():
             selection = self.current_selection()
             if selection != self.selection:
@@ -409,6 +437,7 @@ class ServerVideoReceiver:
                 while (not self._stop.is_set()
                        and self.current_selection() == selection
                        and self._native_active):
+                    self._apply_native_resize()
                     receiver = getattr(self, '_native_receiver', None)
                     if receiver is not None:
                         current_count = receiver.get_frame_count()

@@ -14,9 +14,9 @@ SetCompressor /SOLID lzma
 !define MUI_CUSTOMFUNCTION_ABORT OnUserAbort
 
 !define PRODUCT_NAME "Conduit"
-!define PRODUCT_VERSION "7.3.0"
-!define FILE_VERSION "7.3.0.0"
-!define SOURCE_URL "https://github.com/parm2006/Conduit/tree/v7.3.0"
+!define PRODUCT_VERSION "7.3.1"
+!define FILE_VERSION "7.3.1.0"
+!define SOURCE_URL "https://github.com/parm2006/Conduit/tree/v7.3.1"
 !define UNINSTALL_KEY \
   "Software\Microsoft\Windows\CurrentVersion\Uninstall\Conduit"
 
@@ -37,10 +37,15 @@ Var FirewallConsentNoButton
 Var InstallComplete
 Var TransactionFilesWritten
 Var ExistingInstallState
+Var StartupCheckbox
+Var StartupEnabled
+Var StartupTaskName
+Var StartupTaskAttempted
 
 !insertmacro MUI_PAGE_WELCOME
 !insertmacro MUI_PAGE_LICENSE "..\LICENSE"
 Page custom FirewallConsentPage FirewallConsentLeave
+Page custom StartupPage StartupLeave
 !insertmacro MUI_PAGE_INSTFILES
 !insertmacro MUI_PAGE_FINISH
 
@@ -55,6 +60,8 @@ Function .onInit
   StrCpy $InstallComplete "0"
   StrCpy $TransactionFilesWritten "0"
   StrCpy $ExistingInstallState "fresh"
+  StrCpy $StartupEnabled "0"
+  StrCpy $StartupTaskAttempted "0"
   IfSilent silent_install interactive_install
 
 silent_install:
@@ -262,6 +269,28 @@ Function FirewallConsentLeave
   ${EndIf}
 FunctionEnd
 
+Function StartupPage
+  nsDialogs::Create 1018
+  Pop $0
+  ${If} $0 == error
+    Abort
+  ${EndIf}
+  ${NSD_CreateLabel} 0 0 100% 50u \
+    "Setup approves administrator access once. Conduit shortcuts will then start it without repeated approval prompts. You can also start it automatically on this computer when your current Windows account signs in."
+  Pop $0
+  ${NSD_CreateCheckbox} 0 60u 100% 20u "Start Conduit when I sign in"
+  Pop $StartupCheckbox
+  ${NSD_SetState} $StartupCheckbox $StartupEnabled
+  ${NSD_CreateLabel} 0 95u 100% 40u \
+    "Quitting Conduit keeps it closed until you open it again (or sign in again with this option enabled). This setting does not change other computers."
+  Pop $0
+  nsDialogs::Show
+FunctionEnd
+
+Function StartupLeave
+  ${NSD_GetState} $StartupCheckbox $StartupEnabled
+FunctionEnd
+
 Function RollbackInstall
   ; The repair helper owns all firewall rollback before it returns failure.
   ; Before repair runs, this installer has not changed firewall state.
@@ -269,6 +298,14 @@ Function RollbackInstall
 FunctionEnd
 
 Function CleanupTransactionFiles
+  ${If} $StartupTaskAttempted == "1"
+    ExecWait '"$INSTDIR\Conduit.exe" --conduit-startup-helper remove' $0
+    ${If} $0 != 0
+      MessageBox MB_ICONSTOP|MB_OK "Conduit could not remove its approved launch task. Setup preserved the installed files so you can retry setup or uninstall as administrator."
+      SetErrorLevel 3
+      Quit
+    ${EndIf}
+  ${EndIf}
   Delete "$DESKTOP\Conduit.lnk"
   Delete "$SMPROGRAMS\Conduit.lnk"
   Delete "$INSTDIR\Uninstall.exe"
@@ -360,8 +397,6 @@ upgrade_ready:
   FileWrite $1 "[InternetShortcut]$\r$\nURL=${SOURCE_URL}$\r$\n"
   FileClose $1
 
-  CreateShortCut "$DESKTOP\Conduit.lnk" "$INSTDIR\Conduit.exe" "" "$INSTDIR\Conduit.exe" 0
-  CreateShortCut "$SMPROGRAMS\Conduit.lnk" "$INSTDIR\Conduit.exe" "" "$INSTDIR\Conduit.exe" 0
   WriteRegStr HKLM "Software\Conduit" "InstallDir" "$INSTDIR"
   WriteRegStr HKLM "${UNINSTALL_KEY}" "DisplayName" "${PRODUCT_NAME}"
   WriteRegStr HKLM "${UNINSTALL_KEY}" \
@@ -377,6 +412,27 @@ upgrade_ready:
   ; Repair performs its own effective reinspection and rollback. Keep it as
   ; the final fallible step so no later installer failure can strand disabled
   ; conflict rules outside that exact-object transaction.
+  StrCpy $StartupTaskAttempted "1"
+  ${If} $StartupEnabled == ${BST_CHECKED}
+    ExecWait '"$INSTDIR\Conduit.exe" --conduit-startup-helper enable' $0
+  ${Else}
+    ExecWait '"$INSTDIR\Conduit.exe" --conduit-startup-helper manual' $0
+  ${EndIf}
+  ${If} $0 != 0
+    Call RollbackInstall
+    MessageBox MB_ICONSTOP|MB_OK "Conduit could not configure automatic startup. Setup was rolled back."
+    SetErrorLevel 3
+    Quit
+  ${EndIf}
+  ReadRegStr $StartupTaskName HKLM "Software\Conduit" "LaunchTaskName"
+  ${If} $StartupTaskName == ""
+    Call RollbackInstall
+    MessageBox MB_ICONSTOP|MB_OK "Conduit could not find its approved launch task. Setup was rolled back."
+    SetErrorLevel 3
+    Quit
+  ${EndIf}
+  CreateShortCut "$DESKTOP\Conduit.lnk" "$SYSDIR\schtasks.exe" '/Run /TN "$StartupTaskName"' "$INSTDIR\Conduit.exe" 0 SW_SHOWMINIMIZED
+  CreateShortCut "$SMPROGRAMS\Conduit.lnk" "$SYSDIR\schtasks.exe" '/Run /TN "$StartupTaskName"' "$INSTDIR\Conduit.exe" 0 SW_SHOWMINIMIZED
   ExecWait \
     '"$INSTDIR\Conduit.exe" --conduit-firewall-helper repair --base-port 28903' $0
   ${If} $0 != 0
@@ -398,6 +454,12 @@ install_complete:
 SectionEnd
 
 Section "Uninstall"
+  ExecWait '"$INSTDIR\Conduit.exe" --conduit-startup-helper remove' $0
+  ${If} $0 != 0
+    MessageBox MB_ICONSTOP|MB_OK "Conduit could not remove its startup tasks. Uninstall was stopped; retry as administrator."
+    SetErrorLevel 3
+    Quit
+  ${EndIf}
   ExecWait \
     '"$INSTDIR\Conduit.exe" --conduit-firewall-helper remove' $0
   ${If} $0 != 0

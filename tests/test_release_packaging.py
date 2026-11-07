@@ -57,13 +57,13 @@ class FakeDistribution:
 
 class ReleaseMetadataTests(unittest.TestCase):
     def test_product_and_tool_metadata_is_canonical(self):
-        self.assertEqual(PRODUCT_VERSION, "7.3.0")
-        self.assertEqual(FILE_VERSION, (7, 3, 0, 0))
-        self.assertEqual(FILE_VERSION_STRING, "7.3.0.0")
+        self.assertEqual(PRODUCT_VERSION, "7.3.1")
+        self.assertEqual(FILE_VERSION, (7, 3, 1, 0))
+        self.assertEqual(FILE_VERSION_STRING, "7.3.1.0")
         self.assertEqual(SOURCE_URL, "https://github.com/parm2006/Conduit")
         self.assertEqual(
             RELEASE_SOURCE_URL,
-            "https://github.com/parm2006/Conduit/tree/v7.3.0",
+            "https://github.com/parm2006/Conduit/tree/v7.3.1",
         )
         for value in (
             PYINSTALLER_LICENSE_URL,
@@ -271,11 +271,11 @@ class NsisInstallerContractTests(unittest.TestCase):
     def test_installer_shortcuts_explicitly_use_packaged_conduit_icon(self):
         desktop_shortcut = (
             'CreateShortCut "$DESKTOP\\Conduit.lnk" '
-            '"$INSTDIR\\Conduit.exe" "" "$INSTDIR\\Conduit.exe" 0'
+            '\"$SYSDIR\\schtasks.exe\" \'/Run /TN "$StartupTaskName"\' "$INSTDIR\\Conduit.exe" 0 SW_SHOWMINIMIZED'
         )
         start_menu_shortcut = (
             'CreateShortCut "$SMPROGRAMS\\Conduit.lnk" '
-            '"$INSTDIR\\Conduit.exe" "" "$INSTDIR\\Conduit.exe" 0'
+            '\"$SYSDIR\\schtasks.exe\" \'/Run /TN "$StartupTaskName"\' "$INSTDIR\\Conduit.exe" 0 SW_SHOWMINIMIZED'
         )
 
         self.assertIn(desktop_shortcut, self.script)
@@ -336,7 +336,8 @@ class NsisInstallerContractTests(unittest.TestCase):
         self.assertIn('Delete "$INSTDIR\\Conduit.exe"', uninstall)
         self.assertNotIn("Uninstall was cancelled", uninstall)
         self.assertNotIn("SetErrorLevel 4", uninstall)
-        self.assertNotIn("Quit", uninstall)
+        firewall_cleanup = uninstall[uninstall.index('--conduit-firewall-helper remove'):]
+        self.assertNotIn("Quit", firewall_cleanup)
 
     def test_installer_classifies_exact_packaged_upgrade_and_partial_remnants(self):
         self.assertNotIn("MUI_PAGE_DIRECTORY", self.script)
