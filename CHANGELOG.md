@@ -4,7 +4,7 @@
 
 ### Fixed
 
-- Installed and portable Conduit now request administrator approval at launch so remote input can control elevated apps such as Windhawk.
+- Conduit now runs elevated to control apps such as Windhawk; direct executable and portable launches request administrator approval.
 
 ### Added
 
