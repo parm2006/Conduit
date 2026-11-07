@@ -51,6 +51,7 @@ VERSION_FILE.write_text(
 )
 
 hidden_imports = [
+    "app.startup",
     "app.firewall_helper",
     "app.windows_firewall",
     "pythoncom",
@@ -100,6 +101,8 @@ exe = EXE(
     upx_exclude=[],
     runtime_tmpdir=None,
     console=False,
+    # Remote input must reach elevated windows on the controlled computer.
+    uac_admin=True,
     disable_windowed_traceback=False,
     argv_emulation=False,
     target_arch=None,

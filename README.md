@@ -1,4 +1,4 @@
-# Conduit 7.3.0
+# Conduit 7.3.1
 
 A fast Windows wireless KVM for sharing your mouse, keyboard, newest clipboard item, on-paste file relay, low-latency native hardware video streaming, and cross-machine browser window handoff across one Server and up to two Clients on the same local network.
 
@@ -31,6 +31,10 @@ Connection reload waits three seconds for Clients, restores accepted positions b
 2. **Start Server**: On your host PC, select **Server (Host)**, enter a shared password, and click **Start Server**.
 3. **Connect Clients**: On client PCs, enter the Server IP, port, and password, then click **Connect** (a third Client may replace one of the two connected Clients; unanswered requests close after 15 seconds).
 4. **Pair & Arrange**: Approve the pairing code on first connect, arrange the screens so edges touch, and select **Apply**.
+
+Approve administrator access once during installation. The installed desktop and Start menu shortcuts launch Conduit through an approved per-user Windows scheduled task, without repeated UAC prompts. Setup also offers **Start Conduit when I sign in**, independently on each computer (off by default). Quitting Conduit keeps it closed until you launch it again or the next enabled sign-in; there is no restart watchdog. Uninstall removes the scheduled tasks. Install using your own Windows administrator account; these shortcuts are configured for that account.
+
+Conduit runs elevated so remote mouse and keyboard input can reach elevated apps such as Windhawk. Opening the executable directly, including a portable copy, still requests administrator approval. When running from source with `run.bat`, use an administrator terminal for the same input access.
 
 ---
 
