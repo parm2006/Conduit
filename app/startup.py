@@ -1,6 +1,7 @@
 """Installer-only, per-user elevated launch task. No restart/watchdog behavior."""
 
 import os
+import logging
 from pathlib import Path
 import sys
 
@@ -78,7 +79,8 @@ def run_startup_helper(arguments):
         try:
             existing = folder.GetTask(name)
         except pywintypes.com_error as error:
-            if error.hresult != -2147024894:  # HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND)
+            code = error.excepinfo[5] if error.excepinfo else error.hresult
+            if code != -2147024894:  # HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND)
                 raise
             existing = None
         if existing is not None and not task_is_owned(existing, executable):
@@ -98,4 +100,5 @@ def run_startup_helper(arguments):
             winreg.SetValueEx(key, 'LaunchTaskName', 0, winreg.REG_SZ, name)
         return 0
     except Exception:
+        logging.getLogger(__name__).exception('Could not configure Conduit launch task')
         return 3

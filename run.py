@@ -44,6 +44,7 @@ def configure_runtime_logging(log_root=None):
 def main(argv=None, *, helper_runner=None, gui_runner=None):
     arguments = list(sys.argv[1:] if argv is None else argv)
     if arguments[:1] == ["--conduit-startup-helper"]:
+        configure_runtime_logging()
         from app.startup import run_startup_helper
 
         return run_startup_helper(arguments[1:])

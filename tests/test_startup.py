@@ -30,7 +30,10 @@ class StartupTests(unittest.TestCase):
     def test_enable_and_manual_register_restricted_interactive_task(self):
         import pywintypes
         scheduler, folder, _registry = self.helper_context()
-        folder.GetTask.side_effect = pywintypes.com_error(-2147024894, 'missing', None, None)
+        # Schedule.Service wraps ERROR_FILE_NOT_FOUND in DISP_E_EXCEPTION.
+        folder.GetTask.side_effect = pywintypes.com_error(
+            -2147352567, 'Exception occurred', (0, None, None, None, 0, -2147024894), None
+        )
         for operation, expected_triggers in [('enable', 1), ('manual', 0)]:
             scheduler.NewTask.return_value.reset_mock()
             self.assertEqual(run_startup_helper([operation]), 0)
