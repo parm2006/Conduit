@@ -204,6 +204,16 @@ try {
         )
     }
 
+    # Build the searchable, non-elevated entry point before installer assembly.
+    Invoke-Checked -Description "Conduit launcher build" -FilePath $ResolvedMakensis -ArgumentList @(
+        "/V3", "installer\ConduitLauncher.nsi"
+    )
+    if ($SigningToolPath) {
+        Invoke-Checked -Description "Conduit launcher signing" -FilePath $SigningToolPath -ArgumentList (
+            @($SigningArguments) + @(Join-Path $DistDirectory "ConduitLauncher.exe")
+        )
+    }
+
     # makensis
     Invoke-Checked -Description "NSIS installer build" -FilePath $ResolvedMakensis -ArgumentList @(
         "/V3", "/DCONDUIT_RELEASE_BUILD=1", $InstallerScript

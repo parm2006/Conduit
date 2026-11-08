@@ -86,6 +86,7 @@ classify_next_entry:
   StrCmp $3 ".." classify_advance
   IfFileExists "$INSTDIR\$3\*.*" unknown_install_contents
 
+  StrCmp $3 "ConduitLauncher.exe" classify_allowed_entry
   StrCmp $3 "Conduit.exe" classify_allowed_entry
   StrCmp $3 "Uninstall.exe" classify_allowed_entry
   StrCmp $3 "Conduit Source.url" classify_allowed_entry
@@ -159,6 +160,7 @@ FunctionEnd
 Function CleanupPartialInstall
   ; These are the complete installer-owned file allowlist. Never execute them.
   ClearErrors
+  Delete "$INSTDIR\ConduitLauncher.exe"
   Delete "$INSTDIR\Conduit.exe"
   Delete "$INSTDIR\Uninstall.exe"
   Delete "$INSTDIR\Conduit Source.url"
@@ -186,6 +188,7 @@ Function CleanupUpgradeRemnants
   ; The verified old uninstaller owns removal. Clean only the same known files
   ; if an older uninstaller leaves installer-owned remnants behind.
   ClearErrors
+  Delete "$INSTDIR\ConduitLauncher.exe"
   Delete "$INSTDIR\Conduit.exe"
   IfErrors upgrade_cleanup_executable_locked
   Delete "$INSTDIR\Conduit Source.url"
@@ -313,6 +316,7 @@ Function CleanupTransactionFiles
   Delete "$INSTDIR\Conduit.installing"
   Delete "$INSTDIR\THIRD_PARTY_NOTICES.txt"
   Delete "$INSTDIR\LICENSE"
+  Delete "$INSTDIR\ConduitLauncher.exe"
   Delete "$INSTDIR\Conduit.exe"
   DeleteRegKey HKLM "${UNINSTALL_KEY}"
   DeleteRegKey HKLM "Software\Conduit"
@@ -383,6 +387,7 @@ upgrade_ready:
   ${EndIf}
 
   SetOutPath "$INSTDIR"
+  File "..\dist\ConduitLauncher.exe"
   File "/oname=Conduit.exe" "..\dist\Conduit-v${PRODUCT_VERSION}.exe"
   File "..\LICENSE"
   File "..\build\THIRD_PARTY_NOTICES.txt"
@@ -431,8 +436,8 @@ upgrade_ready:
     SetErrorLevel 3
     Quit
   ${EndIf}
-  CreateShortCut "$DESKTOP\Conduit.lnk" "$SYSDIR\schtasks.exe" '/Run /TN "$StartupTaskName"' "$INSTDIR\Conduit.exe" 0 SW_SHOWMINIMIZED
-  CreateShortCut "$SMPROGRAMS\Conduit.lnk" "$SYSDIR\schtasks.exe" '/Run /TN "$StartupTaskName"' "$INSTDIR\Conduit.exe" 0 SW_SHOWMINIMIZED
+  CreateShortCut "$DESKTOP\Conduit.lnk" "$INSTDIR\ConduitLauncher.exe" "" "$INSTDIR\Conduit.exe" 0
+  CreateShortCut "$SMPROGRAMS\Conduit.lnk" "$INSTDIR\ConduitLauncher.exe" "" "$INSTDIR\Conduit.exe" 0
   ExecWait \
     '"$INSTDIR\Conduit.exe" --conduit-firewall-helper repair --base-port 28903' $0
   ${If} $0 != 0
@@ -474,6 +479,7 @@ uninstall_firewall_warning_done:
   Delete "$INSTDIR\Conduit Source.url"
   Delete "$INSTDIR\THIRD_PARTY_NOTICES.txt"
   Delete "$INSTDIR\LICENSE"
+  Delete "$INSTDIR\ConduitLauncher.exe"
   Delete "$INSTDIR\Conduit.exe"
   Delete "$INSTDIR\Uninstall.exe"
   DeleteRegKey HKLM "${UNINSTALL_KEY}"

@@ -271,11 +271,11 @@ class NsisInstallerContractTests(unittest.TestCase):
     def test_installer_shortcuts_explicitly_use_packaged_conduit_icon(self):
         desktop_shortcut = (
             'CreateShortCut "$DESKTOP\\Conduit.lnk" '
-            '\"$SYSDIR\\schtasks.exe\" \'/Run /TN "$StartupTaskName"\' "$INSTDIR\\Conduit.exe" 0 SW_SHOWMINIMIZED'
+            '"$INSTDIR\\ConduitLauncher.exe" "" "$INSTDIR\\Conduit.exe" 0'
         )
         start_menu_shortcut = (
             'CreateShortCut "$SMPROGRAMS\\Conduit.lnk" '
-            '\"$SYSDIR\\schtasks.exe\" \'/Run /TN "$StartupTaskName"\' "$INSTDIR\\Conduit.exe" 0 SW_SHOWMINIMIZED'
+            '"$INSTDIR\\ConduitLauncher.exe" "" "$INSTDIR\\Conduit.exe" 0'
         )
 
         self.assertIn(desktop_shortcut, self.script)
@@ -284,6 +284,24 @@ class NsisInstallerContractTests(unittest.TestCase):
             self.script.count('Delete "$SMPROGRAMS\\Conduit.lnk"'),
             2,
         )
+
+    def test_searchable_launcher_is_installed_and_removed_in_every_cleanup_path(self):
+        self.assertIn('File "..\\dist\\ConduitLauncher.exe"', self.script)
+        for name in ('CleanupPartialInstall', 'CleanupUpgradeRemnants', 'CleanupTransactionFiles'):
+            body = self.script.split('Function ' + name + '\n', 1)[1].split('FunctionEnd', 1)[0]
+            self.assertIn('Delete "$INSTDIR\\ConduitLauncher.exe"', body)
+        uninstall = self.script.split('Section "Uninstall"', 1)[1]
+        self.assertIn('Delete "$INSTDIR\\ConduitLauncher.exe"', uninstall)
+        launcher = (Path(__file__).resolve().parents[1] / 'installer' / 'ConduitLauncher.nsi').read_text()
+        self.assertIn('RequestExecutionLevel user', launcher)
+        self.assertIn('ReadRegStr $0 HKLM "Software\\Conduit" "LaunchTaskName"', launcher)
+        self.assertIn('/Run /TN "$0"', launcher)
+        self.assertIn('SetErrorLevel 3', launcher)
+        self.assertNotIn('/Create', launcher)
+        # Both checkbox paths configure the task before either shortcut is made.
+        manual = self.script.index('--conduit-startup-helper manual')
+        shortcuts = self.script.index('CreateShortCut "$SMPROGRAMS')
+        self.assertLess(manual, shortcuts)
 
     def test_verified_repair_is_the_final_fallible_step_before_completion(self):
         repair = (
