@@ -81,8 +81,8 @@ class BrowserDpiBoundsTests(unittest.TestCase):
         self.assertEqual(on_sec.right - on_sec.left, 1500)
         self.assertEqual(on_sec.bottom - on_sec.top, 900)
 
-    def test_fallback_when_no_backend(self):
-        converter = DpiBoundsConverter(None)
+    def test_fallback_when_no_display_records(self):
+        converter = DpiBoundsConverter(MockDisplayBackend([]))
         res = converter.to_physical({"left": 50, "top": 60, "width": 700, "height": 400})
         self.assertEqual(res, NativeRect(50, 60, 750, 460))
 
