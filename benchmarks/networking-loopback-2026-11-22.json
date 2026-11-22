@@ -1,0 +1,788 @@
+{
+  "date": "2026-11-22",
+  "platform": "Windows",
+  "python": "3.14.6",
+  "scope": "Single sequential run pair on loopback; no statistical performance conclusion or physical input latency claim. File reception is in memory.",
+  "adaptive": {
+    "scope": "loopback transport RTT; not physical input-to-display latency",
+    "ack_return_path": "TLS",
+    "file_receiver": "memory; no filesystem writes",
+    "scenarios": [
+      {
+        "offered": 1000,
+        "observed": 957,
+        "coalesced_or_undelivered": 43,
+        "round_trip_ms": {
+          "p50": 0.30840000181342475,
+          "p95": 0.4512999985308852,
+          "max": 0.7791999996697996
+        },
+        "transport": "tls",
+        "bulk": false,
+        "input_kind": "absolute",
+        "actual_input_sends": {
+          "udp": 0,
+          "tls": 957
+        },
+        "delivery_order_valid": true,
+        "file_window": "adaptive",
+        "interval_ms": 1.0,
+        "offering_duration_ms": 999.5466000000306,
+        "producer_lateness_ms": {
+          "p50": 0.4532000020844862,
+          "p95": 0.9482999994361307,
+          "max": 1.2863000010838732
+        },
+        "final_position_observed": true,
+        "queue": {
+          "completed": 957,
+          "failed": 0,
+          "coalesced_positions": 43,
+          "sample_count": 256,
+          "pending_movement": 0,
+          "pending_discrete": 0,
+          "queue_ms": {
+            "p50": 0.03749999814317562,
+            "p95": 0.058099998568650335,
+            "max": 0.1253000009455718
+          },
+          "send_ms": {
+            "p50": 0.10119999933522195,
+            "p95": 0.13979999857838266,
+            "max": 0.20080000103916973
+          }
+        },
+        "file_bytes_acknowledged": 0,
+        "file_mib_per_second": 0.0,
+        "errors": []
+      },
+      {
+        "offered": 1000,
+        "observed": 989,
+        "coalesced_or_undelivered": 11,
+        "round_trip_ms": {
+          "p50": 0.37959999826853164,
+          "p95": 0.7030000015220139,
+          "max": 1.2847999969380908
+        },
+        "transport": "tls",
+        "bulk": true,
+        "input_kind": "absolute",
+        "actual_input_sends": {
+          "udp": 0,
+          "tls": 989
+        },
+        "delivery_order_valid": true,
+        "file_window": "adaptive",
+        "interval_ms": 1.0,
+        "offering_duration_ms": 999.4492000005266,
+        "producer_lateness_ms": {
+          "p50": 0.45450000106939115,
+          "p95": 0.8256000037363265,
+          "max": 1.175500001409091
+        },
+        "final_position_observed": true,
+        "queue": {
+          "completed": 989,
+          "failed": 0,
+          "coalesced_positions": 11,
+          "sample_count": 256,
+          "pending_movement": 0,
+          "pending_discrete": 0,
+          "queue_ms": {
+            "p50": 0.045999997382750735,
+            "p95": 0.19090000205324031,
+            "max": 0.41989999954239465
+          },
+          "send_ms": {
+            "p50": 0.06900000153109431,
+            "p95": 0.31990000206860714,
+            "max": 0.5681000002368819
+          }
+        },
+        "file_bytes_acknowledged": 233570304,
+        "file_mib_per_second": 221.83568205306025,
+        "errors": []
+      },
+      {
+        "offered": 1000,
+        "observed": 964,
+        "coalesced_or_undelivered": 36,
+        "round_trip_ms": {
+          "p50": 0.23300000248127617,
+          "p95": 0.38860000131535344,
+          "max": 0.7823000014468562
+        },
+        "transport": "udp",
+        "bulk": false,
+        "input_kind": "absolute",
+        "actual_input_sends": {
+          "udp": 964,
+          "tls": 0
+        },
+        "delivery_order_valid": true,
+        "file_window": "adaptive",
+        "interval_ms": 1.0,
+        "offering_duration_ms": 999.3603000002622,
+        "producer_lateness_ms": {
+          "p50": 0.45080000199959613,
+          "p95": 0.9172999998554587,
+          "max": 1.3400000025285408
+        },
+        "final_position_observed": true,
+        "queue": {
+          "completed": 964,
+          "failed": 0,
+          "coalesced_positions": 36,
+          "sample_count": 256,
+          "pending_movement": 0,
+          "pending_discrete": 0,
+          "queue_ms": {
+            "p50": 0.028300000849412754,
+            "p95": 0.05699999746866524,
+            "max": 0.284100002318155
+          },
+          "send_ms": {
+            "p50": 0.050099999498343095,
+            "p95": 0.09900000077323057,
+            "max": 0.22360000002663583
+          }
+        },
+        "file_bytes_acknowledged": 0,
+        "file_mib_per_second": 0.0,
+        "errors": []
+      },
+      {
+        "offered": 1000,
+        "observed": 983,
+        "coalesced_or_undelivered": 17,
+        "round_trip_ms": {
+          "p50": 0.3795000011450611,
+          "p95": 0.7699999987380579,
+          "max": 1.256300001841737
+        },
+        "transport": "udp",
+        "bulk": true,
+        "input_kind": "absolute",
+        "actual_input_sends": {
+          "udp": 983,
+          "tls": 0
+        },
+        "delivery_order_valid": true,
+        "file_window": "adaptive",
+        "interval_ms": 1.0,
+        "offering_duration_ms": 999.7027999997954,
+        "producer_lateness_ms": {
+          "p50": 0.42889999895123765,
+          "p95": 0.8332000033988152,
+          "max": 1.2276000015845057
+        },
+        "final_position_observed": true,
+        "queue": {
+          "completed": 983,
+          "failed": 0,
+          "coalesced_positions": 17,
+          "sample_count": 256,
+          "pending_movement": 0,
+          "pending_discrete": 0,
+          "queue_ms": {
+            "p50": 0.044600001274375245,
+            "p95": 0.1995999991777353,
+            "max": 0.4130000015720725
+          },
+          "send_ms": {
+            "p50": 0.07670000195503235,
+            "p95": 0.3088000012212433,
+            "max": 0.4331999989517499
+          }
+        },
+        "file_bytes_acknowledged": 258211840,
+        "file_mib_per_second": 245.1837693421968,
+        "errors": []
+      },
+      {
+        "offered": 1000,
+        "observed": 1000,
+        "coalesced_or_undelivered": 0,
+        "round_trip_ms": {
+          "p50": 0.3509999987727497,
+          "p95": 0.4606000002240762,
+          "max": 0.7623999990755692
+        },
+        "transport": "tls",
+        "bulk": false,
+        "input_kind": "relative",
+        "actual_input_sends": {
+          "udp": 0,
+          "tls": 955
+        },
+        "delivery_order_valid": true,
+        "file_window": "adaptive",
+        "interval_ms": 1.0,
+        "offering_duration_ms": 999.4163999981538,
+        "producer_lateness_ms": {
+          "p50": 0.4636000012396835,
+          "p95": 0.9508999974059407,
+          "max": 1.306599999225
+        },
+        "final_position_observed": true,
+        "queue": {
+          "completed": 955,
+          "failed": 0,
+          "coalesced_positions": 0,
+          "sample_count": 256,
+          "pending_movement": 0,
+          "pending_discrete": 0,
+          "queue_ms": {
+            "p50": 0.04059999992023222,
+            "p95": 0.06439999924623407,
+            "max": 0.1609999999345746
+          },
+          "send_ms": {
+            "p50": 0.10110000221175142,
+            "p95": 0.15600000187987462,
+            "max": 0.20320000112405978
+          }
+        },
+        "file_bytes_acknowledged": 0,
+        "file_mib_per_second": 0.0,
+        "errors": []
+      },
+      {
+        "offered": 1000,
+        "observed": 1000,
+        "coalesced_or_undelivered": 0,
+        "round_trip_ms": {
+          "p50": 0.37009999869042076,
+          "p95": 0.7102999989001546,
+          "max": 1.4253000008466188
+        },
+        "transport": "tls",
+        "bulk": true,
+        "input_kind": "relative",
+        "actual_input_sends": {
+          "udp": 0,
+          "tls": 993
+        },
+        "delivery_order_valid": true,
+        "file_window": "adaptive",
+        "interval_ms": 1.0,
+        "offering_duration_ms": 999.4162000002689,
+        "producer_lateness_ms": {
+          "p50": 0.44949999937671237,
+          "p95": 0.8376000005227979,
+          "max": 1.196400000480935
+        },
+        "final_position_observed": true,
+        "queue": {
+          "completed": 993,
+          "failed": 0,
+          "coalesced_positions": 0,
+          "sample_count": 256,
+          "pending_movement": 0,
+          "pending_discrete": 0,
+          "queue_ms": {
+            "p50": 0.03170000127283856,
+            "p95": 0.2049999966402538,
+            "max": 0.7237999998324085
+          },
+          "send_ms": {
+            "p50": 0.0732000007701572,
+            "p95": 0.3476000019873027,
+            "max": 0.820099998236401
+          }
+        },
+        "file_bytes_acknowledged": 286261248,
+        "file_mib_per_second": 272.03519996057946,
+        "errors": []
+      },
+      {
+        "offered": 1000,
+        "observed": 1000,
+        "coalesced_or_undelivered": 0,
+        "round_trip_ms": {
+          "p50": 0.3544999999576248,
+          "p95": 0.5260999969323166,
+          "max": 0.7762999994156417
+        },
+        "transport": "tls",
+        "bulk": false,
+        "input_kind": "keyboard",
+        "actual_input_sends": {
+          "udp": 0,
+          "tls": 1000
+        },
+        "delivery_order_valid": true,
+        "file_window": "adaptive",
+        "interval_ms": 1.0,
+        "offering_duration_ms": 999.6135000001232,
+        "producer_lateness_ms": {
+          "p50": 0.4628000024240464,
+          "p95": 0.9413000007043593,
+          "max": 1.2908000026072841
+        },
+        "final_position_observed": true,
+        "queue": {
+          "completed": 1000,
+          "failed": 0,
+          "coalesced_positions": 0,
+          "sample_count": 256,
+          "pending_movement": 0,
+          "pending_discrete": 0,
+          "queue_ms": {
+            "p50": 0.041299997974419966,
+            "p95": 0.1731000011204742,
+            "max": 0.1984999980777502
+          },
+          "send_ms": {
+            "p50": 0.12970000170753337,
+            "p95": 0.1489000023866538,
+            "max": 0.2925000007962808
+          }
+        },
+        "file_bytes_acknowledged": 0,
+        "file_mib_per_second": 0.0,
+        "errors": []
+      },
+      {
+        "offered": 1000,
+        "observed": 1000,
+        "coalesced_or_undelivered": 0,
+        "round_trip_ms": {
+          "p50": 0.36159999945084564,
+          "p95": 0.7007000021985732,
+          "max": 1.2181999991298653
+        },
+        "transport": "tls",
+        "bulk": true,
+        "input_kind": "keyboard",
+        "actual_input_sends": {
+          "udp": 0,
+          "tls": 1000
+        },
+        "delivery_order_valid": true,
+        "file_window": "adaptive",
+        "interval_ms": 1.0,
+        "offering_duration_ms": 999.7825999998895,
+        "producer_lateness_ms": {
+          "p50": 0.4434000002220273,
+          "p95": 0.8152999980666209,
+          "max": 1.5156000008573756
+        },
+        "final_position_observed": true,
+        "queue": {
+          "completed": 1000,
+          "failed": 0,
+          "coalesced_positions": 0,
+          "sample_count": 256,
+          "pending_movement": 0,
+          "pending_discrete": 0,
+          "queue_ms": {
+            "p50": 0.04529999932856299,
+            "p95": 0.18929999714600854,
+            "max": 0.4490000028454233
+          },
+          "send_ms": {
+            "p50": 0.07279999772435986,
+            "p95": 0.3233999996155035,
+            "max": 0.5633000000671018
+          }
+        },
+        "file_bytes_acknowledged": 297795584,
+        "file_mib_per_second": 282.8650605177171,
+        "errors": []
+      }
+    ]
+  },
+  "fixed": {
+    "scope": "loopback transport RTT; not physical input-to-display latency",
+    "ack_return_path": "TLS",
+    "file_receiver": "memory; no filesystem writes",
+    "scenarios": [
+      {
+        "offered": 1000,
+        "observed": 945,
+        "coalesced_or_undelivered": 55,
+        "round_trip_ms": {
+          "p50": 0.2970000023196917,
+          "p95": 0.44490000072983094,
+          "max": 0.6966000000829808
+        },
+        "transport": "tls",
+        "bulk": false,
+        "input_kind": "absolute",
+        "actual_input_sends": {
+          "udp": 0,
+          "tls": 945
+        },
+        "delivery_order_valid": true,
+        "file_window": "fixed",
+        "interval_ms": 1.0,
+        "offering_duration_ms": 999.7322000017448,
+        "producer_lateness_ms": {
+          "p50": 0.4484999990381766,
+          "p95": 0.9962000003724825,
+          "max": 1.3134000000718515
+        },
+        "final_position_observed": true,
+        "queue": {
+          "completed": 945,
+          "failed": 0,
+          "coalesced_positions": 55,
+          "sample_count": 256,
+          "pending_movement": 0,
+          "pending_discrete": 0,
+          "queue_ms": {
+            "p50": 0.03479999941191636,
+            "p95": 0.060200000007171184,
+            "max": 0.10829999882844277
+          },
+          "send_ms": {
+            "p50": 0.09209999916492961,
+            "p95": 0.14789999841013923,
+            "max": 0.22139999782666564
+          }
+        },
+        "file_bytes_acknowledged": 0,
+        "file_mib_per_second": 0.0,
+        "errors": []
+      },
+      {
+        "offered": 1000,
+        "observed": 979,
+        "coalesced_or_undelivered": 21,
+        "round_trip_ms": {
+          "p50": 0.38610000046901405,
+          "p95": 0.749099999666214,
+          "max": 1.5037000011943746
+        },
+        "transport": "tls",
+        "bulk": true,
+        "input_kind": "absolute",
+        "actual_input_sends": {
+          "udp": 0,
+          "tls": 979
+        },
+        "delivery_order_valid": true,
+        "file_window": "fixed",
+        "interval_ms": 1.0,
+        "offering_duration_ms": 999.3644999995013,
+        "producer_lateness_ms": {
+          "p50": 0.4472999971767422,
+          "p95": 0.8704999963811133,
+          "max": 1.2406999994709622
+        },
+        "final_position_observed": true,
+        "queue": {
+          "completed": 979,
+          "failed": 0,
+          "coalesced_positions": 21,
+          "sample_count": 256,
+          "pending_movement": 0,
+          "pending_discrete": 0,
+          "queue_ms": {
+            "p50": 0.045900000259280205,
+            "p95": 0.22819999867351726,
+            "max": 0.312700001813937
+          },
+          "send_ms": {
+            "p50": 0.0732000007701572,
+            "p95": 0.31769999986863695,
+            "max": 0.685199996951269
+          }
+        },
+        "file_bytes_acknowledged": 231735296,
+        "file_mib_per_second": 220.22430393395607,
+        "errors": []
+      },
+      {
+        "offered": 1000,
+        "observed": 955,
+        "coalesced_or_undelivered": 45,
+        "round_trip_ms": {
+          "p50": 0.2722000026551541,
+          "p95": 0.40410000292467885,
+          "max": 0.6365999979607295
+        },
+        "transport": "udp",
+        "bulk": false,
+        "input_kind": "absolute",
+        "actual_input_sends": {
+          "udp": 955,
+          "tls": 0
+        },
+        "delivery_order_valid": true,
+        "file_window": "fixed",
+        "interval_ms": 1.0,
+        "offering_duration_ms": 999.565199999779,
+        "producer_lateness_ms": {
+          "p50": 0.44859999616164714,
+          "p95": 0.9625999991840217,
+          "max": 1.3650999972014688
+        },
+        "final_position_observed": true,
+        "queue": {
+          "completed": 955,
+          "failed": 0,
+          "coalesced_positions": 45,
+          "sample_count": 256,
+          "pending_movement": 0,
+          "pending_discrete": 0,
+          "queue_ms": {
+            "p50": 0.03310000101919286,
+            "p95": 0.05650000093737617,
+            "max": 0.08499999967170879
+          },
+          "send_ms": {
+            "p50": 0.06629999916185625,
+            "p95": 0.10869999823626131,
+            "max": 0.16939999841270037
+          }
+        },
+        "file_bytes_acknowledged": 0,
+        "file_mib_per_second": 0.0,
+        "errors": []
+      },
+      {
+        "offered": 1000,
+        "observed": 985,
+        "coalesced_or_undelivered": 15,
+        "round_trip_ms": {
+          "p50": 0.398000000132015,
+          "p95": 0.7895999988249969,
+          "max": 1.4322999995783903
+        },
+        "transport": "udp",
+        "bulk": true,
+        "input_kind": "absolute",
+        "actual_input_sends": {
+          "udp": 985,
+          "tls": 0
+        },
+        "delivery_order_valid": true,
+        "file_window": "fixed",
+        "interval_ms": 1.0,
+        "offering_duration_ms": 999.7134000004735,
+        "producer_lateness_ms": {
+          "p50": 0.44690000140690245,
+          "p95": 0.8496000009472482,
+          "max": 1.157399998191977
+        },
+        "final_position_observed": true,
+        "queue": {
+          "completed": 985,
+          "failed": 0,
+          "coalesced_positions": 15,
+          "sample_count": 256,
+          "pending_movement": 0,
+          "pending_discrete": 0,
+          "queue_ms": {
+            "p50": 0.045599997974932194,
+            "p95": 0.20840000070165843,
+            "max": 0.4920999999740161
+          },
+          "send_ms": {
+            "p50": 0.10309999925084412,
+            "p95": 0.3828000008070376,
+            "max": 0.6372999996528961
+          }
+        },
+        "file_bytes_acknowledged": 234094592,
+        "file_mib_per_second": 222.21824070834344,
+        "errors": []
+      },
+      {
+        "offered": 1000,
+        "observed": 1000,
+        "coalesced_or_undelivered": 0,
+        "round_trip_ms": {
+          "p50": 0.2992000008816831,
+          "p95": 0.48830000014277175,
+          "max": 0.6167999999888707
+        },
+        "transport": "tls",
+        "bulk": false,
+        "input_kind": "relative",
+        "actual_input_sends": {
+          "udp": 0,
+          "tls": 964
+        },
+        "delivery_order_valid": true,
+        "file_window": "fixed",
+        "interval_ms": 1.0,
+        "offering_duration_ms": 999.7497000003932,
+        "producer_lateness_ms": {
+          "p50": 0.4533000028459355,
+          "p95": 0.9310000023106113,
+          "max": 1.2880000031145755
+        },
+        "final_position_observed": true,
+        "queue": {
+          "completed": 964,
+          "failed": 0,
+          "coalesced_positions": 0,
+          "sample_count": 256,
+          "pending_movement": 0,
+          "pending_discrete": 0,
+          "queue_ms": {
+            "p50": 0.04169999738223851,
+            "p95": 0.0779999973019585,
+            "max": 0.14870000086375512
+          },
+          "send_ms": {
+            "p50": 0.09940000018104911,
+            "p95": 0.1500000034866389,
+            "max": 0.28390000079525635
+          }
+        },
+        "file_bytes_acknowledged": 0,
+        "file_mib_per_second": 0.0,
+        "errors": []
+      },
+      {
+        "offered": 1000,
+        "observed": 1000,
+        "coalesced_or_undelivered": 0,
+        "round_trip_ms": {
+          "p50": 0.3866000006382819,
+          "p95": 0.7364999983110465,
+          "max": 1.276700000744313
+        },
+        "transport": "tls",
+        "bulk": true,
+        "input_kind": "relative",
+        "actual_input_sends": {
+          "udp": 0,
+          "tls": 990
+        },
+        "delivery_order_valid": true,
+        "file_window": "fixed",
+        "interval_ms": 1.0,
+        "offering_duration_ms": 999.4654000001901,
+        "producer_lateness_ms": {
+          "p50": 0.44160000106785446,
+          "p95": 0.8100000013655517,
+          "max": 1.3840999999956694
+        },
+        "final_position_observed": true,
+        "queue": {
+          "completed": 990,
+          "failed": 0,
+          "coalesced_positions": 0,
+          "sample_count": 256,
+          "pending_movement": 0,
+          "pending_discrete": 0,
+          "queue_ms": {
+            "p50": 0.03429999924264848,
+            "p95": 0.21500000002561137,
+            "max": 0.47590000031050295
+          },
+          "send_ms": {
+            "p50": 0.0732000007701572,
+            "p95": 0.33070000063162297,
+            "max": 0.4902000000583939
+          }
+        },
+        "file_bytes_acknowledged": 240648192,
+        "file_mib_per_second": 228.6563039696477,
+        "errors": []
+      },
+      {
+        "offered": 1000,
+        "observed": 1000,
+        "coalesced_or_undelivered": 0,
+        "round_trip_ms": {
+          "p50": 0.3622999975050334,
+          "p95": 0.5543999977817293,
+          "max": 0.8286000011139549
+        },
+        "transport": "tls",
+        "bulk": false,
+        "input_kind": "keyboard",
+        "actual_input_sends": {
+          "udp": 0,
+          "tls": 1000
+        },
+        "delivery_order_valid": true,
+        "file_window": "fixed",
+        "interval_ms": 1.0,
+        "offering_duration_ms": 999.535899998591,
+        "producer_lateness_ms": {
+          "p50": 0.4507999983616173,
+          "p95": 0.9860999998636544,
+          "max": 1.3040999983786605
+        },
+        "final_position_observed": true,
+        "queue": {
+          "completed": 1000,
+          "failed": 0,
+          "coalesced_positions": 0,
+          "sample_count": 256,
+          "pending_movement": 0,
+          "pending_discrete": 0,
+          "queue_ms": {
+            "p50": 0.040099999750964344,
+            "p95": 0.17440000010537915,
+            "max": 0.2917000019806437
+          },
+          "send_ms": {
+            "p50": 0.1326000019616913,
+            "p95": 0.15630000052624382,
+            "max": 0.24000000121304765
+          }
+        },
+        "file_bytes_acknowledged": 0,
+        "file_mib_per_second": 0.0,
+        "errors": []
+      },
+      {
+        "offered": 1000,
+        "observed": 1000,
+        "coalesced_or_undelivered": 0,
+        "round_trip_ms": {
+          "p50": 0.3806000022450462,
+          "p95": 0.7464000009349547,
+          "max": 1.2640999993891455
+        },
+        "transport": "tls",
+        "bulk": true,
+        "input_kind": "keyboard",
+        "actual_input_sends": {
+          "udp": 0,
+          "tls": 1000
+        },
+        "delivery_order_valid": true,
+        "file_window": "fixed",
+        "interval_ms": 1.0,
+        "offering_duration_ms": 999.3753999988257,
+        "producer_lateness_ms": {
+          "p50": 0.44049999632989056,
+          "p95": 0.8352999975613784,
+          "max": 1.392199999827426
+        },
+        "final_position_observed": true,
+        "queue": {
+          "completed": 1000,
+          "failed": 0,
+          "coalesced_positions": 0,
+          "sample_count": 256,
+          "pending_movement": 0,
+          "pending_discrete": 0,
+          "queue_ms": {
+            "p50": 0.055900000006658956,
+            "p95": 0.2702999991015531,
+            "max": 0.5158000021765474
+          },
+          "send_ms": {
+            "p50": 0.07970000297063962,
+            "p95": 0.3122000016446691,
+            "max": 0.6538000016007572
+          }
+        },
+        "file_bytes_acknowledged": 247201792,
+        "file_mib_per_second": 234.92756557810756,
+        "errors": []
+      }
+    ]
+  }
+}
