@@ -1,3 +1,4 @@
+import socket
 import time
 import unittest
 
@@ -71,6 +72,13 @@ class TestNativeStreamer(unittest.TestCase):
             0, 0, 0, None
         )
         self.assertTrue(hwnd != 0)
+        self.addCleanup(win32gui.DestroyWindow, hwnd)
+
+        # Fixed high ports can fall inside Windows/Hyper-V excluded ranges.
+        # Ask the OS for an available UDP port instead.
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as probe:
+            probe.bind(("0.0.0.0", 0))
+            listen_port = probe.getsockname()[1]
 
         events_receiver = []
         session_key = b"K" * 32
@@ -79,14 +87,18 @@ class TestNativeStreamer(unittest.TestCase):
             events_receiver.append((code, msg))
 
         receiver = NativeStreamerReceiver(hwnd, on_event=on_recv_event)
-        recv_started = receiver.start(listen_port=54895, session_key=session_key)
+        self.addCleanup(receiver.destroy)
+        self.addCleanup(receiver.stop)
+        recv_started = receiver.start(listen_port=listen_port, session_key=session_key)
         self.assertTrue(recv_started)
 
         sender = NativeStreamerSender()
+        self.addCleanup(sender.destroy)
+        self.addCleanup(sender.stop)
         send_started = sender.start(
             display_index=0,
             target_ip="127.0.0.1",
-            target_port=54895,
+            target_port=listen_port,
             session_key=session_key,
             bitrate_kbps=8000,
             fps=30,
@@ -104,12 +116,6 @@ class TestNativeStreamer(unittest.TestCase):
 
         recv_frames = receiver.get_frame_count()
         send_frames = sender.get_frame_count()
-
-        sender.stop()
-        sender.destroy()
-        receiver.stop()
-        receiver.destroy()
-        win32gui.DestroyWindow(hwnd)
 
         self.assertTrue(first_frame, f"Expected first frame event, got: {events_receiver}")
         self.assertGreaterEqual(recv_frames, 1)
