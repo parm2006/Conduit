@@ -1,6 +1,6 @@
 # Privacy Policy
 
-Last updated: August 29, 2026
+Last updated: November 22, 2026
 
 ## Scope
 
@@ -40,6 +40,8 @@ Operational logs or screenshots may contain network addresses, machine names, lo
 ## Third-party services
 
 The Conduit application does not need a project-operated cloud service. Downloading Conduit or interacting with its source, issues, and releases through GitHub is governed by GitHub's own privacy practices.
+
+Starting with version 7.3.2-beta.1, installed copies automatically check GitHub for updates at launch. You can also check manually in the Updates tab. These requests expose your public IP address and a User-Agent containing the Conduit version to GitHub; installer downloads also contact GitHub's download infrastructure. Update requests do not include clipboard contents, input events, transferred files, passwords, trusted-peer information, or machine layout. Downloads and protected installer staging remain on the computer; protected staging is scheduled for removal at the next Windows reboot.
 
 ## Changes and contact
 
