@@ -4,6 +4,7 @@
 #include "h264_decoder.h"
 #include "d3d11_renderer.h"
 #include "udp_transport.h"
+#include "video_frame_queue.h"
 #include <windows.h>
 #include <string>
 #include <thread>
@@ -291,6 +292,8 @@ struct StreamerReceiverState {
     std::atomic<bool> first_frame_rendered;
     std::atomic<uint64_t> frame_count;
     std::mutex render_mutex;
+    VideoFrameQueue frames;
+    std::thread decode_thread;
 
     StreamerReceiverState(HWND hwnd, StreamerEventCallback cb, void* ud)
         : target_hwnd(hwnd)
@@ -308,6 +311,32 @@ struct StreamerReceiverState {
         }
     }
 };
+
+static void StreamerDecodeLoop(StreamerReceiverState* state) {
+    const HRESULT com_hr = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+    if (FAILED(com_hr)) {
+        state->Notify(STREAMER_EVENT_ERROR, "Decoder worker COM initialization failed");
+        return;
+    }
+    AssembledFrame frame;
+    while (state->frames.WaitPop(frame)) {
+        std::lock_guard<std::mutex> lock(state->render_mutex);
+        if (!state->running) break;
+        ComPtr<ID3D11Texture2D> decodedTexture;
+        ComPtr<IMFSample> sampleHolder;
+        uint32_t src_w = 0, src_h = 0;
+        if (state->decoder.DecodeFrame(frame.data.data(), frame.data.size(), &decodedTexture,
+                                       &src_w, &src_h, &sampleHolder) && decodedTexture) {
+            if (state->renderer.RenderFrame(decodedTexture.Get(), src_w, src_h)) {
+                state->frame_count.fetch_add(1);
+                if (!state->first_frame_rendered.exchange(true)) {
+                    state->Notify(STREAMER_EVENT_FIRST_FRAME, "First frame presented");
+                }
+            }
+        }
+    }
+    CoUninitialize();
+}
 
 STREAMER_API StreamerReceiverHandle streamer_receiver_create(HWND target_hwnd, StreamerEventCallback cb, void* user_data) {
     if (!target_hwnd) return nullptr;
@@ -328,50 +357,60 @@ STREAMER_API int streamer_receiver_start(StreamerReceiverHandle handle, int list
     uint32_t height = max(1, rc.bottom - rc.top);
 
     if (!state->renderer.Initialize(state->target_hwnd, width, height)) {
+        MFShutdown();
         return -3;
     }
 
     if (!state->decoder.Initialize(state->renderer.GetDevice(), width, height)) {
         state->renderer.Cleanup();
+        MFShutdown();
         return -4;
     }
 
     state->first_frame_rendered = false;
 
-    // Frame arrival callback from reassembler
+    state->frames.Reset();
+    // Never decode or wait for VSync on the UDP receive thread.
     auto on_frame = [state](AssembledFrame&& frame) {
-        std::lock_guard<std::mutex> lock(state->render_mutex);
         if (!state->running) return;
-
-        ComPtr<ID3D11Texture2D> decodedTexture;
-        ComPtr<IMFSample> sampleHolder;
-        uint32_t src_w = 0, src_h = 0;
-        if (state->decoder.DecodeFrame(frame.data.data(), frame.data.size(), &decodedTexture, &src_w, &src_h, &sampleHolder)) {
-            if (decodedTexture) {
-                state->renderer.RenderFrame(decodedTexture.Get(), src_w, src_h);
-                state->frame_count.fetch_add(1);
-                if (!state->first_frame_rendered.exchange(true)) {
-                    state->Notify(STREAMER_EVENT_FIRST_FRAME, "First frame presented");
-                }
-            }
+        if (state->frames.Push(std::move(frame)) == VideoFrameQueue::PushResult::RequestKeyframe) {
+            state->Notify(STREAMER_EVENT_NEED_KEYFRAME, "Decoder queue requires keyframe");
         }
     };
 
     // Keyframe needed callback
     auto on_keyframe_needed = [state]() {
-        state->Notify(STREAMER_EVENT_NEED_KEYFRAME, "Keyframe required");
+        if (state->running && state->frames.RequestKeyframe()) {
+            state->Notify(STREAMER_EVENT_NEED_KEYFRAME, "Keyframe required");
+        }
     };
 
     if (!state->udp.Initialize(listen_port, session_key, key_len, on_frame, on_keyframe_needed)) {
         state->decoder.Cleanup();
         state->renderer.Cleanup();
+        MFShutdown();
         return -5;
     }
 
-    if (!state->udp.Start()) {
+    state->running = true;
+    try {
+        state->decode_thread = std::thread(StreamerDecodeLoop, state);
+    } catch (...) {
+        state->running = false;
         state->udp.Cleanup();
         state->decoder.Cleanup();
         state->renderer.Cleanup();
+        MFShutdown();
+        return -6;
+    }
+    if (!state->udp.Start()) {
+        state->running = false;
+        state->frames.Stop();
+        state->decode_thread.join();
+        state->udp.Cleanup();
+        state->decoder.Cleanup();
+        state->renderer.Cleanup();
+        MFShutdown();
         return -6;
     }
 
@@ -400,6 +439,8 @@ STREAMER_API int streamer_receiver_stop(StreamerReceiverHandle handle) {
 
     state->udp.Stop();
     state->udp.Cleanup();
+    state->frames.Stop();
+    if (state->decode_thread.joinable()) state->decode_thread.join();
     {
         std::lock_guard<std::mutex> lock(state->render_mutex);
         state->decoder.Cleanup();

@@ -169,6 +169,8 @@ class NetworkNode:
         self._last_received = 0.0
         self._heartbeat_thread = None
         self._watchdog_thread = None
+        self._mouse_sender = None
+        self._mouse_receiver = None
 
     def register_callback(self, event_type, callback):
         self.callbacks.setdefault(event_type, []).append(callback)
@@ -195,6 +197,7 @@ class NetworkNode:
 
     def _attach_socket(self, conn):
         with self._state_lock:
+            old_mouse = self._detach_mouse_lanes()
             previous = self.sock
             previous_stop = self._heartbeat_stop
             self._generation += 1
@@ -205,6 +208,7 @@ class NetworkNode:
             self._last_received = time.monotonic()
             self._heartbeat_stop = threading.Event()
             heartbeat_stop = self._heartbeat_stop
+        self._close_mouse_lanes(old_mouse)
         previous_stop.set()
         if previous is not None and previous is not conn:
             self._close_socket(previous)
@@ -227,27 +231,88 @@ class NetworkNode:
             return self.sock is conn and self._generation == generation and self.connected
 
     def send_message(self, message):
-        try:
-            frame = _encode_message(message)
-        except NetworkProtocolError as error:
-            logger.error("Local network message was rejected (%s)", error_name(error))
-            return False
-        with self._state_lock:
-            conn = self.sock
-            generation = self._generation
-            connected = self.connected
-        if not connected or conn is None:
-            return False
-        try:
-            with self._send_lock:
+        with self._send_lock:
+            sender = self._mouse_sender
+            if sender is not None:
+                if message.get("type") == "mouse_position":
+                    if sender.send_position(message["x"], message["y"]):
+                        return True
+                message = sender.reliable(message)
+            try:
+                frame = _encode_message(message)
+            except NetworkProtocolError as error:
+                logger.error("Local network message was rejected (%s)", error_name(error))
+                return False
+            with self._state_lock:
+                conn = self.sock
+                generation = self._generation
+                connected = self.connected
+            if not connected or conn is None:
+                return False
+            try:
                 if not self._is_current(conn, generation):
                     return False
                 conn.sendall(frame)
-            return True
-        except Exception as error:
-            logger.error("Network send failed (%s)", error_name(error))
-            self._disconnect_socket(conn, generation)
-            return False
+                return True
+            except Exception as error:
+                logger.error("Network send failed (%s)", error_name(error))
+        self._disconnect_socket(conn, generation)
+        return False
+
+    def _detach_mouse_lanes(self):
+        sender, self._mouse_sender = self._mouse_sender, None
+        receiver, self._mouse_receiver = self._mouse_receiver, None
+        return sender, receiver
+
+    @staticmethod
+    def _close_mouse_lanes(lanes):
+        for lane in lanes:
+            if lane is not None:
+                lane.close()
+
+    def _offer_mouse_lane(self, conn, generation):
+        # Only control clients create a listener. Bind to the TCP peer's base
+        # port locally; installed UDP firewall rules include that port.
+        if (not getattr(self, "enable_mouse_datagrams", True)
+                or getattr(self, "role", None) != "control" or getattr(self, "is_server", True)):
+            return
+        from app.mouse_datagrams import MouseReceiver
+        try:
+            receiver = MouseReceiver(conn.getsockname()[0], self.port,
+                lambda message: self.trigger_callbacks(message["type"], message)
+                if self._is_current(conn, generation) else None)
+            receiver.peer_ip = conn.getpeername()[0]
+            with self._state_lock:
+                if not self._is_current(conn, generation):
+                    receiver.close()
+                    return
+                self._mouse_receiver = receiver
+            receiver.start()
+            self.send_message({"type": "__conduit_mouse_offer__", "port": receiver.port,
+                               "key": receiver.key.hex()})
+        except OSError:
+            logger.info("Mouse datagrams unavailable; retaining TLS input")
+
+    def _accept_mouse_offer(self, message, conn):
+        if getattr(getattr(self, "owner", None), "role", None) != "control":
+            return
+        if self._mouse_sender is not None:
+            return
+        port, key = message.get("port"), message.get("key")
+        if (isinstance(port, bool) or not isinstance(port, int) or not 1 <= port <= 65535
+                or not isinstance(key, str) or len(key) != 64):
+            return
+        from app.mouse_datagrams import MouseSender
+        try:
+            sender = MouseSender(conn.getpeername()[0], port, bytes.fromhex(key))
+            with self._state_lock:
+                if self.sock is not conn or not self.connected:
+                    sender.close()
+                    return
+                self._mouse_sender = sender
+            sender.start()
+        except (ValueError, OSError):
+            logger.info("Mouse datagrams unavailable; retaining TLS input")
 
     def _receive_loop(self, conn, generation):
         try:
@@ -257,13 +322,20 @@ class NetworkNode:
                     if self.sock is conn and self._generation == generation:
                         self._last_received = time.monotonic()
                 event_type = message.get("type")
+                if event_type == "__conduit_mouse_offer__":
+                    self._accept_mouse_offer(message, conn)
+                    continue
                 if event_type == "__conduit_heartbeat__":
                     self.send_message({"type": "__conduit_heartbeat_ack__"})
                     continue
                 if event_type == "__conduit_heartbeat_ack__":
                     continue
                 if isinstance(event_type, str) and event_type:
-                    self.trigger_callbacks(event_type, message)
+                    receiver = self._mouse_receiver
+                    if receiver is not None:
+                        receiver.dispatch(message, lambda value: self.trigger_callbacks(event_type, value))
+                    else:
+                        self.trigger_callbacks(event_type, message)
                 else:
                     raise NetworkProtocolError("message type is missing")
         except (ConnectionError, OSError, ssl.SSLError, NetworkProtocolError):
@@ -305,7 +377,9 @@ class NetworkNode:
             self.connected = False
             self.authenticated = False
             self._heartbeat_stop.set()
+            old_mouse = self._detach_mouse_lanes()
         self._close_socket(conn)
+        self._close_mouse_lanes(old_mouse)
         if was_connected:
             self.trigger_callbacks("disconnected", {})
         return True
@@ -774,8 +848,10 @@ class NetworkClient(NetworkNode):
         approval_timeout=120.0,
         peer_identity=None,
         windows_name=None,
+        enable_mouse_datagrams=True,
     ):
         super().__init__()
+        self.enable_mouse_datagrams = enable_mouse_datagrams
         if role not in {"control", "data"}:
             raise ValueError("network client role must be control or data")
         self.is_server = False
@@ -928,6 +1004,7 @@ class NetworkClient(NetworkNode):
                     self._set_phase(ConnectionPhase.CONNECTED)
                 secure.settimeout(None)
                 generation = self._attach_socket(secure)
+                self._offer_mouse_lane(secure, generation)
                 logger.info(
                     "[client][%s-lane] OUTGOING connection authenticated "
                     "and bound to session",

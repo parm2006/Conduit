@@ -70,7 +70,7 @@ class FirewallRuleSpec:
 
     @property
     def udp_ports(self):
-        return str(self.base_port + 3)
+        return f"{self.base_port},{self.base_port + 3}"
 
     @property
     def local_ports(self):

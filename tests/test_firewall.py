@@ -61,10 +61,10 @@ class FirewallRuleSpecTests(unittest.TestCase):
 
         self.assertEqual(low.local_ports, "1-3")
         self.assertEqual(low.tcp_ports, "1-3")
-        self.assertEqual(low.udp_ports, "4")
+        self.assertEqual(low.udp_ports, "1,4")
         self.assertEqual(high.local_ports, "65532-65534")
         self.assertEqual(high.tcp_ports, "65532-65534")
-        self.assertEqual(high.udp_ports, "65535")
+        self.assertEqual(high.udp_ports, "65532,65535")
 
     def test_rejects_invalid_base_ports(self):
         invalid = (True, False, "5000", 1.5, 0, -1, 65533, 65534, 65535)

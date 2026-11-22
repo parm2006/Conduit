@@ -108,7 +108,7 @@ class WindowsFirewallBackendTests(unittest.TestCase):
             Direction=1,
             Action=1,
             Protocol=17,
-            LocalPorts="5003",
+            LocalPorts="5000,5003",
             ApplicationName=r"C:\Program Files\Conduit\Conduit.exe",
             Profiles=2,
             RemoteAddresses="LocalSubnet",
@@ -317,7 +317,7 @@ class WindowsFirewallBackendTests(unittest.TestCase):
             Direction=1,
             Action=1,
             Protocol=17,
-            LocalPorts="5003",
+            LocalPorts="5000,5003",
             ApplicationName=r"C:\Program Files\Conduit\Conduit.exe",
             Profiles=2,
             RemoteAddresses="LocalSubnet",
@@ -356,7 +356,7 @@ class WindowsFirewallBackendTests(unittest.TestCase):
         self.assertEqual(udp_rule.Direction, 1)
         self.assertEqual(udp_rule.Action, 1)
         self.assertEqual(udp_rule.Protocol, 17)
-        self.assertEqual(udp_rule.LocalPorts, "5003")
+        self.assertEqual(udp_rule.LocalPorts, "5000,5003")
         self.assertEqual(
             udp_rule.ApplicationName,
             r"C:\Program Files\Conduit\Conduit.exe",

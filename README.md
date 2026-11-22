@@ -12,6 +12,7 @@ For preview testing, install [7.3.2-beta.1](https://github.com/parm2006/Conduit/
 
 - **Cross-Machine Browser Window Handoff (Chrome Preview)**: Drag Google Chrome tabs and windows across connected PCs by simply dragging them to the screen edge. Copy tabs or cut/move windows across displays with dedicated keybinds.
 - **Multi-PC Control**: Seamless cursor and keyboard routing across one Server and up to two Clients with multi-monitor support.
+- **Low-Latency Mouse Transport**: Absolute Remote Mode positions use authenticated UDP with TLS fallback. Relative movement, keyboard events, and clicks retain reliable ordering.
 - **Hardware Input Pipeline**: Native hardware scan-code injection and 1:1 synchronized absolute cursor coordinate projection across machines.
 - **Native Hardware Video Streaming**: Native 60 FPS DXGI Desktop Duplication capture, hardware H.264 MFT encoding/decoding, AES-GCM encrypted UDP transport, and Direct3D 11 swapchain presentation.
   > [!NOTE]
@@ -94,7 +95,7 @@ Use these on the physical Server keyboard:
 
 ## 🔒 Network & Firewall
 
-Conduit uses TCP ports 28903-28905 and UDP port 28906. The installer creates managed firewall rules restricted to Private networks and the local subnet. Choosing No cancels installation. Uninstall cleanly removes Conduit's firewall rules.
+Conduit uses TCP ports 28903-28905 and UDP ports 28903 (mouse) and 28906 (video). The installer creates managed firewall rules restricted to Private networks and the local subnet. Choosing No cancels installation. Uninstall cleanly removes Conduit's firewall rules.
 
 Run only one Server instance per port range. Close the installed Conduit app before testing the source version through `run.bat`, including any copy hidden in background mode. Windows listeners reserve their ports exclusively; a second instance reports a startup error instead of sharing connections with the first.
 

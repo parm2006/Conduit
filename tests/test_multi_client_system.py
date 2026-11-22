@@ -872,6 +872,19 @@ class MultiClientTlsSystemTests(unittest.TestCase):
         self.assertEqual(len(self.registry.ready_sessions()), 2)
         self.assertEqual(len(self.control_server.connections), 2)
 
+    def test_real_tls_negotiates_mouse_datagrams(self):
+        bundle = self.bundles[0]
+        endpoint = bundle.control
+        endpoint.enable_mouse_datagrams = True
+        received = []
+        endpoint.register_callback('mouse_position', received.append)
+        endpoint._offer_mouse_lane(endpoint.sock, endpoint._generation)
+        session = self._ready_session_for_machine(bundle.machine_id)
+        self.assertTrue(_wait_for(lambda: session.control_lane._mouse_sender is not None
+                                 and session.control_lane._mouse_sender.ready))
+        self.assertTrue(session.control_lane.send_message({'type': 'mouse_position', 'x': 123, 'y': 456}))
+        self.assertTrue(_wait_for(lambda: any(m.get('x') == 123 for m in received)))
+
 
 if __name__ == "__main__":
     unittest.main()
