@@ -605,6 +605,14 @@ class ConduitGUI(ctk.CTk):
 
         self.protocol("WM_DELETE_WINDOW", self.on_close)
         self.after(0, self._refresh_firewall_status)
+        from app.update_panel import UpdatePanel
+        self.update_panel = UpdatePanel(
+            self.tabview.add("Updates"), on_close=self.on_close,
+            on_available=lambda version: self._set_status(
+                f"Conduit {version} is available. Open Updates to download it.", "cyan", error_code=OK,
+            ),
+        )
+        self.update_panel.pack(fill="both", expand=True)
 
     def load_known_hosts(self):
         try:
@@ -2257,6 +2265,18 @@ class ConduitGUI(ctk.CTk):
         from app.input_geometry import windows_work_area, work_area_geometry
 
         self.overlay = ctk.CTkToplevel(self)
+        self.overlay.title("Conduit")
+        icon_path = Path(__file__).parent / "assets" / "app_icon.ico"
+        if icon_path.is_file():
+            overlay = self.overlay
+
+            def apply_overlay_icon():
+                if overlay.winfo_exists():
+                    overlay.iconbitmap(str(icon_path))
+
+            apply_overlay_icon()
+            # CTkToplevel schedules its own Windows icon at 200 ms.
+            overlay.after(250, apply_overlay_icon)
         left, top, right, bottom = windows_work_area()
         self.overlay.geometry(work_area_geometry((left, top, right, bottom)))
         self.overlay.overrideredirect(True)
@@ -2533,6 +2553,11 @@ def run_mainloop(app):
 
 def run_gui():
     import ctypes
+    try:
+        # Give source launches their own taskbar group instead of Python's icon.
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("Conduit.Conduit")
+    except (AttributeError, OSError):
+        pass
     try:
         # PROCESS_PER_MONITOR_DPI_AWARE ensures winfo_screenheight matches pynput physical pixels
         ctypes.windll.shcore.SetProcessDpiAwareness(2)
