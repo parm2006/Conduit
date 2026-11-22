@@ -14,9 +14,9 @@ SetCompressor /SOLID lzma
 !define MUI_CUSTOMFUNCTION_ABORT OnUserAbort
 
 !define PRODUCT_NAME "Conduit"
-!define PRODUCT_VERSION "7.3.1"
-!define FILE_VERSION "7.3.1.0"
-!define SOURCE_URL "https://github.com/parm2006/Conduit/tree/v7.3.1"
+!define PRODUCT_VERSION "7.3.2-beta.1"
+!define FILE_VERSION "7.3.2.1"
+!define SOURCE_URL "https://github.com/parm2006/Conduit/tree/v7.3.2-beta.1"
 !define UNINSTALL_KEY \
   "Software\Microsoft\Windows\CurrentVersion\Uninstall\Conduit"
 

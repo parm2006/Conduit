@@ -6,10 +6,10 @@ AutoCloseWindow true
 Name "Conduit"
 OutFile "..\dist\ConduitLauncher.exe"
 Icon "..\app\assets\app_icon.ico"
-VIProductVersion "7.3.1.0"
+VIProductVersion "7.3.2.1"
 VIAddVersionKey "ProductName" "Conduit"
 VIAddVersionKey "FileDescription" "Conduit launcher"
-VIAddVersionKey "FileVersion" "7.3.1.0"
+VIAddVersionKey "FileVersion" "7.3.2.1"
 VIAddVersionKey "LegalCopyright" "Conduit contributors; GPL-3.0-only"
 
 Section

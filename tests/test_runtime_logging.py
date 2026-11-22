@@ -6,10 +6,25 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 import run
-from app.gui import run_mainloop
+from app.gui import run_gui, run_mainloop
 
 
 class RuntimeLoggingTests(unittest.TestCase):
+    def test_gui_sets_windows_taskbar_identity_before_creating_window(self):
+        events = []
+        shell32 = SimpleNamespace(
+            SetCurrentProcessExplicitAppUserModelID=lambda app_id: events.append(app_id),
+        )
+        shcore = SimpleNamespace(SetProcessDpiAwareness=lambda value: None)
+        with (
+            patch("ctypes.windll", SimpleNamespace(shell32=shell32, shcore=shcore), create=True),
+            patch("app.gui.ctk.set_appearance_mode"),
+            patch("app.gui.ConduitGUI", side_effect=lambda: events.append("window")),
+            patch("app.gui.run_mainloop"),
+        ):
+            run_gui()
+        self.assertEqual(events, ["Conduit.Conduit", "window"])
+
     def test_console_interrupt_runs_application_cleanup(self):
         events = []
 

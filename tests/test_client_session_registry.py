@@ -97,6 +97,31 @@ class ClientSessionRegistryTests(unittest.TestCase):
             {"device-a", "device-b"},
         )
 
+    def test_disconnect_callback_can_wait_for_another_thread_to_read_registry(self):
+        registry = self.registry
+        ready = threading.Event()
+        results = []
+
+        def read_from_gui():
+            results.extend(registry.ready_sessions())
+            ready.set()
+
+        class ControlLane(Lane):
+            def close(self):
+                reader = threading.Thread(target=read_from_gui, daemon=True)
+                reader.start()
+                if not ready.wait(1):
+                    raise AssertionError("disconnect callback blocked the GUI's session read")
+                super().close()
+
+        lane = ControlLane("control")
+        session = self.admit("device-a", "PC", "192.0.2.10", lane)
+        self.bind(session, "data", "device-a", "192.0.2.10")
+        self.bind(session, "file", "device-a", "192.0.2.10")
+        self.assertTrue(registry.close(session.session_id))
+        self.assertTrue(lane.closed)
+        self.assertEqual(results, [])
+
     def test_lane_tokens_bind_session_purpose_identity_and_address(self):
         first = self.admit("device-a", "ParthPC", "192.0.2.10")
         second = self.admit("device-b", "ParthSurface", "192.0.2.11")

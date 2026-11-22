@@ -1,8 +1,10 @@
-# Conduit 7.3.1
+# Conduit 7.3.2-beta.1
 
 A fast Windows wireless KVM for sharing your mouse, keyboard, newest clipboard item, on-paste file relay, low-latency native hardware video streaming, and cross-machine browser window handoff across one Server and up to two Clients on the same local network.
 
 [![Download Latest Release](https://img.shields.io/github/v/release/parm2006/Conduit?label=Download%20Latest%20Release)](https://github.com/parm2006/Conduit/releases/latest)
+
+For preview testing, install [7.3.2-beta.1](https://github.com/parm2006/Conduit/releases/tag/v7.3.2-beta.1) on each computer. The latest stable release remains available through the download link above.
 
 ---
 
@@ -117,6 +119,16 @@ python -m venv venv
 .\venv\Scripts\python.exe -m pip install -r requirements.txt
 .\venv\Scripts\python.exe run.py
 ```
+
+### Updates
+
+Starting with **7.3.2-beta.1**, installed copies check GitHub at launch and show an **Updates** tab. Choose **Download update**, then **Install update** after verification. Installation closes Conduit and disconnects active sessions; the normal installer retains its consent screens. Reopen Conduit after setup completes. Install the prerelease manually once on each computer to enable this updater.
+
+Preview builds accept newer previews and stable releases. Stable builds accept stable releases only. Checks never downgrade the application. An offline check or failed download leaves the running version untouched. Source and portable copies support manual checks/downloads; run Setup to enable installation from the app.
+
+Downloads come from this repository's GitHub releases and must match the published SHA-256 checksum and asset size. This verifies download integrity, not an independent publisher signature. Each update release must include its matching `Conduit-v<version>-Setup.exe` and `SHA256SUMS.txt`. Preferences and trusted peers stay in their existing locations. Velopack migration is tracked in [issue #27](https://github.com/parm2006/Conduit/issues/27).
+
+Before installation, the elevated app copies and verifies the installer in an administrator-owned staging directory in Program Files, then starts setup from a protected working directory. Protected staging is scheduled for removal on the next Windows reboot.
 
 ### Build a Release
 Install `requirements-release.txt` and NSIS 3.12, then run:

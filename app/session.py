@@ -1,7 +1,9 @@
 """One logical Conduit session shared by its independent network lanes."""
 
 import logging
+from contextlib import contextmanager
 from dataclasses import dataclass
+from functools import partial
 import hashlib
 import hmac
 import ipaddress
@@ -196,10 +198,10 @@ class SessionRegistry:
             raise SessionAuthenticationError("Windows name is invalid")
         peer_address = self._normalize_peer_address(peer_address)
         now = self._clock()
-        with self._lock:
+        with self._defer_disconnects() as disconnect:
             if len(self._sessions) >= self._capacity:
                 if self._pending is not None:
-                    self._close_lane(lane)
+                    disconnect(partial(self._close_lane, lane))
                     return self._candidate_admission(
                         AdmissionOutcome.REJECTED,
                         peer_identity,
@@ -316,11 +318,11 @@ class SessionRegistry:
         return self._candidate_timeout
 
     def close(self, session_id=None):
-        with self._lock:
+        with self._defer_disconnects() as disconnect:
             if session_id is None:
                 session_ids = tuple(self._sessions)
                 for active_session_id in session_ids:
-                    self._close_session_locked(active_session_id)
+                    self._close_session_locked(active_session_id, disconnect)
                 if self._pending is not None:
                     pending = self._pending
                     self._pending = None
@@ -335,14 +337,14 @@ class SessionRegistry:
                             pending.admission.color,
                         )
                     )
-                    self._close_lane(pending.control_lane)
+                    disconnect(partial(self._close_lane, pending.control_lane))
                 return True
-            return self._close_session_locked(session_id)
+            return self._close_session_locked(session_id, disconnect)
 
     def expire(self):
         expired = []
         now = self._clock()
-        with self._lock:
+        with self._defer_disconnects() as disconnect:
             for session in tuple(self._sessions.values()):
                 if not session.ready and now >= session.deadline:
                     expired.append(
@@ -355,10 +357,10 @@ class SessionRegistry:
                             session.color,
                         )
                     )
-                    self._close_session_locked(session.session_id)
+                    self._close_session_locked(session.session_id, disconnect)
             if self._pending is not None and now >= self._pending.admission.deadline:
                 pending = self._pending
-                self._close_lane(pending.control_lane)
+                disconnect(partial(self._close_lane, pending.control_lane))
                 self._pending = None
                 self._cancel_candidate_expiry_locked()
                 expired.append(
@@ -375,14 +377,14 @@ class SessionRegistry:
 
     def resolve_candidate(self, decision, *, replace_session_id=None):
         decision = CandidateDecision(decision)
-        with self._lock:
+        with self._defer_disconnects() as disconnect:
             if self._pending is None:
                 raise RuntimeError("there is no pending candidate")
             pending = self._pending
             if decision is CandidateDecision.REJECT:
                 self._pending = None
                 self._cancel_candidate_expiry_locked()
-                self._close_lane(pending.control_lane)
+                disconnect(partial(self._close_lane, pending.control_lane))
                 return self._publish_candidate_resolution_locked(SessionAdmission(
                     AdmissionOutcome.REJECTED,
                     pending.admission.session_id,
@@ -395,7 +397,7 @@ class SessionRegistry:
             if target is None:
                 raise KeyError(replace_session_id)
             slot, color = target.slot, target.color
-            self._close_session_locked(target.session_id)
+            self._close_session_locked(target.session_id, disconnect)
             self._pending = None
             self._cancel_candidate_expiry_locked()
             admission = self._admit_locked(
@@ -528,12 +530,24 @@ class SessionRegistry:
             suffix += 1
         return f"{windows_name}.{suffix}"
 
-    def _close_session_locked(self, session_id):
+    @contextmanager
+    def _defer_disconnects(self):
+        # Lane teardown invokes callbacks synchronously, including callbacks
+        # waiting for Tk. The GUI reads this registry while processing events.
+        callbacks = []
+        try:
+            with self._lock:
+                yield callbacks.append
+        finally:
+            for callback in callbacks:
+                callback()
+
+    def _close_session_locked(self, session_id, disconnect):
         session = self._sessions.pop(session_id, None)
         if session is None:
             return False
         self._cancel_session_expiry_locked(session_id)
-        session.close()
+        disconnect(session.close)
         self._tokens = {
             digest: token
             for digest, token in self._tokens.items()
