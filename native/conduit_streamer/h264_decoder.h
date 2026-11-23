@@ -16,15 +16,19 @@ public:
     H264Decoder();
     ~H264Decoder();
 
-    bool Initialize(ID3D11Device* pDevice, uint32_t width, uint32_t height);
+    bool Initialize(ID3D11Device* pDevice, uint32_t width, uint32_t height, bool low_latency = false);
     void Cleanup();
 
     // Feeds H.264 NALUs and extracts decoded D3D11 texture
-    bool DecodeFrame(const uint8_t* data, size_t size, ComPtr<ID3D11Texture2D>* out_texture, uint32_t* out_width, uint32_t* out_height, ComPtr<IMFSample>* out_sample = nullptr);
+    bool DecodeFrame(const uint8_t* data, size_t size, ComPtr<ID3D11Texture2D>* out_texture, uint32_t* out_width, uint32_t* out_height, ComPtr<IMFSample>* out_sample = nullptr,
+                     uint32_t* out_subresource = nullptr,
+                     LONGLONG* out_sample_time = nullptr, HRESULT* out_status = nullptr);
+    LONGLONG GetNextSampleTime() const { return m_sample_time; }
 
 private:
     HRESULT SetupDecoder();
 
+    bool m_low_latency_mode = false;
     uint32_t m_width;
     uint32_t m_height;
     LONGLONG m_sample_time;

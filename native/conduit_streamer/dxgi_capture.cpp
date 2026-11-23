@@ -138,6 +138,7 @@ HRESULT DxgiCapture::SetupDuplication() {
 bool DxgiCapture::AcquireFrame(CapturedFrame* out_frame, uint32_t timeout_ms) {
     if (!out_frame) return false;
     out_frame->has_new_frame = false;
+    out_frame->desktop_changed = false;
     out_frame->width = m_width;
     out_frame->height = m_height;
     out_frame->cursor_x = m_last_cursor_x;
@@ -190,6 +191,7 @@ bool DxgiCapture::AcquireFrame(CapturedFrame* out_frame, uint32_t timeout_ms) {
             m_context->CopyResource(m_shared_texture.Get(), acquiredTex.Get());
             out_frame->texture = m_shared_texture;
             out_frame->has_new_frame = true;
+            out_frame->desktop_changed = frameInfo.LastPresentTime.QuadPart != 0;
             copied = true;
         }
         acquiredTex.Reset();

@@ -1,6 +1,7 @@
 #include "d3d11_renderer.h"
 #include <algorithm>
 #include <cmath>
+#include <d3d10.h>
 
 D3D11Renderer::D3D11Renderer()
     : m_hwnd(nullptr)
@@ -23,6 +24,8 @@ void D3D11Renderer::Cleanup() {
     m_video_device.Reset();
     m_rtv.Reset();
     m_back_buffer.Reset();
+    if (m_latency_handle) { CloseHandle(m_latency_handle); m_latency_handle = nullptr; }
+    m_swap_flags = 0;
     m_swap_chain.Reset();
     m_context.Reset();
     m_device.Reset();
@@ -33,7 +36,7 @@ void D3D11Renderer::Cleanup() {
     m_last_src_height = 0;
 }
 
-bool D3D11Renderer::Initialize(HWND hwnd, uint32_t width, uint32_t height) {
+bool D3D11Renderer::Initialize(HWND hwnd, uint32_t width, uint32_t height, bool low_latency) {
     Cleanup();
     if (!hwnd || width == 0 || height == 0) {
         return false;
@@ -59,6 +62,11 @@ bool D3D11Renderer::Initialize(HWND hwnd, uint32_t width, uint32_t height) {
     );
     if (FAILED(hr)) return false;
 
+    if (low_latency) {
+        ComPtr<ID3D10Multithread> protection;
+        if (SUCCEEDED(m_context.As(&protection))) protection->SetMultithreadProtected(TRUE);
+    }
+
     // Create SwapChain
     ComPtr<IDXGIDevice> dxgiDevice;
     hr = m_device.As(&dxgiDevice);
@@ -83,6 +91,8 @@ bool D3D11Renderer::Initialize(HWND hwnd, uint32_t width, uint32_t height) {
     scDesc.Scaling = DXGI_SCALING_STRETCH;
     scDesc.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
     scDesc.AlphaMode = DXGI_ALPHA_MODE_IGNORE;
+    m_swap_flags = low_latency ? DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT : 0;
+    scDesc.Flags = m_swap_flags;
 
     hr = dxgiFactory->CreateSwapChainForHwnd(
         m_device.Get(),
@@ -93,6 +103,12 @@ bool D3D11Renderer::Initialize(HWND hwnd, uint32_t width, uint32_t height) {
         &m_swap_chain
     );
     if (FAILED(hr)) return false;
+
+    if (low_latency) {
+        ComPtr<IDXGISwapChain2> swap2;
+        if (SUCCEEDED(m_swap_chain.As(&swap2)) && SUCCEEDED(swap2->SetMaximumFrameLatency(1)))
+            m_latency_handle = swap2->GetFrameLatencyWaitableObject();
+    }
 
     // Get backbuffer
     hr = m_swap_chain->GetBuffer(0, __uuidof(ID3D11Texture2D), &m_back_buffer);
@@ -115,7 +131,7 @@ bool D3D11Renderer::Resize(uint32_t width, uint32_t height) {
     m_vp.Reset();
     m_vp_enumerator.Reset();
 
-    HRESULT hr = m_swap_chain->ResizeBuffers(2, width, height, DXGI_FORMAT_B8G8R8A8_UNORM, 0);
+    HRESULT hr = m_swap_chain->ResizeBuffers(2, width, height, DXGI_FORMAT_B8G8R8A8_UNORM, m_swap_flags);
     if (FAILED(hr)) return false;
 
     m_width = width;
@@ -173,8 +189,9 @@ bool D3D11Renderer::SetupVideoProcessor(uint32_t src_width, uint32_t src_height)
     return true;
 }
 
-bool D3D11Renderer::RenderFrame(ID3D11Texture2D* pTexture, uint32_t src_width, uint32_t src_height) {
+bool D3D11Renderer::RenderFrame(ID3D11Texture2D* pTexture, uint32_t src_width, uint32_t src_height, uint32_t subresource) {
     if (!pTexture || !m_swap_chain || !m_back_buffer) return false;
+    if (m_latency_handle && WaitForSingleObjectEx(m_latency_handle, 100, FALSE) == WAIT_FAILED) return false;
 
     if (m_last_src_width != src_width || m_last_src_height != src_height || !m_vp) {
         if (!SetupVideoProcessor(src_width, src_height)) {
@@ -184,7 +201,11 @@ bool D3D11Renderer::RenderFrame(ID3D11Texture2D* pTexture, uint32_t src_width, u
 
     D3D11_VIDEO_PROCESSOR_INPUT_VIEW_DESC inViewDesc = {};
     inViewDesc.ViewDimension = D3D11_VPIV_DIMENSION_TEXTURE2D;
-    inViewDesc.Texture2D.MipSlice = 0;
+    D3D11_TEXTURE2D_DESC texture_desc = {};
+    pTexture->GetDesc(&texture_desc);
+    if (!texture_desc.MipLevels || subresource >= texture_desc.MipLevels * texture_desc.ArraySize) return false;
+    inViewDesc.Texture2D.MipSlice = subresource % texture_desc.MipLevels;
+    inViewDesc.Texture2D.ArraySlice = subresource / texture_desc.MipLevels;
 
     ComPtr<ID3D11VideoProcessorInputView> inputView;
     HRESULT hr = m_video_device->CreateVideoProcessorInputView(

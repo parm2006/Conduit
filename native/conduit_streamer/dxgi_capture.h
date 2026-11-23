@@ -16,6 +16,7 @@ struct CapturedFrame {
     int cursor_y;
     bool cursor_visible;
     bool has_new_frame;
+    bool desktop_changed = false;
 };
 
 class DxgiCapture {
