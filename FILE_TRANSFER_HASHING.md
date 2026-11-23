@@ -81,3 +81,30 @@ and reports live under `build/hash-preparation-profile/`. No prerelease is
 published by this change. Physical testing should use the updated source on
 both PCs, retaining the previously tested `Full` video mode, and verify file
 contents and input/video responsiveness while preparation runs.
+
+## Packaged test integration
+
+The release dependency lock now includes BLAKE3 as well as the development
+requirements. Third-party notice generation therefore includes its installed
+license and source information. A dependency-coverage regression check prevents
+a runtime dependency from being omitted from the release lock or notice list.
+The completed suite passes 1,075 tests. A separate frozen-runtime probe imports
+the packaged GUI dependency graph and verifies encrypted transfer/readback of
+4,194,321 random bytes with both BLAKE3 and SHA-256. The actual application
+archive was inspected for the native BLAKE3 backend and notices.
+
+The local portable test package is
+`build/blake3-test/Conduit-Blake3-Test.zip`. Its executable enables the previously
+tested `Full` video mode with a test-only runtime hook, preserving the normal
+administrator requirement. No Python installation is needed to run that binary.
+The package includes source and exact test-build inputs; it is not a published
+prerelease or an installer that replaces the normal application.
+
+Extract into a separate folder on both PCs, close the installed Conduit copies,
+and run `Conduit-Blake3-Test.exe`. Test files and folders in both directions,
+including a 5 GiB random file, and compare source/destination file hashes. Move
+the mouse, type, and watch video while preparation and transfer run. Diagnostics
+in `%LOCALAPPDATA%\Conduit\conduit.log` record the selected file hash algorithm.
+
+Keep this work on `codex/video-stage1` until the user confirms the physical test
+works. Merge into `codex/networking-optimization` only after that confirmation.
