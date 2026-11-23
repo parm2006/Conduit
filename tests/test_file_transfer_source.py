@@ -18,7 +18,7 @@ class SourceFileTests(unittest.TestCase):
 
             self.assertEqual(list(source.iter_chunks()), [b"abcd", b"efgh", b"ij"])
             self.assertEqual(source.size, 10)
-            self.assertEqual(len(source.sha256), 64)
+            self.assertEqual(len(source.digest), 64)
 
     def test_detects_mutation_or_deletion_after_snapshot(self):
         with tempfile.TemporaryDirectory() as directory:

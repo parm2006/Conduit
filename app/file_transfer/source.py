@@ -1,10 +1,14 @@
-import hashlib
 import os
 import stat
 from dataclasses import dataclass
 from pathlib import Path
 
+from blake3 import blake3
+import win32con
+import win32file
+
 from .compression import MAX_CHUNK_SIZE
+from .hashing import new_hasher, validate_hash_algorithm
 
 
 class SourceChangedError(OSError):
@@ -18,21 +22,37 @@ class SourceFile:
     modified_ns: int
     device: int
     inode: int
-    sha256: str
+    digest: str
     chunk_size: int
+    hash_algorithm: str = "sha256"
 
     @classmethod
-    def snapshot(cls, path, chunk_size=MAX_CHUNK_SIZE):
+    def snapshot(cls, path, chunk_size=MAX_CHUNK_SIZE, *, hash_algorithm="sha256"):
+        validate_hash_algorithm(hash_algorithm)
         if chunk_size <= 0 or chunk_size > MAX_CHUNK_SIZE:
-            raise ValueError("chunk size must be between 1 byte and 1 MiB")
+            raise ValueError("chunk size must be between 1 byte and 256 KiB")
         resolved = Path(path)
         before = _safe_stat(resolved)
-        digest = hashlib.sha256()
+        digest = new_hasher(hash_algorithm)
         with resolved.open("rb") as source:
             if not _same_file(before, os.fstat(source.fileno())):
                 raise SourceChangedError("source changed while it was being opened")
-            while chunk := source.read(chunk_size):
-                digest.update(chunk)
+            if hash_algorithm == "blake3":
+                # Keep a deny-write/delete handle alive throughout the mapping.
+                # Metadata checks alone cannot protect a mapping from truncation.
+                try:
+                    guard = win32file.CreateFile(str(resolved), win32con.GENERIC_READ,
+                        win32con.FILE_SHARE_READ, None, win32con.OPEN_EXISTING, 0, None)
+                except Exception as error:
+                    raise SourceChangedError("source cannot be locked for hashing") from error
+                try:
+                    digest = blake3(max_threads=blake3.AUTO)
+                    digest.update_mmap(str(resolved))
+                finally:
+                    guard.Close()
+            else:
+                while chunk := source.read(chunk_size):
+                    digest.update(chunk)
             after = os.fstat(source.fileno())
         if not _same_file(before, after) or not _same_file(before, _safe_stat(resolved)):
             raise SourceChangedError("source changed while it was being hashed")
@@ -42,8 +62,9 @@ class SourceFile:
             modified_ns=before.st_mtime_ns,
             device=before.st_dev,
             inode=before.st_ino,
-            sha256=digest.hexdigest(),
+            digest=digest.hexdigest(),
             chunk_size=chunk_size,
+            hash_algorithm=hash_algorithm,
         )
 
     def iter_chunks(self):

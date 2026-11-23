@@ -4,3 +4,4 @@ Pillow==12.3.0
 cryptography>=42.0.4
 pywin32>=311
 pyinstaller>=6.0.0
+blake3==1.0.11

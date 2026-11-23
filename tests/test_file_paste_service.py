@@ -52,6 +52,7 @@ class ImmediateExecutor:
 
 
 class Manifest:
+    hash_algorithm = "sha256"
     def __init__(self, job_id):
         self.job_id = job_id
 
@@ -82,7 +83,7 @@ class FilePasteServiceTests(unittest.TestCase):
             receiver=receiver,
             publisher=publisher,
             sender=sender,
-            snapshot_selection=lambda: None,
+            snapshot_selection=lambda **kw: None,
             executor=ImmediateExecutor(sender),
         )
         pending = service.request_paste()
@@ -123,7 +124,7 @@ class FilePasteServiceTests(unittest.TestCase):
             receiver=receiver,
             publisher=publisher,
             sender=sender,
-            snapshot_selection=lambda: snapshots.pop(0),
+            snapshot_selection=lambda **kw: snapshots.pop(0),
             executor=ImmediateExecutor(sender),
         )
         return service, control, receiver, publisher, sender

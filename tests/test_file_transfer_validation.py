@@ -58,7 +58,7 @@ class ManifestValidationTests(unittest.TestCase):
     def test_rejects_missing_or_invalid_file_hash(self):
         manifest = Manifest.create([FileItem("safe.txt", ItemType.FILE, 1, 1, "bad")])
 
-        with self.assertRaisesRegex(ValidationError, "SHA-256"):
+        with self.assertRaisesRegex(ValidationError, "digest"):
             validate_manifest(manifest)
 
 

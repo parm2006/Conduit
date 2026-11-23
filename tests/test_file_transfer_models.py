@@ -10,7 +10,7 @@ class ManifestTests(unittest.TestCase):
             item_type=ItemType.FILE,
             size=4,
             modified_ns=123,
-            sha256="0" * 64,
+            digest="0" * 64,
             local_source_path=r"C:\\private\\report.txt",
         )
 
@@ -22,7 +22,7 @@ class ManifestTests(unittest.TestCase):
         self.assertEqual(manifest.file_count, 1)
         self.assertNotIn("local_source_path", wire["items"][0])
         self.assertNotIn("C:\\private", repr(wire))
-        self.assertEqual(Manifest.from_wire(wire).items[0].sha256, "0" * 64)
+        self.assertEqual(Manifest.from_wire(wire).items[0].digest, "0" * 64)
         with self.assertRaises(AttributeError):
             manifest.total_size = 8
 

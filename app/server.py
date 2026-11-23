@@ -302,7 +302,8 @@ class ConduitServer:
                 self.cluster_file_lane,
                 controller=self.transfer_controller,
             ),
-            lambda: snapshot_selection(self.clipboard.read_file_selection()),
+            lambda hash_algorithm: snapshot_selection(self.clipboard.read_file_selection(),
+                                                       hash_algorithm=hash_algorithm),
         )
         self.clipboard_sender = LatestWinsSender(self._send_clipboard_snapshot)
         self.pressed_keys = set()
@@ -2016,6 +2017,7 @@ class ConduitServer:
             job = self.cluster_file_router.request_paste(
                 origin_id,
                 message.get("request_id"),
+                supported_hash_algorithms=message.get("supported_hash_algorithms"),
             )
             if job is not None:
                 return True

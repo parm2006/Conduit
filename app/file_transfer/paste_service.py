@@ -5,12 +5,15 @@ import time
 from .handshake import ManifestHandshakeQueue
 from .executor import FifoTransferExecutor
 from .validation import ValidationError, validate_transfer_id
+from .hashing import (SUPPORTED_HASH_ALGORITHMS, UnsupportedHashAlgorithm,
+                      select_hash_algorithm, validate_hash_algorithm)
+from .status import TransferPhase
 
 
 MAX_OUTGOING_MANIFESTS = 8
 OUTGOING_MANIFEST_TIMEOUT = 30.0
 # Hashing large selections is preparation, not a one-second network round trip.
-MANIFEST_PREPARATION_TIMEOUT = 120.0
+MANIFEST_PREPARATION_TIMEOUT = 3.0
 logger = logging.getLogger(__name__)
 
 
@@ -33,7 +36,8 @@ class FilePasteService:
         self.snapshot_selection = snapshot_selection
         self.executor = executor or FifoTransferExecutor(sender)
         self.handshakes = ManifestHandshakeQueue(
-            self.control.send_message, timeout_seconds=MANIFEST_PREPARATION_TIMEOUT
+            self._send_manifest_request, timeout_seconds=MANIFEST_PREPARATION_TIMEOUT,
+            on_timeout=self._on_preparation_timeout,
         )
         self._outgoing = {}
         self._outgoing_timers = {}
@@ -44,6 +48,29 @@ class FilePasteService:
         self._outgoing_timeout = OUTGOING_MANIFEST_TIMEOUT
         self._clock = clock
         self._timer_factory = timer_factory
+
+    def _send_manifest_request(self, message):
+        return self.control.send_message(dict(message,
+            supported_hash_algorithms=list(SUPPORTED_HASH_ALGORITHMS)))
+
+    def _report_preparation_failure(self, request_id, error):
+        if not isinstance(error, str) or error not in {"ManifestPreparationTimeout", "UnsupportedHashAlgorithm",
+                         "PreparationStartFailed", "ManifestLimitError"}:
+            error = "FilePreparationFailed"
+        logger.warning("File preparation failed (%s)", error)
+        controller = getattr(self.receiver, "controller", None)
+        if controller is not None:
+            controller.update(request_id, TransferPhase.FAILED, "Files", 0, 0,
+                              error_code=error)
+
+    def _on_preparation_timeout(self, request):
+        request.error = "ManifestPreparationTimeout"
+        self._report_preparation_failure(request.request_id, "ManifestPreparationTimeout")
+        try:
+            self.control.send_message({"type": "file_manifest_failed",
+                "request_id": request.request_id, "error": "ManifestPreparationTimeout"})
+        except Exception:
+            logger.warning("Could not notify source of preparation timeout")
 
     def request_paste(self):
         with self._destination_lock:
@@ -71,6 +98,12 @@ class FilePasteService:
             validate_transfer_id(request_id, "request ID")
         except ValidationError:
             return False
+        try:
+            algorithm = select_hash_algorithm(message.get("supported_hash_algorithms"))
+        except UnsupportedHashAlgorithm:
+            self.control.send_message({"type": "file_manifest_failed",
+                "request_id": request_id, "error": "UnsupportedHashAlgorithm"})
+            return False
         with self._outgoing_lock:
             at_limit = (
                 len(self._outgoing) + self._pending_snapshots
@@ -87,9 +120,9 @@ class FilePasteService:
             return False
         generation = getattr(self.control, "_generation", None)
         if not background:
-            return self._prepare_manifest(request_id, generation)
+            return self._prepare_manifest(request_id, generation, algorithm)
         worker = threading.Thread(
-            target=self._prepare_manifest, args=(request_id, generation),
+            target=self._prepare_manifest, args=(request_id, generation, algorithm),
             name="file-manifest-preparation", daemon=True,
         )
         try:
@@ -106,12 +139,14 @@ class FilePasteService:
         return (getattr(self.control, "connected", True)
                 and (generation is None or getattr(self.control, "_generation", None) == generation))
 
-    def _prepare_manifest(self, request_id, generation):
+    def _prepare_manifest(self, request_id, generation, algorithm):
         started = time.monotonic()
         try:
             if not self._preparation_is_current(generation):
                 return False
-            manifest, sources = self.snapshot_selection()
+            manifest, sources = self.snapshot_selection(hash_algorithm=algorithm)
+            if manifest.hash_algorithm != algorithm:
+                raise ValidationError("snapshot hash algorithm does not match negotiation")
             if not self._preparation_is_current(generation):
                 logger.info("Discarding manifest prepared for a replaced connection")
                 return False
@@ -134,8 +169,8 @@ class FilePasteService:
                     if timer is not None:
                         timer.cancel()
                 return False
-            logger.info("File manifest prepared (bytes=%s elapsed=%.3fs)",
-                        getattr(manifest, "total_size", "unknown"), time.monotonic() - started)
+            logger.info("File manifest prepared (algorithm=%s bytes=%s elapsed=%.3fs)",
+                        algorithm, getattr(manifest, "total_size", "unknown"), time.monotonic() - started)
             return True
         except Exception as error:
             logger.warning("File manifest preparation failed (%s)", type(error).__name__)
@@ -156,6 +191,12 @@ class FilePasteService:
         with self._destination_lock:
             request_id = message.get("request_id")
             manifest = message.get("manifest")
+            try:
+                validate_hash_algorithm(manifest.get("hash_algorithm", "sha256"))
+            except (AttributeError, UnsupportedHashAlgorithm):
+                if self.handshakes.fail(request_id, "UnsupportedHashAlgorithm"):
+                    self._report_preparation_failure(request_id, "UnsupportedHashAlgorithm")
+                return False
             if not self.handshakes.accept(request_id, manifest):
                 return False
             self.receiver.accept_manifest(manifest)
@@ -168,9 +209,13 @@ class FilePasteService:
 
     def on_manifest_failed(self, message):
         with self._destination_lock:
-            return self.handshakes.fail(
+            handled = self.handshakes.fail(
                 message.get("request_id"), message.get("error", "failed")
             )
+            if handled:
+                self._report_preparation_failure(message.get("request_id"),
+                    message.get("error", "FilePreparationFailed"))
+            return handled
 
     def on_manifest_ack(self, message):
         job_id = message.get("job_id")

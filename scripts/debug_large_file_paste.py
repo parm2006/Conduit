@@ -5,7 +5,7 @@ uses in-process control callbacks and a recording publisher, not real Explorer.
 """
 import argparse
 from contextlib import contextmanager
-import hashlib
+import os
 import inspect
 from pathlib import Path
 import pdb
@@ -20,6 +20,7 @@ from app.file_transfer.selection import snapshot_selection
 from app.file_transfer.source import SourceFile
 from app.file_transfer.receiver import TransferReceiver
 from app.file_transfer.sender import TransferSender
+from app.file_transfer.hashing import new_hasher
 
 
 class RecordingReceiver:
@@ -62,7 +63,7 @@ def verify_transfer(receiver, executor):
     started = time.monotonic()
     sender.send_job(manifest, sources, announce_manifest=False)
     for relative_path, source in sources.items():
-        digest = hashlib.sha256()
+        digest = new_hasher(manifest.hash_algorithm)
         offset = 0
         while offset < source.size:
             data = receiver.read_range(manifest.job_id, relative_path, offset, 1024 * 1024)
@@ -70,12 +71,12 @@ def verify_transfer(receiver, executor):
                 raise RuntimeError('Destination returned EOF before the declared size')
             digest.update(data)
             offset += len(data)
-        if digest.hexdigest() != source.sha256:
-            raise RuntimeError('Destination SHA-256 mismatch')
+        if digest.hexdigest() != source.digest:
+            raise RuntimeError('Destination digest mismatch')
         print('Destination verified bytes:', offset)
     print('File chunks delivered and acknowledged:', lane.chunks)
     print('Transfer and decrypted readback seconds:', round(time.monotonic() - started, 4))
-    print('Destination SHA-256: MATCH')
+    print('Destination digest: MATCH', manifest.hash_algorithm)
 
 
 class Control:
@@ -130,23 +131,31 @@ def delayed_reads(path, milliseconds):
         yield
 
 
-def run(size_mib=500, read_delay_ms=0, transfer=False):
+def run(size_mib=500, read_delay_ms=0, transfer=False, hash_algorithm='blake3'):
     if not 1 <= size_mib <= 5120 or not 0 <= read_delay_ms <= 10:
         raise ValueError('Use 1..5120 MiB and 0..10 ms per read')
+    if read_delay_ms and hash_algorithm != 'sha256':
+        raise ValueError('Per-read delay applies only to the streaming SHA-256 path')
     root = (Path(__file__).resolve().parents[1] / 'build/file-paste-debug').resolve()
     root.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix='manifest-', dir=root) as directory:
         assert Path(directory).resolve().is_relative_to(root)
         path = Path(directory) / 'debug-large.bin'
         with path.open('wb') as file:
-            file.truncate(size_mib * 1024 * 1024)
+            left = size_mib * 1024 * 1024
+            while left:
+                data = os.urandom(min(left, 4 * 1024 * 1024))
+                file.write(data)
+                left -= len(data)
+            file.flush()
+            os.fsync(file.fileno())
         destination_control, source_control = Control(), Control()
         receiver = TransferReceiver(Path(directory) / 'cache') if transfer else RecordingReceiver()
         publisher = RecordingPublisher()
         destination = FilePasteService(destination_control, receiver, publisher, None,
-            lambda: None, executor=RecordingExecutor())
+            lambda **kw: None, executor=RecordingExecutor())
         source = FilePasteService(source_control, RecordingReceiver(), RecordingPublisher(), None,
-            lambda: snapshot_selection([path]), executor=RecordingExecutor())
+            lambda hash_algorithm: snapshot_selection([path], hash_algorithm=hash_algorithm), executor=RecordingExecutor())
         source_control.dispatch = lambda message: destination.on_manifest_response(message) if message['type'] == 'file_manifest_response' else destination.on_manifest_failed(message)
         destination_control.dispatch = lambda message: source.on_manifest_ack(message) if message['type'] == 'file_manifest_ack' else True
         request = destination.request_paste()
@@ -156,7 +165,9 @@ def run(size_mib=500, read_delay_ms=0, transfer=False):
         print('Injected per-read delay ms:', read_delay_ms)
         try:
             with delayed_reads(path, read_delay_ms):
-                ManifestDebugger().runcall(source.on_manifest_request, {'request_id': request.request_id})
+                ManifestDebugger().runcall(source.on_manifest_request,
+                    {'request_id': request.request_id,
+                     'supported_hash_algorithms': [hash_algorithm]})
             print('Preparation and acceptance seconds:', round(time.monotonic() - start, 4))
             print('Final request state:', request.state.value)
             print('Manifests received:', len(receiver._jobs) if transfer else len(receiver.manifests))
@@ -178,9 +189,10 @@ def main():
     parser.add_argument('--size-mib', type=int, default=500)
     parser.add_argument('--read-delay-ms', type=float, default=0)
     parser.add_argument('--transfer', action='store_true',
-        help='Also send bounded chunks, stage encrypted data, and verify decrypted SHA-256')
+        help='Also send bounded chunks, stage encrypted data, and verify the decrypted digest')
+    parser.add_argument('--hash-algorithm', choices=('sha256', 'blake3'), default='blake3')
     args = parser.parse_args()
-    return 0 if run(args.size_mib, args.read_delay_ms, args.transfer) else 1
+    return 0 if run(args.size_mib, args.read_delay_ms, args.transfer, args.hash_algorithm) else 1
 
 
 if __name__ == '__main__':

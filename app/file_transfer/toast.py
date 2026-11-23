@@ -44,6 +44,10 @@ def toast_view(status):
     elif status.phase is TransferPhase.FAILED:
         if status.error_code == "ExplorerStartTimeout":
             message = "Windows Explorer did not accept the paste."
+        elif status.error_code == "ManifestPreparationTimeout":
+            message = "File preparation exceeded 3 seconds."
+        elif status.error_code == "UnsupportedHashAlgorithm":
+            message = "The other computer uses an unsupported file hash."
         else:
             message = "Conduit could not finish the network transfer."
         details = f"{_safe_file_label(status.label)} · {message}"

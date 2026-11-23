@@ -83,7 +83,7 @@ class TransferSenderTests(unittest.TestCase):
             manifest = Manifest.create([
                 FileItem(
                     "paced.bin", ItemType.FILE, source.size,
-                    source.modified_ns, source.sha256,
+                    source.modified_ns, source.digest,
                 )
             ])
             lane = AcknowledgingLane()
@@ -145,14 +145,14 @@ class TransferSenderTests(unittest.TestCase):
                     ItemType.FILE,
                     first_source.size,
                     first_source.modified_ns,
-                    first_source.sha256,
+                    first_source.digest,
                 ),
                 FileItem(
                     "private/folder/failed.bin",
                     ItemType.FILE,
                     failed_source.size + 1,
                     failed_source.modified_ns,
-                    failed_source.sha256,
+                    failed_source.digest,
                 ),
             ])
             controller = TransferController()
@@ -209,7 +209,7 @@ class TransferSenderTests(unittest.TestCase):
             path.write_bytes(b"")
             source = SourceFile.snapshot(path)
             manifest = Manifest.create([
-                FileItem("empty.txt", ItemType.FILE, 0, source.modified_ns, source.sha256)
+                FileItem("empty.txt", ItemType.FILE, 0, source.modified_ns, source.digest)
             ])
             lane = Lane()
             controller = TransferController()
@@ -252,7 +252,7 @@ class TransferSenderTests(unittest.TestCase):
             source = SourceFile.snapshot(source_path)
             item = FileItem(
                 "empty.bin", ItemType.FILE, source.size,
-                source.modified_ns, source.sha256,
+                source.modified_ns, source.digest,
             )
             manifest = Manifest.create([item])
             lane = WaitingLane()
@@ -286,7 +286,7 @@ class TransferSenderTests(unittest.TestCase):
             source_path = Path(source_directory) / "report.txt"
             source_path.write_bytes(b"Conduit" * 200_000)
             source = SourceFile.snapshot(source_path)
-            item = FileItem("report.txt", ItemType.FILE, source.size, source.modified_ns, source.sha256)
+            item = FileItem("report.txt", ItemType.FILE, source.size, source.modified_ns, source.digest)
             manifest = Manifest.create([item])
             receiver = TransferReceiver(Path(receive_directory))
 
@@ -306,7 +306,7 @@ class TransferSenderTests(unittest.TestCase):
             source_path.write_bytes(b"progress bytes")
             source = SourceFile.snapshot(source_path)
             manifest = Manifest.create([
-                FileItem("report.txt", ItemType.FILE, source.size, source.modified_ns, source.sha256)
+                FileItem("report.txt", ItemType.FILE, source.size, source.modified_ns, source.digest)
             ])
             controller = TransferController()
             observed = []

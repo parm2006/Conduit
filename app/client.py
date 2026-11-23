@@ -189,7 +189,8 @@ class ConduitClient:
         self.file_paste_service = FilePasteService(
             self.control_network, self.file_receiver, self.file_publisher,
             TransferSender(self.file_network, controller=self.transfer_controller),
-            lambda: snapshot_selection(self.clipboard.read_file_selection()),
+            lambda hash_algorithm: snapshot_selection(self.clipboard.read_file_selection(),
+                                                       hash_algorithm=hash_algorithm),
         )
         self.clipboard_sender = LatestWinsSender(self._send_clipboard_snapshot)
         self.speed_scale_x = 1.0

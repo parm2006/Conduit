@@ -1,5 +1,13 @@
 # Large file paste: preparation timeout
 
+Current branch update: upgraded peers negotiate BLAKE3 for file-content hashes;
+legacy peers retain SHA-256. The preparation deadline is now a hard **3 seconds**
+at the user's request. Hashing still runs off the control thread. A timeout now
+produces a visible failure toast and releases the routed request. It is not an
+artificial delay before starting a transfer. See `FILE_TRANSFER_HASHING.md`.
+The debugger fixture now writes fresh `os.urandom` bytes rather than zeros.
+The historical measurements below describe the initial timeout fix.
+
 The reported practical limit around 381.5 MB was reproduced as a preparation
 timeout, rather than a configured byte limit. The existing manifest validation
 permits files and selections up to 1 TiB.

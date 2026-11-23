@@ -16,7 +16,7 @@ class LargeFilePreparationTests(unittest.TestCase):
     def service(self, snapshot):
         sender = RecordingSender()
         service = FilePasteService(RecordingControl(), RecordingReceiver(), RecordingPublisher(),
-            sender, snapshot, executor=ImmediateExecutor(sender))
+            sender, lambda **kw: snapshot(), executor=ImmediateExecutor(sender))
         self.addCleanup(lambda: [timer.cancel() for timer in tuple(service._outgoing_timers.values())])
         return service
 
@@ -36,7 +36,7 @@ class LargeFilePreparationTests(unittest.TestCase):
         self.assertTrue(service.on_manifest_response({'request_id': request.request_id,
                                                       'manifest': Manifest(JOB_A).to_wire()}))
         self.assertEqual(service.publisher.jobs, [JOB_A])
-        self.assertLessEqual(service.handshakes.timeout_seconds, 120.)
+        self.assertEqual(service.handshakes.timeout_seconds, 3.)
 
     def test_hashing_runs_off_control_thread_and_still_sends_manifest(self):
         entered, release = threading.Event(), threading.Event()

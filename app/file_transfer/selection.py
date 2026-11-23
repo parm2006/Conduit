@@ -6,7 +6,7 @@ from .source import SourceChangedError, SourceFile
 from .validation import validate_manifest
 
 
-def snapshot_selection(paths):
+def snapshot_selection(paths, *, hash_algorithm="sha256"):
     items = []
     sources = {}
     visited_directories = set()
@@ -14,16 +14,16 @@ def snapshot_selection(paths):
         selected = Path(selected)
         if selected.is_dir():
             _snapshot_directory(
-                selected, selected.name, items, sources, visited_directories
+                selected, selected.name, items, sources, visited_directories, hash_algorithm
             )
         else:
-            _snapshot_file(selected, selected.name, items, sources)
-    manifest = Manifest.create(items)
+            _snapshot_file(selected, selected.name, items, sources, hash_algorithm)
+    manifest = Manifest.create(items, hash_algorithm=hash_algorithm)
     validate_manifest(manifest)
     return manifest, sources
 
 
-def _snapshot_directory(path, relative_path, items, sources, visited_directories):
+def _snapshot_directory(path, relative_path, items, sources, visited_directories, hash_algorithm):
     directory_stat = _safe_directory_stat(path)
     identity = (directory_stat.st_dev, directory_stat.st_ino)
     if identity in visited_directories:
@@ -36,24 +36,24 @@ def _snapshot_directory(path, relative_path, items, sources, visited_directories
         child_relative = f"{relative_path}/{child.name}"
         if child.is_dir():
             _snapshot_directory(
-                child, child_relative, items, sources, visited_directories
+                child, child_relative, items, sources, visited_directories, hash_algorithm
             )
         else:
-            _snapshot_file(child, child_relative, items, sources)
+            _snapshot_file(child, child_relative, items, sources, hash_algorithm)
     current = _safe_directory_stat(path)
     if (current.st_dev, current.st_ino) != identity:
         raise SourceChangedError("directory changed while it was being inspected")
 
 
-def _snapshot_file(path, relative_path, items, sources):
-    source = SourceFile.snapshot(path)
+def _snapshot_file(path, relative_path, items, sources, hash_algorithm):
+    source = SourceFile.snapshot(path, hash_algorithm=hash_algorithm)
     items.append(
         FileItem(
             relative_path,
             ItemType.FILE,
             source.size,
             source.modified_ns,
-            source.sha256,
+            source.digest,
             str(path),
         )
     )

@@ -254,7 +254,7 @@ class TransportTests(unittest.TestCase):
             source_path.write_bytes(b"verified over TLS")
             source = SourceFile.snapshot(source_path)
             manifest = Manifest.create([
-                FileItem("received.txt", ItemType.FILE, source.size, source.modified_ns, source.sha256)
+                FileItem("received.txt", ItemType.FILE, source.size, source.modified_ns, source.digest)
             ])
             server = FileLaneServer(identity=self.identity, host="127.0.0.1", port=0)
             receiver = TransferReceiver(Path(receive_directory))
