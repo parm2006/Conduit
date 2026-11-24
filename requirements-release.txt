@@ -1,7 +1,6 @@
-# Exact dependency graph used for the Conduit Windows release.
+# Exact dependency graph used for the Conduit v5.1.1 Windows release.
 # Regenerate and re-audit this file before changing Python or any dependency.
 altgraph==0.17.5
-blake3==1.0.11
 cffi==2.1.1
 cryptography==50.0.0
 customtkinter==5.2.2

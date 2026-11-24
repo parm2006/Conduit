@@ -166,9 +166,8 @@ class TransferReceiver:
                     job_id,
                     relative_path,
                     item.size,
-                    item.digest,
+                    item.sha256,
                     encryption_key=job["staging_key"],
-                    hash_algorithm=job["manifest"].hash_algorithm,
                 )
                 job["staged"][relative_path] = staged
             staged.write(offset, decoded)
@@ -198,9 +197,8 @@ class TransferReceiver:
                     job_id,
                     normalized,
                     item.size,
-                    item.digest,
+                    item.sha256,
                     encryption_key=job["staging_key"],
-                    hash_algorithm=job["manifest"].hash_algorithm,
                 )
             completed = staged.finalize()
             job["completed"][normalized] = completed

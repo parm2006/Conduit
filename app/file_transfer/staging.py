@@ -1,5 +1,6 @@
 """Ephemeral authenticated-encryption staging for incoming file data."""
 
+import hashlib
 import bisect
 import os
 import secrets
@@ -12,7 +13,6 @@ from cryptography.exceptions import InvalidTag
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 from .validation import ValidationError, validate_relative_path
-from .hashing import new_hasher, validate_hash_algorithm
 
 
 _RECORD_HEADER = struct.Struct(">QII12s")
@@ -31,10 +31,9 @@ def cleanup_staging_root(root):
 
 class StagedFile:
     def __init__(
-        self, root, job_id, relative_path, expected_size, expected_digest,
-        encryption_key=None, *, hash_algorithm="sha256",
+        self, root, job_id, relative_path, expected_size, expected_sha256,
+        encryption_key=None,
     ):
-        validate_hash_algorithm(hash_algorithm)
         if not isinstance(job_id, str) or not job_id or any(
             character not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_"
             for character in job_id
@@ -42,23 +41,23 @@ class StagedFile:
             raise ValidationError("job ID contains unsafe characters")
         if expected_size < 0:
             raise ValidationError("expected size cannot be negative")
-        if not isinstance(expected_digest, str) or len(expected_digest) != 64 or any(
-            character not in "0123456789abcdef" for character in expected_digest.lower()
+        if len(expected_sha256) != 64 or any(
+            character not in "0123456789abcdef" for character in expected_sha256.lower()
         ):
-            raise ValidationError("expected digest must contain 64 hexadecimal characters")
+            raise ValidationError("expected SHA-256 must contain 64 hexadecimal characters")
 
         self.root = Path(root).resolve()
         self.job_id = job_id
         self.relative_path = validate_relative_path(relative_path)
         self.expected_size = expected_size
-        self.expected_digest = expected_digest.lower()
+        self.expected_sha256 = expected_sha256.lower()
         partial_dir = self.root / "partial" / job_id
         partial_dir.mkdir(parents=True, exist_ok=True)
         self.partial_path = partial_dir / f"{secrets.token_hex(16)}.partial"
         self.storage_path = self.partial_path
         self._file = self.partial_path.open("xb")
         self._offset = 0
-        self._hash = new_hasher(hash_algorithm)
+        self._hash = hashlib.sha256()
         self._cipher = AESGCM(
             encryption_key or AESGCM.generate_key(bit_length=256)
         )
@@ -148,9 +147,9 @@ class StagedFile:
             if self._offset != self.expected_size:
                 self.abort()
                 raise IntegrityError("received size does not match the declared size")
-            if self._hash.hexdigest() != self.expected_digest:
+            if self._hash.hexdigest() != self.expected_sha256:
                 self.abort()
-                raise IntegrityError("received digest does not match the manifest")
+                raise IntegrityError("received SHA-256 does not match the manifest")
             self._file.flush()
             os.fsync(self._file.fileno())
             self._file.close()

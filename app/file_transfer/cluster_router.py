@@ -78,7 +78,7 @@ class ClusterFileRouter:
         with self._lock:
             return self._jobs.get(cluster_job_id)
 
-    def request_paste(self, destination_id, request_id, supported_hash_algorithms=None):
+    def request_paste(self, destination_id, request_id):
         try:
             validate_transfer_id(request_id, "request ID")
         except ValidationError:
@@ -111,8 +111,6 @@ class ClusterFileRouter:
                 "type": "file_manifest_request",
                 "request_id": request_id,
             })
-            if supported_hash_algorithms is not None:
-                message["supported_hash_algorithms"] = supported_hash_algorithms
         if self._send_control(job.source_id, message):
             return job
         self._finish(job, ClusterJobPhase.FAILED)
@@ -146,10 +144,6 @@ class ClusterFileRouter:
         request_id = message.get("request_id") if isinstance(message, dict) else None
         with self._lock:
             job = self._requests.get(request_id)
-            if (job is not None and source_id == job.destination_id
-                    and message.get("error") == "ManifestPreparationTimeout"):
-                self._finish(job, ClusterJobPhase.FAILED)
-                return True
             if job is None or source_id != job.source_id:
                 return False
             forwarded = self._decorate(job, {

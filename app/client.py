@@ -189,8 +189,7 @@ class ConduitClient:
         self.file_paste_service = FilePasteService(
             self.control_network, self.file_receiver, self.file_publisher,
             TransferSender(self.file_network, controller=self.transfer_controller),
-            lambda hash_algorithm: snapshot_selection(self.clipboard.read_file_selection(),
-                                                       hash_algorithm=hash_algorithm),
+            lambda: snapshot_selection(self.clipboard.read_file_selection()),
         )
         self.clipboard_sender = LatestWinsSender(self._send_clipboard_snapshot)
         self.speed_scale_x = 1.0
@@ -1301,7 +1300,7 @@ class ConduitClient:
             return self.file_paste_service.request_paste()
 
     def on_file_manifest_request(self, data):
-        self.file_paste_service.queue_manifest_request(data)
+        self.file_paste_service.on_manifest_request(data)
 
     def on_file_manifest_response(self, data):
         self.file_paste_service.on_manifest_response(data)

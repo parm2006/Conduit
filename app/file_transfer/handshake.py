@@ -25,7 +25,6 @@ class ManifestHandshakeQueue:
     def __init__(
         self, send_request, clock=time.monotonic, timeout_seconds=1.0,
         max_pending=8, history_limit=64, timer_factory=threading.Timer,
-        on_timeout=None,
     ):
         self.send_request = send_request
         self.clock = clock
@@ -33,7 +32,6 @@ class ManifestHandshakeQueue:
         self.max_pending = int(max_pending)
         self.history_limit = int(history_limit)
         self.timer_factory = timer_factory
-        self.on_timeout = on_timeout
         self._requests = []
         self._by_id = {}
         self._timers = {}
@@ -54,7 +52,7 @@ class ManifestHandshakeQueue:
 
     def begin(self):
         with self._lock:
-            expired = self._expire_locked()
+            self._expire_locked()
             if len(self._by_id) >= self.max_pending:
                 raise RuntimeError("pending manifest request limit reached")
             request = ManifestRequest(
@@ -64,7 +62,6 @@ class ManifestHandshakeQueue:
             self._requests.append(request)
             self._by_id[request.request_id] = request
             self._schedule_expiry_locked(request)
-        self._notify_expired(expired)
         self.send_request({"type": "file_manifest_request", "request_id": request.request_id})
         return request
 
@@ -75,13 +72,9 @@ class ManifestHandshakeQueue:
                 return False
             if self.clock() > request.deadline:
                 self._finish_locked(request, RequestState.TIMED_OUT)
-                expired = True
-            else:
-                self._finish_locked(request, RequestState.ACCEPTED)
-                expired = False
-        if expired:
-            self._notify_expired([request])
-        return not expired
+                return False
+            self._finish_locked(request, RequestState.ACCEPTED)
+            return True
 
     def fail(self, request_id, error):
         with self._lock:
@@ -94,14 +87,7 @@ class ManifestHandshakeQueue:
 
     def expire(self):
         with self._lock:
-            expired = self._expire_locked()
-        self._notify_expired(expired)
-        return expired
-
-    def _notify_expired(self, requests):
-        if self.on_timeout is not None:
-            for request in requests:
-                self.on_timeout(request)
+            return self._expire_locked()
 
     def _expire_locked(self):
         now = self.clock()
@@ -122,7 +108,6 @@ class ManifestHandshakeQueue:
                 self._schedule_expiry_locked(request, remaining)
                 return
             self._finish_locked(request, RequestState.TIMED_OUT)
-        self._notify_expired([request])
 
     def _schedule_expiry_locked(self, request, delay=None):
         timer = self.timer_factory(

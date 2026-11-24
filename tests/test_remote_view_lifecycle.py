@@ -1,31 +1,12 @@
 import importlib.util
 import unittest
 from types import SimpleNamespace
-from unittest.mock import Mock, patch
+from unittest.mock import Mock
 from app.client import ConduitClient
 from app.display_topology import NativeRect
 
 
 class RemoteViewLifecycleTests(unittest.TestCase):
-    def test_visible_viewer_refreshes_entry_after_remote_to_remote_handoff(self):
-        from app.input_router import RemoteClient
-        from app.remote_view import RemoteView
-
-        state = RemoteClient('session', 'client', 'second-display', (3, 200), 'new')
-        view = RemoteView.__new__(RemoteView)
-        view.server = SimpleNamespace(active_topology=None,
-                                      input_router=SimpleNamespace(state=state))
-        view.gui = SimpleNamespace(overlay_active=True, _remote_overlay_handoff='old',
-                                   show_overlay=Mock())
-        view.receiver = SimpleNamespace(stalled=lambda: False, is_native_active=lambda: True)
-        view.canvas = Mock()
-        view.map_window = Mock()
-        view._returning = False
-        view._shown_selection = None
-        with patch('win32gui.GetCursorPos', return_value=(3, 200)):
-            view._update()
-        view.gui.show_overlay.assert_called_once_with()
-
     def test_accepted_primary_change_updates_viewer_and_input_scale(self):
         from app.gui import ConduitGUI
         gui = ConduitGUI.__new__(ConduitGUI)

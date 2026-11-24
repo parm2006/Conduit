@@ -111,7 +111,7 @@ class FileLaneLifecycleTests(unittest.TestCase):
             receiver=receiver,
             publisher=publisher,
             sender=object(),
-            snapshot_selection=lambda **kw: None,
+            snapshot_selection=lambda: None,
             executor=SimpleNamespace(submit=lambda manifest, sources: None),
         )
         pending = service.request_paste()

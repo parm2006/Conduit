@@ -302,8 +302,7 @@ class ConduitServer:
                 self.cluster_file_lane,
                 controller=self.transfer_controller,
             ),
-            lambda hash_algorithm: snapshot_selection(self.clipboard.read_file_selection(),
-                                                       hash_algorithm=hash_algorithm),
+            lambda: snapshot_selection(self.clipboard.read_file_selection()),
         )
         self.clipboard_sender = LatestWinsSender(self._send_clipboard_snapshot)
         self.pressed_keys = set()
@@ -1926,7 +1925,7 @@ class ConduitServer:
     def on_file_manifest_request(self, data):
         router = getattr(self, "cluster_file_router", None)
         if router is None:
-            return self.file_paste_service.queue_manifest_request(data)
+            return self.file_paste_service.on_manifest_request(data)
         return self._handle_cluster_file_control(
             data.get("peer_identity"),
             data,
@@ -1992,7 +1991,7 @@ class ConduitServer:
 
     def _dispatch_local_file_control(self, message):
         handlers = {
-            "file_manifest_request": self.file_paste_service.queue_manifest_request,
+            "file_manifest_request": self.file_paste_service.on_manifest_request,
             "file_manifest_response": self.file_paste_service.on_manifest_response,
             "file_manifest_failed": self.file_paste_service.on_manifest_failed,
             "file_manifest_ack": self.file_paste_service.on_manifest_ack,
@@ -2017,7 +2016,6 @@ class ConduitServer:
             job = self.cluster_file_router.request_paste(
                 origin_id,
                 message.get("request_id"),
-                supported_hash_algorithms=message.get("supported_hash_algorithms"),
             )
             if job is not None:
                 return True

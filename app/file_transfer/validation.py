@@ -2,7 +2,6 @@ import re
 from pathlib import PureWindowsPath
 
 from .models import ItemType, Manifest
-from .hashing import validate_hash_algorithm
 
 
 MAX_FILE_COUNT = 100_000
@@ -55,7 +54,6 @@ def validate_relative_path(value: str):
 
 
 def validate_manifest(manifest: Manifest):
-    validate_hash_algorithm(manifest.hash_algorithm)
     validate_transfer_id(manifest.job_id)
     if not manifest.items:
         raise ValidationError("manifest must contain at least one item")
@@ -76,10 +74,10 @@ def validate_manifest(manifest: Manifest):
         if item.item_type is ItemType.DIRECTORY and item.size != 0:
             raise ValidationError("directory size must be zero")
         if item.item_type is ItemType.FILE:
-            if not isinstance(item.digest, str) or len(item.digest) != 64 or any(
-                character not in "0123456789abcdef" for character in item.digest.lower()
+            if not isinstance(item.sha256, str) or len(item.sha256) != 64 or any(
+                character not in "0123456789abcdef" for character in item.sha256.lower()
             ):
-                raise ValidationError("file digest must contain 64 hexadecimal characters")
+                raise ValidationError("file SHA-256 must contain 64 hexadecimal characters")
             total_size += item.size
             file_count += 1
 

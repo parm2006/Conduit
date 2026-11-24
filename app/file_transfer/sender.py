@@ -73,8 +73,7 @@ class TransferSender:
                     continue
                 failure_label = item.relative_path.rsplit("/", 1)[-1]
                 source = sources[item.relative_path]
-                if (source.size != item.size or source.digest != item.digest
-                        or source.hash_algorithm != manifest.hash_algorithm):
+                if source.size != item.size or source.sha256 != item.sha256:
                     raise ValueError("source snapshot does not match the manifest")
                 chunks = iter(source.iter_chunks())
                 first = next(chunks, None)

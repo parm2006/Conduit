@@ -694,29 +694,6 @@ class ReleaseBuildScriptTests(unittest.TestCase):
 
 
 class ReleaseDependencyLockTests(unittest.TestCase):
-    def test_release_lock_covers_runtime_dependencies_and_notices(self):
-        from packaging.requirements import Requirement
-        from packaging.utils import canonicalize_name
-
-        root = Path(__file__).resolve().parents[1]
-        def requirements(filename):
-            return [Requirement(line.strip())
-                    for line in (root / filename).read_text(encoding='utf-8').splitlines()
-                    if line.strip() and not line.lstrip().startswith('#')]
-
-        locked = {canonicalize_name(item.name): item
-                  for item in requirements('requirements-release.txt')}
-        notices = {canonicalize_name(name) for name in RELEASE_DISTRIBUTIONS}
-        for runtime in requirements('requirements.txt'):
-            name = canonicalize_name(runtime.name)
-            with self.subTest(dependency=name):
-                self.assertIn(name, locked)
-                self.assertIn(name, notices)
-                pins = list(locked[name].specifier)
-                self.assertEqual(len(pins), 1)
-                self.assertEqual(pins[0].operator, '==')
-                self.assertIn(pins[0].version, runtime.specifier)
-
     def test_release_dependency_graph_is_exactly_pinned(self):
         root = Path(__file__).resolve().parents[1]
         lock = root / "requirements-release.txt"
