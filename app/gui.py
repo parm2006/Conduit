@@ -151,7 +151,7 @@ def _firewall_conflict_text(spec):
         "exact executable, then verify Conduit's restricted rule.\n\n"
         f"Executable: {spec.executable_path}\n"
         f"TCP ports: {spec.tcp_ports}\n"
-        f"UDP mouse/video ports: {spec.udp_ports}\n"
+        f"UDP stream port: {spec.udp_ports}\n"
         "Scope: Private networks and LocalSubnet only. Public networks remain "
         "blocked."
     )

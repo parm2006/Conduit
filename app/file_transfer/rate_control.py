@@ -1,37 +1,3 @@
-class AckWindowController:
-    """Bound queued file bytes using receiver ACK delay, including disk pressure.
-
-    The sender owns synchronization. This complements TCP congestion control;
-    ACK delay is deliberately not described as a measurement of network RTT.
-    """
-
-    def __init__(self, maximum, minimum=256 * 1024):
-        if maximum <= 0 or minimum <= 0:
-            raise ValueError("window bounds must be positive")
-        self.maximum = int(maximum)
-        self.minimum = min(int(minimum), self.maximum)
-        self.window = min(self.maximum, 2 * self.minimum)
-        self._baseline = None
-        self._clean_bytes = 0
-        self._next_adjustment = 0.0
-
-    def observe_ack(self, size, delay, now):
-        delay = max(0.0, delay)
-        self._baseline = delay if self._baseline is None else min(self._baseline, delay)
-        if delay - self._baseline >= 0.015:
-            self._clean_bytes = 0
-            if now >= self._next_adjustment:
-                self.window = max(self.minimum, self.window // 2)
-                # ACKs for the same outstanding burst should not each halve it.
-                self._next_adjustment = now + max(delay, 0.015)
-        elif now >= self._next_adjustment:
-            self._clean_bytes += size
-            if self._clean_bytes >= self.window:
-                self._clean_bytes = 0
-                self.window = min(self.maximum, self.window + self.minimum)
-        return self.window
-
-
 class BalancedRateController:
     """Computes a file-lane budget; control traffic never consumes this budget."""
 

@@ -4,8 +4,6 @@ from collections import deque
 from dataclasses import dataclass, field
 import logging
 import threading
-import time
-import math
 
 
 logger = logging.getLogger(__name__)
@@ -23,10 +21,6 @@ class _SessionQueue:
     accepting: bool = True
     failed: bool = False
     worker: threading.Thread | None = None
-    timings: deque = field(default_factory=lambda: deque(maxlen=256))
-    completed: int = 0
-    failed_sends: int = 0
-    coalesced_positions: int = 0
 
 
 class InputDispatcher:
@@ -40,14 +34,12 @@ class InputDispatcher:
         max_movement=512,
         max_discrete=256,
         max_batch=32,
-        clock=time.monotonic,
     ):
         self._lane_for_session = lane_for_session
         self._on_failure = on_failure
         self._max_movement = int(max_movement)
         self._max_discrete = int(max_discrete)
         self._max_batch = int(max_batch)
-        self._clock = clock
         self._sessions = {}
         self._sessions_lock = threading.RLock()
 
@@ -112,7 +104,7 @@ class InputDispatcher:
                 ):
                     state.records[-1][1].append(delta)
                 else:
-                    state.records.append(("movement", [delta], self._clock()))
+                    state.records.append(("movement", [delta]))
                 state.pending_movement += 1
                 state.condition.notify()
                 return True
@@ -129,14 +121,13 @@ class InputDispatcher:
                 return False
             # Coalesce: if the last queued record is already a position, update it in-place!
             if state.records and state.records[-1][0] == "position":
-                state.records[-1] = ("position", (int(x), int(y)), self._clock())
-                state.coalesced_positions += 1
+                state.records[-1] = ("position", (int(x), int(y)))
                 return True
             if state.pending_movement >= self._max_movement:
                 failure_reason = "position queue overflow"
                 self._mark_failed_locked(state)
             else:
-                state.records.append(("position", (int(x), int(y)), self._clock()))
+                state.records.append(("position", (int(x), int(y))))
                 state.pending_movement += 1
                 state.condition.notify()
                 return True
@@ -155,7 +146,7 @@ class InputDispatcher:
                 failure_reason = "discrete queue overflow"
                 self._mark_failed_locked(state)
             else:
-                state.records.append(("discrete", dict(message), self._clock()))
+                state.records.append(("discrete", dict(message)))
                 state.pending_discrete += 1
                 state.condition.notify()
                 return True
@@ -166,35 +157,6 @@ class InputDispatcher:
         with self._sessions_lock:
             return self._sessions.get(session_id)
 
-    def latency_snapshot(self, session_id):
-        """Return local queue/send milliseconds over the latest 256 sends.
-
-        This measures application delivery attempts, not remote input latency.
-        Positions use their newest coalesced timestamp; relative batches use
-        the oldest event's timestamp. No payloads or per-event logs are kept.
-        """
-        state = self._state(session_id)
-        if state is None:
-            return None
-        with state.condition:
-            samples = list(state.timings)
-            result = {
-                "completed": state.completed,
-                "failed": state.failed_sends,
-                "coalesced_positions": state.coalesced_positions,
-                "sample_count": len(samples),
-                "pending_movement": state.pending_movement,
-                "pending_discrete": state.pending_discrete,
-            }
-        for index, name in enumerate(("queue_ms", "send_ms")):
-            values = sorted(sample[index] * 1000 for sample in samples)
-            result[name] = {
-                "p50": values[math.ceil(len(values) * .50) - 1] if values else 0.0,
-                "p95": values[math.ceil(len(values) * .95) - 1] if values else 0.0,
-                "max": values[-1] if values else 0.0,
-            }
-        return result
-
     def _run_session(self, state):
         while True:
             with state.condition:
@@ -203,7 +165,7 @@ class InputDispatcher:
                 )
                 if not state.records:
                     return
-                kind, payload, queued_at = state.records.popleft()
+                kind, payload = state.records.popleft()
                 if kind == "movement":
                     state.pending_movement -= len(payload)
                     message = {
@@ -221,7 +183,6 @@ class InputDispatcher:
                     state.pending_discrete -= 1
                     message = payload
 
-            send_started = self._clock()
             try:
                 lane = self._lane_for_session(state.session_id)
                 sent = lane is not None and bool(lane.send_message(message))
@@ -232,15 +193,6 @@ class InputDispatcher:
                     type(exc).__name__,
                 )
                 sent = False
-            send_finished = self._clock()
-            with state.condition:
-                state.timings.append((
-                    max(0.0, send_started - queued_at),
-                    max(0.0, send_finished - send_started),
-                ))
-                state.completed += 1
-                state.failed_sends += int(not sent)
-                state.condition.notify_all()
             if sent:
                 continue
             if self._fail_state(state):

@@ -4,7 +4,6 @@ from .models import ItemType
 from .validation import ValidationError, validate_manifest, validate_transfer_id
 from .status import TransferPhase
 from .controller import TransferCancelled
-from .rate_control import AckWindowController
 import time
 import threading
 
@@ -36,14 +35,12 @@ class TransferSender:
         self.controller = controller
         self.clock = clock
         self.max_in_flight_bytes = int(max_in_flight_bytes)
-        self._window_controller = AckWindowController(self.max_in_flight_bytes)
         self._verified = {}
         self._paste_jobs = {}
         self._early_paste_terminal = OrderedDict()
         self._early_paste_limit = 256
         self._paste_lock = threading.Lock()
         self._chunk_acks = {}
-        self._chunk_sent_at = {}
         self._chunk_ack_condition = threading.Condition()
         self._in_flight_bytes = 0
         if hasattr(lane, "register_callback"):
@@ -240,13 +237,12 @@ class TransferSender:
             raise ValueError("file chunk exceeds the transfer window")
         deadline = self.clock() + 30
         with self._chunk_ack_condition:
-            while self._in_flight_bytes + size > max(size, self._window_controller.window):
+            while self._in_flight_bytes + size > self.max_in_flight_bytes:
                 self._check_cancelled(ack_key[0])
                 if self.clock() >= deadline:
                     raise TimeoutError("destination did not acknowledge file data")
                 self._chunk_ack_condition.wait(0.05)
             self._chunk_acks[ack_key] = size
-            self._chunk_sent_at[ack_key] = self.clock()
             self._in_flight_bytes += size
 
     def _wait_for_chunk_acks(self, job_id, relative_path):
@@ -263,16 +259,12 @@ class TransferSender:
                     raise TimeoutError("destination did not acknowledge file data")
                 self._chunk_ack_condition.wait(0.05)
 
-    def _release_chunk_ack(self, ack_key, *, acknowledged=False):
+    def _release_chunk_ack(self, ack_key):
         with self._chunk_ack_condition:
             size = self._chunk_acks.pop(ack_key, None)
             if size is None:
                 return False
             self._in_flight_bytes -= size
-            sent_at = self._chunk_sent_at.pop(ack_key)
-            if acknowledged:
-                now = self.clock()
-                self._window_controller.observe_ack(size, now - sent_at, now)
             self._chunk_ack_condition.notify_all()
         return True
 
@@ -281,7 +273,6 @@ class TransferSender:
             keys = [key for key in self._chunk_acks if key[0] == job_id]
             for key in keys:
                 self._in_flight_bytes -= self._chunk_acks.pop(key)
-                self._chunk_sent_at.pop(key)
             if keys:
                 self._chunk_ack_condition.notify_all()
 
@@ -297,7 +288,7 @@ class TransferSender:
             return False
         if not isinstance(offset, int) or isinstance(offset, bool) or offset < 0:
             return False
-        return self._release_chunk_ack((job_id, relative_path, offset), acknowledged=True)
+        return self._release_chunk_ack((job_id, relative_path, offset))
 
     def _check_cancelled(self, job_id):
         if self.controller:

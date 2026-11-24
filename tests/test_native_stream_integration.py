@@ -78,27 +78,6 @@ class NativeStreamIntegrationTests(unittest.TestCase):
             routing_suspended=False,
         )
 
-    def _wait_for_native_active(self, receiver):
-        # The ACK callback signals an event; the video worker publishes the
-        # active state afterward. Receiving an ACK alone is not that barrier.
-        deadline = time.monotonic() + 1.0
-        while time.monotonic() < deadline:
-            if receiver.is_native_active():
-                return
-            time.sleep(0.005)
-        self.assertTrue(receiver.is_native_active(), "Video worker did not activate acknowledged stream")
-
-    def _stop_receiver(self, receiver):
-        receiver.stop()
-        # Native cleanup belongs to the worker. Keep the window alive until
-        # that worker has finished instead of leaking it into the next test.
-        deadline = time.monotonic() + 2.0
-        while receiver._thread.is_alive() and time.monotonic() < deadline:
-            if self.root is not None:
-                self.root.update()
-            receiver._thread.join(0.01)
-        self.assertFalse(receiver._thread.is_alive())
-
     def test_native_streaming_starts_and_stops_cleanly_via_control_lane(self):
         """1 & 2: Native stream starts, exchanges key over TLS, and stops cleanly."""
         if not is_native_streaming_supported() or not self.test_hwnd:
@@ -128,7 +107,7 @@ class NativeStreamIntegrationTests(unittest.TestCase):
             for cb in self.server_control_callbacks.get("stream_started", []):
                 cb({"stream_id": stream_id, "success": True})
 
-            self._wait_for_native_active(receiver)
+            self.assertTrue(receiver.is_native_active())
 
             # Stop receiver
             receiver.stop()
@@ -147,7 +126,7 @@ class NativeStreamIntegrationTests(unittest.TestCase):
             self.assertEqual(len(stream_stop_msgs), 1)
             self.assertEqual(stream_stop_msgs[0]["stream_id"], stream_id)
         finally:
-            self._stop_receiver(receiver)
+            receiver.stop()
 
     def test_client_unauthenticated_rejects_stream_start(self):
         """12: Unauthenticated client cannot start native video stream."""
@@ -207,7 +186,7 @@ class NativeStreamIntegrationTests(unittest.TestCase):
                 time.sleep(0.02)
             self.assertGreaterEqual(len(gdi_requests), 1)
         finally:
-            self._stop_receiver(receiver)
+            receiver.stop()
 
     def test_native_runtime_stall_triggers_fallback_without_crash(self):
         """9 & 10: If native stream stops delivering frames, falls back to GDI/JPEG."""
@@ -230,7 +209,7 @@ class NativeStreamIntegrationTests(unittest.TestCase):
             for cb in self.server_control_callbacks.get("stream_started", []):
                 cb({"stream_id": stream_id, "success": True})
 
-            self._wait_for_native_active(receiver)
+            self.assertTrue(receiver.is_native_active())
 
             # Simulate silence / stall (last frame was 1.5 seconds ago)
             receiver.last_frame_at = time.monotonic() - 1.5
@@ -248,7 +227,7 @@ class NativeStreamIntegrationTests(unittest.TestCase):
             self.assertEqual(receiver._native_failed_selection, self.selection)
             self.assertGreaterEqual(len(gdi_requests), 1)
         finally:
-            self._stop_receiver(receiver)
+            receiver.stop()
 
     def test_keyframe_request_flow_on_packet_corruption(self):
         """7 & 11: Decoder packet loss signals STREAMER_EVENT_NEED_KEYFRAME and sends control message."""
@@ -278,7 +257,7 @@ class NativeStreamIntegrationTests(unittest.TestCase):
             self.assertEqual(kf_requests[0]["session_id"], "session-1")
             self.assertEqual(kf_requests[0]["stream_id"], stream_id)
         finally:
-            self._stop_receiver(receiver)
+            receiver.stop()
 
     def test_monitor_display_change_switches_stream(self):
         """5 & 6: Changing active monitor stops previous stream and re-targets."""
@@ -323,7 +302,7 @@ class NativeStreamIntegrationTests(unittest.TestCase):
             # New stream must be started for display-2
             self.assertEqual(len(second_msgs), 1)
         finally:
-            self._stop_receiver(receiver)
+            receiver.stop()
 
     def test_cursor_return_to_local_stops_native_stream(self):
         """3 & 4: When cursor returns to LocalServer, stream stops cleanly."""
@@ -345,7 +324,7 @@ class NativeStreamIntegrationTests(unittest.TestCase):
             for cb in self.server_control_callbacks.get("stream_started", []):
                 cb({"stream_id": stream_id, "success": True})
 
-            self._wait_for_native_active(receiver)
+            self.assertTrue(receiver.is_native_active())
 
             # Cursor returns to server
             self.mock_server.input_router.state = LocalServer("server", (50, 50))
@@ -362,7 +341,7 @@ class NativeStreamIntegrationTests(unittest.TestCase):
             self.assertEqual(len(stop_msgs), 1)
             self.assertEqual(stop_msgs[0]["stream_id"], stream_id)
         finally:
-            self._stop_receiver(receiver)
+            receiver.stop()
 
 
 if __name__ == "__main__":
