@@ -111,3 +111,11 @@ Shared adaptations in every test-DLL mode include bounded/reentrant frame assemb
 ## Sharing this test build
 
 The source test archive, when provided, includes the compiled test DLL and codec probe. On another Windows PC, extract it into its own folder. Use a Python environment with Conduit's requirements installed, then run the launcher with `-PythonPath` pointing to that interpreter. Recompilation is optional when using the included DLL; do not use `-Build` unless MSVC/SDK are installed. Do not overwrite the installed application's files. Close other Conduit copies before testing.
+
+## Remote viewer startup and role reversal
+
+The Python viewer now suppresses mapping/focus mouse events until its entry warp and a queued readiness marker have been processed. It uses the video Canvas for both letterbox dimensions and pointer coordinates, ignores stationary duplicates, and rejects motion after capture is hidden or ownership changes. This addresses a reproduced startup sequence that sent an unintended edge return and repeatedly stopped/restarted the video stream. It does not change file transfer, clipboard, codecs, or transport.
+
+The Windows regression uses real Tk Canvas event propagation and coalescing with an offscreen window, without focusing the window or moving the user's pointer. It verifies that queued startup positions cannot return ownership, while a later intentional edge crossing still can. It does not establish end-to-end video latency or validate the laptop's graphics drivers.
+
+For the two-PC retest, update the source branch on both machines and restart both processes; an older packaged executable will not include this Python fix. Use Full mode and test laptop as server first, then reverse roles. Enter Remote Mode at least ten times, pause at entry, move inward, click/drag/type, and return through the connected edge. Check for unexpected returns, black frames, pointer offsets, and steady-state video lag. Repeat with the displays' normal DPI settings and after reconnecting. Save both machines' diagnostic logs if an unexpected return or stall remains. Keep the networking branch and prerelease unchanged pending this test.

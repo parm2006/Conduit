@@ -113,7 +113,8 @@ class RemoteView:
                 self.canvas.delete('all')
                 self._photo = None
                 self._cursor = None
-            if not self.gui.overlay_active:
+            if (not self.gui.overlay_active
+                    or self.gui.__dict__.get('_remote_overlay_handoff') != remote.handoff_id):
                 self.gui.show_overlay()
             if not self.receiver.is_native_active():
                 frame = self.receiver.take_frame()

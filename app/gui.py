@@ -2343,7 +2343,15 @@ class ConduitGUI(ctk.CTk):
                     return
                 if not isinstance(state, RemoteClient):
                     return
+                if (self.__dict__.get('remote_view') is not None
+                        and self.overlay_active
+                        and self.__dict__.get('_remote_overlay_handoff') == state.handoff_id):
+                    return  # A queued duplicate must not restart the entry warp.
                 if self.overlay and self.overlay.winfo_exists():
+                    # Mapping/focusing can itself deliver mouse events. Do not
+                    # treat them as input for the newly acknowledged handoff.
+                    self._remote_overlay_handoff = None
+                    self._remote_overlay_ready = False
                     self.overlay_active = True
                     self.overlay.deiconify() # Show it
                     self.overlay.focus_force()
@@ -2353,6 +2361,8 @@ class ConduitGUI(ctk.CTk):
                     # Initial position
                     if self.__dict__.get('remote_view') is not None:
                         self.overlay.config(cursor='arrow')
+                        canvas = self.remote_view.canvas
+                        canvas.update_idletasks()
                         entry_x = self.overlay_center_x
                         entry_y = self.overlay_center_y
                         target_rect, proj, pos = self._get_remote_geometry_and_projection()
@@ -2369,8 +2379,30 @@ class ConduitGUI(ctk.CTk):
 
                         self.last_x = entry_x
                         self.last_y = entry_y
-                        self.warp_count = 1
-                        self.overlay.event_generate('<Motion>', warp=True, x=entry_x, y=entry_y)
+                        self._remote_overlay_handoff = state.handoff_id
+                        # Queue the entry behind pending mapping motions. An
+                        # event count is unreliable across DPI/window managers.
+                        canvas.event_generate('<Motion>', warp=True, x=entry_x, y=entry_y, when='tail')
+
+                        entry_token = object()
+                        self._remote_overlay_entry = entry_token
+                        entry_event = f'<<ConduitRemoteEntryReady-{id(entry_token)}>>'
+
+                        def _entry_ready(event):
+                            canvas.unbind(entry_event, binding_id)
+                            current = getattr(router, 'state', None)
+                            if (self.overlay_active and self.server.input_router is router
+                                    and isinstance(current, RemoteClient)
+                                    and current.handoff_id == state.handoff_id
+                                    and self.__dict__.get('_remote_overlay_entry') is entry_token
+                                    and self.__dict__.get('_remote_overlay_handoff') == state.handoff_id):
+                                self._remote_overlay_ready = True
+
+                        # A non-motion marker flushes Tk's coalesced motions
+                        # ahead of it. after_idle alone can run BEFORE those
+                        # motions on Windows, and the warp may be coalesced.
+                        binding_id = canvas.bind(entry_event, _entry_ready)
+                        canvas.event_generate(entry_event, when='tail')
                     else:
                         self.last_x = self.overlay_center_x
                         self.last_y = self.overlay_center_y
@@ -2408,8 +2440,10 @@ class ConduitGUI(ctk.CTk):
         if target_rect is None:
             return None, None, None
 
-        w = max(1, self.overlay.winfo_width())
-        h = max(1, self.overlay.winfo_height())
+        view = self.__dict__.get('remote_view')
+        viewport = view.canvas if view is not None else self.overlay
+        w = max(1, viewport.winfo_width())
+        h = max(1, viewport.winfo_height())
         client_w = max(1, target_rect.right - target_rect.left)
         client_h = max(1, target_rect.bottom - target_rect.top)
         scale = min(w / client_w, h / client_h)
@@ -2422,6 +2456,9 @@ class ConduitGUI(ctk.CTk):
         return target_rect, proj, pos
 
     def hide_overlay(self):
+        # Invalidate input immediately, before the queued Tk hide runs.
+        self._remote_overlay_handoff = None
+        self._remote_overlay_ready = False
         def _hide():
             try:
                 if self.overlay and self.overlay.winfo_exists():
@@ -2437,16 +2474,25 @@ class ConduitGUI(ctk.CTk):
 
     def on_overlay_motion(self, event):
         if self.__dict__.get('remote_view') is not None:
-            if self.warp_count > 0:
-                self.warp_count -= 1
-                self.last_x = event.x
-                self.last_y = event.y
+            from app.input_router import RemoteClient
+            state = getattr(getattr(self.server, 'input_router', None), 'state', None)
+            if (not self.overlay_active or not self.__dict__.get('_remote_overlay_ready', False)
+                    or not isinstance(state, RemoteClient)
+                    or self.__dict__.get('_remote_overlay_handoff') != state.handoff_id):
                 return
 
-            dx = event.x - self.last_x
-            dy = event.y - self.last_y
-            self.last_x = event.x
-            self.last_y = event.y
+            # Canvas events bubble to the Toplevel binding with coordinates
+            # relative to their original widget. The renderer fits to Canvas.
+            canvas = self.remote_view.canvas
+            if hasattr(event, 'x_root') and hasattr(event, 'y_root'):
+                x = event.x_root - canvas.winfo_rootx()
+                y = event.y_root - canvas.winfo_rooty()
+            else:
+                x, y = event.x, event.y
+            dx, dy = x - self.last_x, y - self.last_y
+            self.last_x, self.last_y = x, y
+            if dx == 0 and dy == 0:
+                return
 
             target_rect, proj, _ = self._get_remote_geometry_and_projection()
             if target_rect is not None and proj is not None:
@@ -2454,8 +2500,8 @@ class ConduitGUI(ctk.CTk):
                 client_w = max(1, target_rect.right - target_rect.left)
                 client_h = max(1, target_rect.bottom - target_rect.top)
 
-                norm_x = (event.x - dest_x) / fitted_w
-                norm_y = (event.y - dest_y) / fitted_h
+                norm_x = (x - dest_x) / fitted_w
+                norm_y = (y - dest_y) / fitted_h
                 client_x = target_rect.left + round(norm_x * client_w)
                 client_y = target_rect.top + round(norm_y * client_h)
                 client_x = max(target_rect.left, min(target_rect.right - 1, client_x))
