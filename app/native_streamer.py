@@ -9,7 +9,7 @@ import logging
 import os
 import sys
 import threading
-import hashlib
+from app.hashing import new_hasher
 
 logger = logging.getLogger(__name__)
 
@@ -131,10 +131,10 @@ def get_streamer_dll():
 
         try:
             with open(dll_path, 'rb') as binary:
-                fingerprint = hashlib.sha256(binary.read()).hexdigest()
+                fingerprint = new_hasher(binary.read()).hexdigest()
         except OSError:
             fingerprint = 'unavailable'
-        logger.info('Native video DLL loaded (path=%s sha256=%s cursor_metadata=%s)',
+        logger.info('Native video DLL loaded (path=%s blake3=%s cursor_metadata=%s)',
                     dll_path, fingerprint, cursor_reader is not None)
         _DLL = dll
         return _DLL
