@@ -605,14 +605,14 @@ class ConduitGUI(ctk.CTk):
 
         self.protocol("WM_DELETE_WINDOW", self.on_close)
         self.after(0, self._refresh_firewall_status)
-        from app.update_panel import UpdatePanel
-        self.update_panel = UpdatePanel(
-            self.tabview.add("Updates"), on_close=self.on_close,
+        from app.update_navigation import UpdateNavigation
+        self.update_navigation = UpdateNavigation(
+            self, self.tabview, on_close=self.on_close,
             on_available=lambda version: self._set_status(
                 f"Conduit {version} is available. Open Updates to download it.", "cyan", error_code=OK,
             ),
         )
-        self.update_panel.pack(fill="both", expand=True)
+        self.update_panel = self.update_navigation.panel
 
     def load_known_hosts(self):
         try:
