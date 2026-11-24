@@ -22,6 +22,9 @@ class UpdateNavigationTests(unittest.TestCase):
         cls.root.destroy()
 
     def setUp(self):
+        self.check_patch = patch('app.update_panel.check_for_updates', return_value=None)
+        self.check_patch.start()
+        self.addCleanup(self.check_patch.stop)
         self.root.grid_columnconfigure(0, weight=1)
         self.root.grid_rowconfigure(0, weight=1)
         self.roles = ctk.CTkTabview(self.root)
@@ -69,7 +72,7 @@ class UpdateNavigationTests(unittest.TestCase):
         update = SimpleNamespace(version='99.0')
         self.deliver(update)
         self.assertIn('!', self.navigation.description.get())
-        self.assertEqual(self.navigation.button.cget('fg'), '#f4cc58')
+        self.assertEqual(self.navigation.button.cget('text_color'), '#f4cc58')
         self.assertEqual(self.navigation.panel.action.cget('text'), 'Download update')
         self.deliver(error=OSError('offline'), operation='download')
         self.assertIn('!', self.navigation.description.get())
@@ -83,8 +86,9 @@ class UpdateNavigationTests(unittest.TestCase):
         self.navigation.panel.timer = None
 
     def test_footer_and_keyboard_activation(self):
-        self.assertEqual(str(self.navigation.button.cget('takefocus')), '1')
-        self.assertTrue(self.navigation.button.bind('<Return>'))
+        self.assertEqual(str(self.navigation.button._canvas.cget('takefocus')), '1')
+        self.assertTrue(self.navigation.button._canvas.bind('<Return>'))
+        self.assertTrue(self.navigation.button._canvas.bind('<space>'))
         self.assertEqual(self.navigation.place_info()['anchor'], 'se')
         self.assertIs(self.navigation.master, self.roles)
         self.assertEqual(self.navigation.button.pack_info()['side'], 'right')
@@ -121,8 +125,36 @@ class UpdateNavigationTests(unittest.TestCase):
             self.root.withdraw()
 
 
+    def test_only_status_icon_with_requested_colors(self):
+        for state, available, icon, color in (
+            ('unknown', False, '?', '#a0a0a0'),
+            ('checking', False, '?', '#a0a0a0'),
+            ('current', False, '✓', '#228b22'),
+            ('available', True, '!', '#f4cc58'),
+            ('error', False, '?', '#a0a0a0'),
+        ):
+            self.navigation._status_changed(state, available)
+            self.assertEqual(self.navigation.button.cget('text'), icon)
+            self.assertEqual(self.navigation.button.cget('text_color'), color)
+            self.assertEqual(bool(self.navigation.notification.place_info()), available)
+        self.navigation.button.event_generate('<Enter>')
+        self.navigation.button.event_generate('<FocusIn>')
+        self.root.update_idletasks()
+        self.assertFalse(any(isinstance(child, __import__('tkinter').Toplevel)
+                             for child in self.navigation.winfo_children()))
+
+    def test_source_copy_checks_automatically_without_install_permission(self):
+        panel = self.navigation.panel
+        self.assertIsNotNone(panel.timer)
+        with patch('app.update_panel.threading.Thread'):
+            self.root.update()
+        self.assertTrue(panel.busy)
+        self.assertEqual(self.navigation.button.cget('text'), '?')
+
+
 class MainWindowUpdateNavigationTests(unittest.TestCase):
-    def test_real_window_preserves_role_session_and_remote_mode(self):
+    @patch('app.update_panel.check_for_updates', return_value=None)
+    def test_real_window_preserves_role_session_and_remote_mode(self, check):
         from app.gui import ConduitGUI
         with patch('app.gui.GlobalHotkeyMonitor.start'), \
                 patch('app.gui.ConduitGUI._refresh_firewall_status'), \

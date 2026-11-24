@@ -30,9 +30,9 @@ class UpdatePanel(ctk.CTkFrame):
         self.status.pack(pady=15)
         self.action = ctk.CTkButton(self, text='Check for updates', command=self.check)
         self.action.pack(pady=10)
-        self._automatic = can_install()
-        if self._automatic:
-            self.timer = self.after(3000, self.check)
+        # Check on the next Tk turn in every build; installation eligibility
+        # only gates the existing install controls, never update discovery.
+        self.timer = self.after(0, self.check)
 
     def _notify_status(self, state):
         if self.on_status is not None:
