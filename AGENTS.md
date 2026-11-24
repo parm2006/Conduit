@@ -7,6 +7,13 @@
 - Keep unrelated dirty files in other checkouts intact, especially an existing modified native streamer DLL. Do not include them in a feature commit accidentally.
 - A development preview is not a new published beta. Change release artifacts or publish a prerelease only when requested.
 
+## Feature completion and test launches
+
+- After completing a feature, automatically open the exact Conduit version being tested locally; do not wait for the user to request it. Gracefully close an older test instance if needed, preserve unrelated processes, and verify the new app starts.
+- Always include copy-paste PowerShell commands in the final response for both this PC and the other PC: change directory, synchronize the correct test branch where needed, install changed dependencies where needed, and launch the tested mode. State which branch/version is being opened.
+- The other PC's repository is `C:\Users\parth\Projects\Conduit`. This PC's main checkout has the same path, but the current isolated test checkout is `C:\Users\parth\.codex\worktrees\video-stage1\Conduit`; use the actual checkout containing the feature rather than assuming the main checkout has it.
+- Currently use `scripts\run_video_stage1.ps1 -Mode Full` for the accepted video test configuration. When using this isolated checkout, its interpreter is `C:\Users\parth\Projects\Conduit\venv\Scripts\python.exe`. On the other PC use its repository's `venv\Scripts\python.exe`.
+
 ## Antigravity delegation
 
 - Proactively use the `agy-delegator` skill for appropriate small, bounded, independently verifiable development tasks. Codex owns integration, review, and final verification.
