@@ -115,11 +115,38 @@ def get_streamer_dll():
         dll.streamer_receiver_get_frame_count.restype = ctypes.c_uint64
         dll.streamer_receiver_get_frame_count.argtypes = [ctypes.c_void_p]
 
+        # Stage 1 diagnostics are optional so the baseline DLL remains usable.
+        for name in ("streamer_sender_get_stats", "streamer_receiver_get_stats"):
+            reader = getattr(dll, name, None)
+            if reader is not None:
+                reader.restype = ctypes.c_int
+                reader.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_char), ctypes.c_int]
+
         _DLL = dll
         return _DLL
     except Exception as error:
         logger.warning("Failed to load conduit_streamer.dll: %s", error)
         return None
+
+
+def _native_stats(dll, name, handle):
+    reader = getattr(dll, name, None)
+    if not handle or reader is None:
+        return ""
+    buffer = ctypes.create_string_buffer(16 * 1024)
+    try:
+        written = int(reader(handle, buffer, len(buffer)))
+        if written <= 0:
+            return ""
+        return buffer.raw[:min(written, len(buffer) - 1)].decode("utf-8", "replace")
+    except Exception as error:
+        logger.debug("Native video stats unavailable (%s)", type(error).__name__)
+        return ""
+
+
+def _stage1_mode():
+    mode = os.environ.get("CONDUIT_VIDEO_STAGE1", "baseline").lower()
+    return mode if mode in {"baseline", "decoder", "sender", "receiver", "full"} else "baseline"
 
 
 def is_native_streaming_supported():
@@ -163,6 +190,7 @@ class NativeStreamerSender:
     def start(self, display_index, target_ip, target_port, session_key, bitrate_kbps=10000, fps=60):
         if not isinstance(session_key, bytes) or len(session_key) != 32:
             raise ValueError("session_key must be exactly 32 bytes")
+        logger.info("Native video sender starting (stage1_mode=%s)", _stage1_mode())
         rc = self._dll.streamer_sender_start(
             self._handle,
             int(display_index),
@@ -183,9 +211,15 @@ class NativeStreamerSender:
             return int(self._dll.streamer_sender_get_frame_count(self._handle))
         return 0
 
+    def get_stats(self):
+        return _native_stats(self._dll, "streamer_sender_get_stats", self._handle)
+
     def stop(self):
         if self._handle:
+            stats = self.get_stats()
             self._dll.streamer_sender_stop(self._handle)
+            if stats:
+                logger.info("Native video sender stats before stop:\n%s", stats)
 
     def destroy(self):
         if self._handle:
@@ -218,6 +252,7 @@ class NativeStreamerReceiver:
     def start(self, listen_port, session_key):
         if not isinstance(session_key, bytes) or len(session_key) != 32:
             raise ValueError("session_key must be exactly 32 bytes")
+        logger.info("Native video receiver starting (stage1_mode=%s)", _stage1_mode())
         rc = self._dll.streamer_receiver_start(
             self._handle,
             int(listen_port),
@@ -234,9 +269,15 @@ class NativeStreamerReceiver:
             return int(self._dll.streamer_receiver_get_frame_count(self._handle))
         return 0
 
+    def get_stats(self):
+        return _native_stats(self._dll, "streamer_receiver_get_stats", self._handle)
+
     def stop(self):
         if self._handle:
+            stats = self.get_stats()
             self._dll.streamer_receiver_stop(self._handle)
+            if stats:
+                logger.info("Native video receiver stats before stop:\n%s", stats)
 
     def destroy(self):
         if self._handle:

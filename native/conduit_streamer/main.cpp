@@ -1,3 +1,6 @@
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
 #include "conduit_streamer.h"
 #include "dxgi_capture.h"
 #include "h264_encoder.h"
@@ -9,6 +12,28 @@
 #include <thread>
 #include <atomic>
 #include <chrono>
+#include <memory>
+#include <map>
+#include <utility>
+#include <stdexcept>
+#include <iterator>
+#include <mferror.h>
+#include "receive_pipeline.h"
+#include "send_scheduler.h"
+
+// The experimental algorithms are explicitly opt-in; the normal path stays available.
+static bool Stage1Enabled(const wchar_t* part) {
+    wchar_t mode[32] = {};
+    GetEnvironmentVariableW(L"CONDUIT_VIDEO_STAGE1", mode, 32);
+    return wcscmp(mode, L"full") == 0 || wcscmp(mode, part) == 0;
+}
+static int CopyStats(const std::string& report, char* buffer, int size) {
+    if (!buffer || size <= 0) return 0;
+    const size_t count = (std::min)(report.size(), static_cast<size_t>(size - 1));
+    memcpy(buffer, report.data(), count);
+    buffer[count] = 0;
+    return static_cast<int>(count);
+}
 
 BOOL WINAPI DllMain(HINSTANCE hinstDLL, DWORD fdwReason, LPVOID lpvReserved) {
     (void)hinstDLL;
@@ -138,6 +163,9 @@ struct StreamerSenderState {
     int display_index;
     int bitrate_kbps;
     int fps;
+    bool stage1_sender = false;
+    conduit::StageStats capture_time, encode_time, send_time;
+    std::atomic<uint64_t> send_failures{0};
 
     StreamerSenderState(StreamerEventCallback cb, void* ud)
         : callback(cb)
@@ -159,6 +187,12 @@ struct StreamerSenderState {
 };
 
 static void StreamerSenderLoop(StreamerSenderState* state) {
+    const HRESULT com_hr = state->stage1_sender ? CoInitializeEx(nullptr, COINIT_MULTITHREADED) : S_FALSE;
+    if (FAILED(com_hr)) {
+        state->Notify(STREAMER_EVENT_ERROR, "Sender COM initialization failed");
+        state->running = false; return;
+    }
+    struct ComCleanup { bool active; ~ComCleanup() { if (active) CoUninitialize(); } } com_cleanup{state->stage1_sender};
     HRESULT hr = MFStartup(MF_VERSION, MFSTARTUP_NOSOCKET);
     if (FAILED(hr)) {
         state->Notify(STREAMER_EVENT_ERROR, "MFStartup failed on sender thread");
@@ -190,30 +224,58 @@ static void StreamerSenderLoop(StreamerSenderState* state) {
     state->Notify(STREAMER_EVENT_STARTED, "Sender started");
 
     const auto frame_interval = std::chrono::microseconds(1000000 / state->fps);
+    conduit::SendScheduler scheduler(static_cast<uint32_t>(state->fps));
+    bool have_texture = false;
     uint32_t frame_id = 1;
     CapturedFrame frame = {};
     std::vector<EncodedPacket> packets;
 
     while (state->running) {
         auto start_time = std::chrono::steady_clock::now();
-
         if (state->force_keyframe.exchange(false)) {
             state->encoder.RequestKeyframe();
+            scheduler.MarkDirty();
         }
-
-        if (state->capture.AcquireFrame(&frame, 16) && frame.texture) {
+        const uint64_t acquired_at = conduit::QpcNowUs();
+        const uint32_t timeout = state->stage1_sender ? scheduler.WaitMs(acquired_at) : 16;
+        const bool captured = state->capture.AcquireFrame(&frame, timeout) && frame.texture;
+        state->capture_time.Add(conduit::QpcNowUs() - acquired_at);
+        if (captured) {
+            if (!have_texture) scheduler.MarkDirty();
+            have_texture = true;
+            scheduler.OnCapture(frame.desktop_changed);
+        }
+        const bool encode = state->stage1_sender
+            ? have_texture && scheduler.Poll(conduit::QpcNowUs()) != conduit::SendScheduler::Action::Wait
+            : captured;
+        if (encode) {
             packets.clear();
-            if (state->encoder.EncodeFrame(frame.texture.Get(), frame_id++, &packets)) {
-                for (const auto& packet : packets) {
-                    state->udp.SendFrame(packet);
+            const uint64_t enc_at = conduit::QpcNowUs();
+            const uint32_t input_id = state->stage1_sender ? frame_id : frame_id++;
+            const bool output = state->encoder.EncodeFrame(frame.texture.Get(), input_id, &packets);
+            state->encode_time.Add(conduit::QpcNowUs() - enc_at);
+            if (output && !packets.empty()) {
+                const uint64_t send_at = conduit::QpcNowUs();
+                for (auto& packet : packets) {
+                    // IDs describe emitted access units, not calls that produced no output.
+                    if (state->stage1_sender) packet.frame_id = frame_id++;
+                    if (!state->udp.SendFrame(packet)) {
+                        ++state->send_failures;
+                        if (state->stage1_sender) state->force_keyframe = true;
+                    }
                 }
+                state->send_time.Add(conduit::QpcNowUs() - send_at);
                 state->frame_count.fetch_add(1);
+                scheduler.OnEncoded(enc_at);
+            } else if (state->stage1_sender) {
+                // Keep the dirty state; do not busy-spin on encoder/device failure.
+                scheduler.MarkDirty();
+                std::this_thread::sleep_for(std::chrono::milliseconds(5));
             }
         }
-
-        auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - start_time);
-        if (elapsed < frame_interval) {
-            std::this_thread::sleep_for(frame_interval - elapsed);
+        if (!state->stage1_sender) {
+            auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - start_time);
+            if (elapsed < frame_interval) std::this_thread::sleep_for(frame_interval - elapsed);
         }
     }
 
@@ -233,6 +295,8 @@ STREAMER_API int streamer_sender_start(StreamerSenderHandle handle, int display_
     auto* state = static_cast<StreamerSenderState*>(handle);
     if (state->running) return 0;
 
+    if (state->worker_thread.joinable()) state->worker_thread.join();
+    state->stage1_sender = Stage1Enabled(L"sender");
     state->display_index = display_index;
     state->bitrate_kbps = (bitrate_kbps > 0) ? bitrate_kbps : 10000;
     state->fps = (fps > 0) ? fps : 60;
@@ -243,7 +307,8 @@ STREAMER_API int streamer_sender_start(StreamerSenderHandle handle, int display_
     }
 
     state->running = true;
-    state->worker_thread = std::thread(StreamerSenderLoop, state);
+    try { state->worker_thread = std::thread(StreamerSenderLoop, state); }
+    catch (...) { state->running = false; state->udp.Cleanup(); return -3; }
     return 0;
 }
 
@@ -291,6 +356,12 @@ struct StreamerReceiverState {
     std::atomic<bool> first_frame_rendered;
     std::atomic<uint64_t> frame_count;
     std::mutex render_mutex;
+    bool stage1_receiver = false;
+    bool worker_mf_started = false;
+    std::atomic<bool> need_keyframe{false};
+    std::atomic<uint64_t> pending_resize{0};
+    std::unique_ptr<conduit::ReceivePipeline> pipeline;
+    std::map<LONGLONG, std::pair<uint64_t, uint64_t>> input_timings;
 
     StreamerReceiverState(HWND hwnd, StreamerEventCallback cb, void* ud)
         : target_hwnd(hwnd)
@@ -309,6 +380,77 @@ struct StreamerReceiverState {
     }
 };
 
+struct Stage1DecodedHolder {
+    ComPtr<ID3D11Texture2D> texture;
+    ComPtr<IMFSample> sample;
+    uint32_t subresource = 0;
+};
+static bool StartReceiverPipeline(StreamerReceiverState* state) {
+    conduit::PipelineCallbacks cb;
+    cb.initialize = [state] {
+        if (FAILED(MFStartup(MF_VERSION, MFSTARTUP_NOSOCKET))) return false;
+        state->worker_mf_started = true;
+        RECT rect = {};
+        GetClientRect(state->target_hwnd, &rect);
+        const uint32_t width = (std::max)(1L, rect.right - rect.left);
+        const uint32_t height = (std::max)(1L, rect.bottom - rect.top);
+        return state->renderer.Initialize(state->target_hwnd, width, height, true)
+            && state->decoder.Initialize(state->renderer.GetDevice(), width, height, true);
+    };
+    cb.shutdown = [state] {
+        state->input_timings.clear();
+        state->decoder.Cleanup();
+        state->renderer.Cleanup();
+        if (state->worker_mf_started) { MFShutdown(); state->worker_mf_started = false; }
+    };
+    cb.tick = [state] {
+        const uint64_t packed = state->pending_resize.exchange(0);
+        if (packed) {
+            if (!state->renderer.Resize(static_cast<uint32_t>(packed >> 32), static_cast<uint32_t>(packed)))
+                throw std::runtime_error("Renderer resize failed");
+        }
+        if (state->need_keyframe.exchange(false))
+            state->Notify(STREAMER_EVENT_NEED_KEYFRAME, "Stage1 recovery requests IDR");
+    };
+    cb.decode = [state](const conduit::EncodedFrame& frame, conduit::DecodedFrame* out) {
+        const LONGLONG input_time = state->decoder.GetNextSampleTime();
+        state->input_timings[input_time] = {frame.first_rx_us, frame.complete_us};
+        while (state->input_timings.size() > 64) state->input_timings.erase(state->input_timings.begin());
+        auto holder = std::make_shared<Stage1DecodedHolder>();
+        HRESULT status = E_FAIL;
+        LONGLONG output_time = -1;
+        const bool decoded = state->decoder.DecodeFrame(frame.data.data(), frame.data.size(),
+            &holder->texture, &out->width, &out->height, &holder->sample,
+            &holder->subresource, &output_time, &status);
+        if (!decoded) {
+            if (status == MF_E_TRANSFORM_NEED_MORE_INPUT) return conduit::DecodeStatus::NeedMoreInput;
+            state->input_timings.clear();
+            return conduit::DecodeStatus::Failed;
+        }
+        auto timing = state->input_timings.find(output_time);
+        if (timing != state->input_timings.end()) {
+            out->source_timing_known = true;
+            out->first_rx_us = timing->second.first;
+            out->complete_us = timing->second.second;
+            state->input_timings.erase(state->input_timings.begin(), std::next(timing));
+        }
+        out->handle = holder;
+        return conduit::DecodeStatus::Ok;
+    };
+    cb.present = [state](const conduit::DecodedFrame& frame) {
+        auto* holder = static_cast<Stage1DecodedHolder*>(frame.handle.get());
+        const bool ok = holder && state->renderer.RenderFrame(holder->texture.Get(), frame.width, frame.height, holder->subresource);
+        if (ok) ++state->frame_count;
+        return ok;
+    };
+    // Never invoke a Python/TLS callback on the UDP receive thread.
+    cb.request_keyframe = [state] { state->need_keyframe = true; };
+    cb.first_frame = [state] { state->first_frame_rendered = true; state->Notify(STREAMER_EVENT_FIRST_FRAME, "Stage1 first frame presented"); };
+    cb.fatal = [state](const char* message) { state->Notify(STREAMER_EVENT_ERROR, message); };
+    state->pipeline = std::make_unique<conduit::ReceivePipeline>(conduit::PipelineConfig{}, std::move(cb));
+    return state->pipeline->Start();
+}
+
 STREAMER_API StreamerReceiverHandle streamer_receiver_create(HWND target_hwnd, StreamerEventCallback cb, void* user_data) {
     if (!target_hwnd) return nullptr;
     return new StreamerReceiverState(target_hwnd, cb, user_data);
@@ -319,27 +461,39 @@ STREAMER_API int streamer_receiver_start(StreamerReceiverHandle handle, int list
     auto* state = static_cast<StreamerReceiverState*>(handle);
     if (state->running) return 0;
 
-    HRESULT hr = MFStartup(MF_VERSION, MFSTARTUP_NOSOCKET);
-    if (FAILED(hr)) return -2;
-
-    RECT rc = {};
-    GetClientRect(state->target_hwnd, &rc);
-    uint32_t width = max(1, rc.right - rc.left);
-    uint32_t height = max(1, rc.bottom - rc.top);
-
-    if (!state->renderer.Initialize(state->target_hwnd, width, height)) {
-        return -3;
-    }
-
-    if (!state->decoder.Initialize(state->renderer.GetDevice(), width, height)) {
-        state->renderer.Cleanup();
-        return -4;
-    }
-
+    state->stage1_receiver = Stage1Enabled(L"receiver");
     state->first_frame_rendered = false;
+    state->need_keyframe = false;
+    state->pending_resize = 0;
+    if (state->pipeline) { state->pipeline->Stop(); state->pipeline.reset(); }
+    if (state->stage1_receiver) {
+        if (!StartReceiverPipeline(state)) { state->pipeline.reset(); return -3; }
+    } else {
+        HRESULT hr = MFStartup(MF_VERSION, MFSTARTUP_NOSOCKET);
+        if (FAILED(hr)) return -2;
+        RECT rc = {};
+        GetClientRect(state->target_hwnd, &rc);
+        uint32_t width = (std::max)(1L, rc.right - rc.left);
+        uint32_t height = (std::max)(1L, rc.bottom - rc.top);
+        if (!state->renderer.Initialize(state->target_hwnd, width, height)) { MFShutdown(); return -3; }
+        if (!state->decoder.Initialize(state->renderer.GetDevice(), width, height,
+                Stage1Enabled(L"decoder") || Stage1Enabled(L"sender"))) {
+            state->renderer.Cleanup(); MFShutdown(); return -4;
+        }
+    }
 
     // Frame arrival callback from reassembler
     auto on_frame = [state](AssembledFrame&& frame) {
+        if (!state->running) return;
+        if (state->stage1_receiver && state->pipeline) {
+            conduit::EncodedFrame encoded;
+            encoded.data = std::move(frame.data);
+            encoded.frame_id = frame.frame_id; encoded.keyframe = frame.is_keyframe;
+            encoded.sender_ts_ms = frame.timestamp_ms;
+            encoded.first_rx_us = frame.first_rx_us; encoded.complete_us = frame.complete_us;
+            state->pipeline->Submit(std::move(encoded));
+            return;
+        }
         std::lock_guard<std::mutex> lock(state->render_mutex);
         if (!state->running) return;
 
@@ -359,23 +513,22 @@ STREAMER_API int streamer_receiver_start(StreamerReceiverHandle handle, int list
 
     // Keyframe needed callback
     auto on_keyframe_needed = [state]() {
-        state->Notify(STREAMER_EVENT_NEED_KEYFRAME, "Keyframe required");
+        if (state->stage1_receiver) state->need_keyframe = true;
+        else state->Notify(STREAMER_EVENT_NEED_KEYFRAME, "Keyframe required");
     };
 
+    auto cleanup = [state] {
+        if (state->stage1_receiver) { if (state->pipeline) { state->pipeline->Stop(); state->pipeline.reset(); } }
+        else { state->decoder.Cleanup(); state->renderer.Cleanup(); MFShutdown(); }
+    };
     if (!state->udp.Initialize(listen_port, session_key, key_len, on_frame, on_keyframe_needed)) {
-        state->decoder.Cleanup();
-        state->renderer.Cleanup();
-        return -5;
+        cleanup(); return -5;
     }
-
-    if (!state->udp.Start()) {
-        state->udp.Cleanup();
-        state->decoder.Cleanup();
-        state->renderer.Cleanup();
-        return -6;
-    }
-
     state->running = true;
+    if (!state->udp.Start()) {
+        state->running = false; state->udp.Cleanup(); cleanup(); return -6;
+    }
+
     state->Notify(STREAMER_EVENT_STARTED, "Receiver listening");
     return 0;
 }
@@ -383,6 +536,11 @@ STREAMER_API int streamer_receiver_start(StreamerReceiverHandle handle, int list
 STREAMER_API int streamer_receiver_resize(StreamerReceiverHandle handle, int width, int height) {
     if (!handle) return -1;
     auto* state = static_cast<StreamerReceiverState*>(handle);
+    if (state->stage1_receiver) {
+        if (width <= 0 || height <= 0) return -1;
+        state->pending_resize = (static_cast<uint64_t>(width) << 32) | static_cast<uint32_t>(height);
+        return 0;
+    }
     std::lock_guard<std::mutex> lock(state->render_mutex);
     return state->renderer.Resize(width, height) ? 0 : -1;
 }
@@ -400,12 +558,12 @@ STREAMER_API int streamer_receiver_stop(StreamerReceiverHandle handle) {
 
     state->udp.Stop();
     state->udp.Cleanup();
-    {
+    if (state->stage1_receiver) {
+        if (state->pipeline) state->pipeline->Stop();
+    } else {
         std::lock_guard<std::mutex> lock(state->render_mutex);
-        state->decoder.Cleanup();
-        state->renderer.Cleanup();
+        state->decoder.Cleanup(); state->renderer.Cleanup(); MFShutdown();
     }
-    MFShutdown();
     state->Notify(STREAMER_EVENT_STOPPED, "Receiver stopped");
     return 0;
 }
@@ -415,4 +573,20 @@ STREAMER_API void streamer_receiver_destroy(StreamerReceiverHandle handle) {
     auto* state = static_cast<StreamerReceiverState*>(handle);
     streamer_receiver_stop(handle);
     delete state;
+}
+
+STREAMER_API int streamer_sender_get_stats(StreamerSenderHandle handle, char* buffer, int size) {
+    if (!handle) return 0;
+    auto* state = static_cast<StreamerSenderState*>(handle);
+    std::string report = state->stage1_sender ? "sender mode=stage1\n" : "sender mode=baseline\n";
+    report += state->capture_time.Format("acquire call (includes waiting)");
+    report += state->encode_time.Format("encode call");
+    report += state->send_time.Format("send call");
+    report += "send_failures=" + std::to_string(state->send_failures.load()) + "\n";
+    return CopyStats(report, buffer, size);
+}
+STREAMER_API int streamer_receiver_get_stats(StreamerReceiverHandle handle, char* buffer, int size) {
+    if (!handle) return 0;
+    auto* state = static_cast<StreamerReceiverState*>(handle);
+    return CopyStats(state->pipeline ? state->pipeline->Report() : "receiver mode=baseline\n", buffer, size);
 }

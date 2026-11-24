@@ -49,6 +49,9 @@ STREAMER_API void streamer_receiver_destroy(StreamerReceiverHandle handle);
 // Sender (Client) Queries
 STREAMER_API uint64_t streamer_sender_get_frame_count(StreamerSenderHandle handle);
 
+STREAMER_API int streamer_sender_get_stats(StreamerSenderHandle handle, char* buffer, int buffer_size);
+STREAMER_API int streamer_receiver_get_stats(StreamerReceiverHandle handle, char* buffer, int buffer_size);
+
 // Diagnostic & Versioning
 STREAMER_API int streamer_get_version(void);
 STREAMER_API int streamer_check_hardware_support(int* out_dxgi, int* out_encoder, int* out_decoder);

@@ -1,4 +1,5 @@
 #include "packet_assembler.h"
+#include "latency_trace.h"
 
 PacketAssembler::PacketAssembler()
     : m_latest_completed_frame(0)
@@ -26,70 +27,67 @@ PacketAssembler::~PacketAssembler() {
 void PacketAssembler::Reset() {
     std::lock_guard<std::mutex> lock(m_mutex);
     m_pending_frames.clear();
+    m_pending_bytes = 0;
     m_latest_completed_frame = 0;
 }
 
 void PacketAssembler::IngestFragment(const PacketHeader& header, const uint8_t* payload, size_t payload_len) {
-    if (!payload || payload_len == 0 || header.total_fragments == 0 || header.fragment_index >= header.total_fragments) {
-        return;
-    }
-
-    std::lock_guard<std::mutex> lock(m_mutex);
-
-    // Drop stale frames older than latest completed
-    if (m_latest_completed_frame > 0 && header.frame_id < m_latest_completed_frame) {
-        return;
-    }
-
-    // Prune very old incomplete pending frames (keep at most 32 frames in buffer)
-    while (m_pending_frames.size() > 32) {
-        auto oldest = m_pending_frames.begin();
-        if (oldest->second.is_keyframe && m_on_keyframe_needed) {
-            m_on_keyframe_needed();
+    constexpr size_t max_bytes = 16 * 1024 * 1024;
+    constexpr size_t max_frames = 32;
+    constexpr size_t max_fragments = (max_bytes + STREAMER_MAX_PAYLOAD_SIZE - 1) / STREAMER_MAX_PAYLOAD_SIZE;
+    if (!payload || !payload_len || payload_len > STREAMER_MAX_PAYLOAD_SIZE || !header.total_fragments ||
+        header.total_fragments > max_fragments || header.fragment_index >= header.total_fragments) return;
+    std::unique_lock<std::mutex> lock(m_mutex);
+    if (m_latest_completed_frame && static_cast<int32_t>(header.frame_id - m_latest_completed_frame) <= 0) return;
+    bool request_keyframe = false;
+    auto notify = [&] {
+        auto callback = m_on_keyframe_needed;
+        lock.unlock();
+        if (request_keyframe && callback) callback();
+    };
+    if (!m_pending_frames.count(header.frame_id)) {
+        while (m_pending_frames.size() >= max_frames) {
+            auto oldest = m_pending_frames.begin();
+            request_keyframe = request_keyframe || oldest->second.is_keyframe;
+            m_pending_bytes -= oldest->second.bytes;
+            m_pending_frames.erase(oldest);
         }
-        m_pending_frames.erase(oldest);
     }
-
     auto& pending = m_pending_frames[header.frame_id];
+    const bool keyframe = (header.flags & STREAMER_FLAG_KEYFRAME) != 0;
     if (pending.fragments.empty()) {
-        pending.frame_id = header.frame_id;
-        pending.timestamp_ms = header.timestamp_ms;
-        pending.total_fragments = header.total_fragments;
-        pending.received_fragments = 0;
-        pending.is_keyframe = (header.flags & STREAMER_FLAG_KEYFRAME) != 0;
+        pending.frame_id = header.frame_id; pending.timestamp_ms = header.timestamp_ms;
+        pending.total_fragments = header.total_fragments; pending.received_fragments = 0;
+        pending.is_keyframe = keyframe; pending.first_rx_us = conduit::QpcNowUs(); pending.bytes = 0;
+    } else if (pending.total_fragments != header.total_fragments || pending.timestamp_ms != header.timestamp_ms ||
+               pending.is_keyframe != keyframe) {
+        m_pending_bytes -= pending.bytes; m_pending_frames.erase(header.frame_id);
+        request_keyframe = true; notify(); return;
     }
-
-    if (pending.fragments.find(header.fragment_index) == pending.fragments.end()) {
+    if (!pending.fragments.count(header.fragment_index)) {
+        if (payload_len > max_bytes - m_pending_bytes) {
+            m_pending_bytes -= pending.bytes; m_pending_frames.erase(header.frame_id);
+            request_keyframe = true; notify(); return;
+        }
         pending.fragments[header.fragment_index].assign(payload, payload + payload_len);
-        pending.received_fragments++;
+        pending.bytes += payload_len; m_pending_bytes += payload_len; ++pending.received_fragments;
     }
-
-    // Check if frame is complete
-    if (pending.received_fragments == pending.total_fragments) {
-        size_t total_size = 0;
-        for (const auto& kv : pending.fragments) {
-            total_size += kv.second.size();
-        }
-
-        AssembledFrame frame;
-        frame.data.reserve(total_size);
-        for (auto& kv : pending.fragments) {
-            frame.data.insert(frame.data.end(), kv.second.begin(), kv.second.end());
-        }
-        frame.frame_id = pending.frame_id;
-        frame.timestamp_ms = pending.timestamp_ms;
-        frame.is_keyframe = pending.is_keyframe;
-
-        m_latest_completed_frame = frame.frame_id;
-
-        // Clean up completed and preceding frames
-        auto it = m_pending_frames.begin();
-        while (it != m_pending_frames.end() && it->first <= frame.frame_id) {
-            it = m_pending_frames.erase(it);
-        }
-
-        if (m_on_frame) {
-            m_on_frame(std::move(frame));
-        }
+    if (pending.received_fragments != pending.total_fragments) { notify(); return; }
+    AssembledFrame frame;
+    frame.data.reserve(pending.bytes);
+    for (const auto& fragment : pending.fragments)
+        frame.data.insert(frame.data.end(), fragment.second.begin(), fragment.second.end());
+    frame.frame_id = pending.frame_id; frame.timestamp_ms = pending.timestamp_ms;
+    frame.is_keyframe = pending.is_keyframe; frame.first_rx_us = pending.first_rx_us;
+    frame.complete_us = conduit::QpcNowUs();
+    m_latest_completed_frame = frame.frame_id;
+    auto it = m_pending_frames.begin();
+    while (it != m_pending_frames.end()) {
+        if (static_cast<int32_t>(it->first - frame.frame_id) <= 0) {
+            m_pending_bytes -= it->second.bytes; it = m_pending_frames.erase(it);
+        } else ++it;
     }
+    auto callback = m_on_frame;
+    notify();
+    if (callback) callback(std::move(frame));
 }

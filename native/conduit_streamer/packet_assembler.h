@@ -13,6 +13,8 @@ struct AssembledFrame {
     uint32_t frame_id;
     uint32_t timestamp_ms;
     bool is_keyframe;
+    uint64_t first_rx_us = 0;
+    uint64_t complete_us = 0;
 };
 
 typedef std::function<void(AssembledFrame&&)> FrameReadyCallback;
@@ -35,6 +37,8 @@ private:
         uint16_t total_fragments;
         uint16_t received_fragments;
         bool is_keyframe;
+        uint64_t first_rx_us = 0;
+        size_t bytes = 0;
         std::map<uint16_t, std::vector<uint8_t>> fragments;
     };
 
@@ -42,6 +46,7 @@ private:
     KeyframeNeededCallback m_on_keyframe_needed;
     std::mutex m_mutex;
 
+    size_t m_pending_bytes = 0;
     uint32_t m_latest_completed_frame;
     std::map<uint32_t, PendingFrame> m_pending_frames;
 };

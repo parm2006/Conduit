@@ -24,10 +24,11 @@ void H264Decoder::Cleanup() {
     m_device.Reset();
 }
 
-bool H264Decoder::Initialize(ID3D11Device* pDevice, uint32_t width, uint32_t height) {
+bool H264Decoder::Initialize(ID3D11Device* pDevice, uint32_t width, uint32_t height, bool low_latency) {
     Cleanup();
     if (!pDevice || width == 0 || height == 0) return false;
 
+    m_low_latency_mode = low_latency;
     m_device = pDevice;
     m_device->GetImmediateContext(&m_context);
     m_width = width;
@@ -60,10 +61,15 @@ HRESULT H264Decoder::SetupDecoder() {
     ComPtr<ICodecAPI> codecApi;
     if (SUCCEEDED(m_decoder.As(&codecApi))) {
         VARIANT var = {};
-        var.vt = VT_BOOL;
-        var.boolVal = VARIANT_TRUE;
-        codecApi->SetValue(&CODECAPI_AVLowLatencyMode, &var);
+        // Microsoft's H.264 decoder requires VT_UI4 for this property (unlike
+        // the encoder). Preserve the old setting only for explicit Baseline A/B.
+        if (m_low_latency_mode) { var.vt = VT_UI4; var.ulVal = 1; }
+        else { var.vt = VT_BOOL; var.boolVal = VARIANT_TRUE; }
+        const HRESULT latency_hr = codecApi->SetValue(&CODECAPI_AVLowLatencyMode, &var);
+        if (m_low_latency_mode && FAILED(latency_hr)) return latency_hr;
     }
+
+    if (m_low_latency_mode && !codecApi) return E_NOINTERFACE;
 
     // Set Input Media Type (H.264)
     ComPtr<IMFMediaType> inType;
@@ -113,7 +119,10 @@ HRESULT H264Decoder::SetupDecoder() {
 }
 
 bool H264Decoder::DecodeFrame(const uint8_t* data, size_t size, ComPtr<ID3D11Texture2D>* out_texture,
-                              uint32_t* out_width, uint32_t* out_height, ComPtr<IMFSample>* out_sample) {
+                              uint32_t* out_width, uint32_t* out_height, ComPtr<IMFSample>* out_sample, uint32_t* out_subresource,
+                              LONGLONG* out_sample_time, HRESULT* out_status) {
+    if (out_status) *out_status = E_FAIL;
+    if (out_sample_time) *out_sample_time = -1;
     if (!data || size == 0 || !m_decoder || !out_texture) return false;
 
     // 1. Create input sample with H.264 data
@@ -141,7 +150,7 @@ bool H264Decoder::DecodeFrame(const uint8_t* data, size_t size, ComPtr<ID3D11Tex
     m_sample_time += 166666;
 
     hr = m_decoder->ProcessInput(0, inSample.Get(), 0);
-    if (FAILED(hr)) return false;
+    if (FAILED(hr)) { if (out_status) *out_status = hr; return false; }
 
     // 2. Drain decoded output
     MFT_OUTPUT_DATA_BUFFER outputData = {};
@@ -184,6 +193,7 @@ bool H264Decoder::DecodeFrame(const uint8_t* data, size_t size, ComPtr<ID3D11Tex
     }
 
     if (FAILED(hr) || !outputData.pSample) {
+        if (out_status) *out_status = FAILED(hr) ? hr : E_FAIL;
         if (outputData.pEvents) {
             outputData.pEvents->Release();
             outputData.pEvents = nullptr;
@@ -192,7 +202,8 @@ bool H264Decoder::DecodeFrame(const uint8_t* data, size_t size, ComPtr<ID3D11Tex
     }
 
     ComPtr<IMFSample> pSampleHolder;
-    pSampleHolder.Attach(outputData.pSample);
+    if (outSample && outputData.pSample == outSample.Get()) pSampleHolder = outSample;
+    else pSampleHolder.Attach(outputData.pSample);
     if (outputData.pEvents) {
         outputData.pEvents->Release();
         outputData.pEvents = nullptr;
@@ -209,6 +220,9 @@ bool H264Decoder::DecodeFrame(const uint8_t* data, size_t size, ComPtr<ID3D11Tex
         ComPtr<ID3D11Texture2D> tex;
         hr = dxgiBuffer->GetResource(__uuidof(ID3D11Texture2D), reinterpret_cast<void**>(tex.GetAddressOf()));
         if (SUCCEEDED(hr) && tex) {
+            if (out_subresource && FAILED(dxgiBuffer->GetSubresourceIndex(out_subresource))) return false;
+            if (out_sample_time) pSampleHolder->GetSampleTime(out_sample_time);
+            if (out_status) *out_status = S_OK;
             *out_texture = tex;
             if (out_width) *out_width = m_width;
             if (out_height) *out_height = m_height;
