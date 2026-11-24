@@ -144,6 +144,10 @@ class ClusterFileRouter:
         request_id = message.get("request_id") if isinstance(message, dict) else None
         with self._lock:
             job = self._requests.get(request_id)
+            if (job is not None and source_id == job.destination_id
+                    and message.get('error') == 'ManifestPreparationTimeout'):
+                self._finish(job, ClusterJobPhase.FAILED)
+                return True
             if job is None or source_id != job.source_id:
                 return False
             forwarded = self._decorate(job, {

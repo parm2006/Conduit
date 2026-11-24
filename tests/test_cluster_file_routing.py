@@ -57,6 +57,17 @@ class ClusterFileRouterTests(unittest.TestCase):
         self.assertEqual(self.control[-1][0], source)
         return job, response["manifest"]["job_id"]
 
+    def test_only_destination_timeout_releases_pending_route(self):
+        request_id = '1' * 32
+        job = self.router.request_paste('client-2', request_id)
+        failure = {'request_id': request_id, 'error': 'ManifestPreparationTimeout'}
+        self.assertFalse(self.router.on_manifest_failed('server', failure))
+        self.assertIs(self.router.job(job.job_id), job)
+        self.assertTrue(self.router.on_manifest_failed('client-2', failure))
+        self.assertIsNone(self.router.job(job.job_id))
+        self.assertEqual(job.phase, ClusterJobPhase.FAILED)
+        self.assertIsNotNone(self.router.request_paste('client-2', '2' * 32))
+
     def test_all_six_source_destination_pairs_use_same_server_job_contract(self):
         suffix = 1
         for source in MACHINES:

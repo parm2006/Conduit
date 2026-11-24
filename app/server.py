@@ -1562,22 +1562,23 @@ class ConduitServer:
             source_sequence = offer.sequence
         if source_sequence is None:
             source_sequence = self._next_local_clipboard_sequence()
-        item = self._get_clipboard_hub().accept_ordinary(
-            self.server_machine_id,
-            source_sequence,
-            snapshot,
-        )
-        sent = item is not None
-        if item is not None:
-            state = self._get_clipboard_offer_state()
-            state.accept_cluster(
-                item.revision,
-                "server",
-                item.kind,
-                item.source_sequence,
-                session_id="cluster",
+        with self._get_paste_route_lock():
+            item = self._get_clipboard_hub().accept_ordinary(
+                self.server_machine_id,
+                source_sequence,
+                snapshot,
             )
-            self._apply_clipboard_offer_route()
+            sent = item is not None
+            if item is not None:
+                state = self._get_clipboard_offer_state()
+                state.accept_cluster(
+                    item.revision,
+                    "server",
+                    item.kind,
+                    item.source_sequence,
+                    session_id="cluster",
+                )
+                self._apply_clipboard_offer_route()
         logger.info(
             "Clipboard snapshot accepted (role=server formats=%s bytes=%d accepted=%s)",
             ",".join(entry.kind for entry in snapshot.entries),
@@ -1686,19 +1687,22 @@ class ConduitServer:
         )
 
     def _deliver_clipboard_to_server(self, item):
-        state = self._get_clipboard_offer_state()
-        state.accept_cluster(
-            item.revision,
-            "client",
-            item.kind,
-            item.source_sequence,
-            session_id="cluster",
-        )
-        self._apply_clipboard_offer_route()
-        if item.kind != "ordinary" or item.snapshot is None:
-            return True
-        payload = encode_clipboard_message(item.snapshot)
-        return self.clipboard.inject(payload)
+        with self._get_paste_route_lock():
+            state = self._get_clipboard_offer_state()
+            accepted = state.accept_cluster(
+                item.revision,
+                "client",
+                item.kind,
+                item.source_sequence,
+                session_id="cluster",
+            )
+            if not accepted:
+                return False
+            self._apply_clipboard_offer_route()
+            if item.kind != "ordinary" or item.snapshot is None:
+                return True
+            payload = encode_clipboard_message(item.snapshot)
+            return self.clipboard.inject(payload)
 
     def _deliver_clipboard_to_client(self, session_id, item):
         offer = {
@@ -1842,37 +1846,38 @@ class ConduitServer:
         return kind
 
     def on_local_clipboard_offer(self, kind, sequence):
-        self._local_clipboard_sequence = max(
-            sequence,
-            getattr(self, "_local_clipboard_sequence", 0),
-        )
-        if not hasattr(self, "session_registry"):
-            state = self._get_clipboard_offer_state()
-            if state.session_id is None:
-                return False
-            offer = state.observe_local(kind, sequence)
-            self._apply_clipboard_offer_route()
-            return self.control_network.send_message(offer.to_message())
-        if kind == "files":
-            item = self._get_clipboard_hub().accept_offer(
-                self.server_machine_id,
+        with self._get_paste_route_lock():
+            self._local_clipboard_sequence = max(
                 sequence,
-                kind,
+                getattr(self, "_local_clipboard_sequence", 0),
             )
-            if item is not None:
+            if not hasattr(self, "session_registry"):
                 state = self._get_clipboard_offer_state()
-                state.accept_cluster(
-                    item.revision,
-                    "server",
-                    kind,
-                    sequence,
-                    session_id="cluster",
-                )
+                if state.session_id is None:
+                    return False
+                offer = state.observe_local(kind, sequence)
                 self._apply_clipboard_offer_route()
-            return item is not None
-        else:
-            self._pending_local_ordinary_sequence = sequence
-            return True
+                return self.control_network.send_message(offer.to_message())
+            if kind == "files":
+                item = self._get_clipboard_hub().accept_offer(
+                    self.server_machine_id,
+                    sequence,
+                    kind,
+                )
+                if item is not None:
+                    state = self._get_clipboard_offer_state()
+                    state.accept_cluster(
+                        item.revision,
+                        "server",
+                        kind,
+                        sequence,
+                        session_id="cluster",
+                    )
+                    self._apply_clipboard_offer_route()
+                return item is not None
+            else:
+                self._pending_local_ordinary_sequence = sequence
+                return True
 
     def on_remote_clipboard_offer(self, data):
         if isinstance(data, dict) and data.get("kind") == "files":
@@ -1898,6 +1903,10 @@ class ConduitServer:
                 "files",
                 source_domain=session_id,
             )
+            if item is not None:
+                # File routing must be ready before another input event arrives;
+                # the hub's clipboard publication worker may still be busy.
+                self._deliver_clipboard_to_server(item)
             return item is not None
         state = self._get_clipboard_offer_state()
         accepted = state.accept_remote(data)
@@ -1925,7 +1934,7 @@ class ConduitServer:
     def on_file_manifest_request(self, data):
         router = getattr(self, "cluster_file_router", None)
         if router is None:
-            return self.file_paste_service.on_manifest_request(data)
+            return self.file_paste_service.queue_manifest_request(data)
         return self._handle_cluster_file_control(
             data.get("peer_identity"),
             data,
@@ -1991,7 +2000,7 @@ class ConduitServer:
 
     def _dispatch_local_file_control(self, message):
         handlers = {
-            "file_manifest_request": self.file_paste_service.on_manifest_request,
+            "file_manifest_request": self.file_paste_service.queue_manifest_request,
             "file_manifest_response": self.file_paste_service.on_manifest_response,
             "file_manifest_failed": self.file_paste_service.on_manifest_failed,
             "file_manifest_ack": self.file_paste_service.on_manifest_ack,
