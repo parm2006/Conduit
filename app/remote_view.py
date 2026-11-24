@@ -24,6 +24,7 @@ class RemoteView:
         self._cursor = None
         self._returning = False
         self._photo = None
+        self.viewer_cursor = 'arrow'
         self.map_window = WindowsMapOverlay()
         overlay = gui.overlay
         overlay.attributes('-alpha', 1.0)
@@ -40,6 +41,12 @@ class RemoteView:
         )
         self._timer = gui.after(25, self._tick)
 
+    def _set_viewer_cursor(self, cursor):
+        if cursor != self.viewer_cursor:
+            self.gui.overlay.config(cursor=cursor)
+            self.canvas.config(cursor=cursor)
+            self.viewer_cursor = cursor
+
     def set_primary(self, primary):
         self.primary = primary
         self.viewport = (primary.right - primary.left, primary.bottom - primary.top)
@@ -48,6 +55,7 @@ class RemoteView:
         self._shown_selection = None
         self._cursor = None
         self.canvas.delete('all')
+        self._set_viewer_cursor('arrow')
         receiver = getattr(self, 'receiver', None)
         if receiver is not None:
             receiver.viewport = self.viewport
@@ -85,6 +93,7 @@ class RemoteView:
             return
         self._returning = True
         self.canvas.delete('all')
+        self._set_viewer_cursor('arrow')
         self.gui.hide_overlay()
         self.gui._set_status(
             'Status: Remote video unavailable. Returned to Server display.',
@@ -113,15 +122,21 @@ class RemoteView:
                 self.canvas.delete('all')
                 self._photo = None
                 self._cursor = None
+                self._set_viewer_cursor('arrow')
             if not self.gui.overlay_active:
                 self.gui.show_overlay()
-            if not self.receiver.is_native_active():
+            if self.receiver.is_native_active():
+                self._set_viewer_cursor(
+                    'none' if self.receiver.cursor_in_frame() is True else 'arrow')
+            else:
                 frame = self.receiver.take_frame()
                 if frame is not None and frame[0] == remote:
                     _, image, (x, y), cursor = frame
                     self._photo = ImageTk.PhotoImage(image, master=self.canvas)
                     self.canvas.delete('video')
                     self.canvas.create_image(x, y, image=self._photo, anchor='nw', tags='video')
+                    # JPEG capture already draws the actual Client cursor.
+                    self._set_viewer_cursor('none')
                     if (isinstance(cursor, (list, tuple)) and len(cursor) == 2
                             and all(type(v) in (int, float) and math.isfinite(v) for v in cursor)):
                         self._cursor = (self.primary.left + x + cursor[0] * image.width,
@@ -133,6 +148,8 @@ class RemoteView:
         else:
             self._returning = False
             self._shown_selection = None
+            self._cursor = None
+            self._set_viewer_cursor('arrow')
             if self.gui.overlay_active:
                 self.gui.hide_overlay()
             cursor = win32gui.GetCursorPos()

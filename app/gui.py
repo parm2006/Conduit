@@ -2352,7 +2352,7 @@ class ConduitGUI(ctk.CTk):
                     
                     # Initial position
                     if self.__dict__.get('remote_view') is not None:
-                        self.overlay.config(cursor='arrow')
+                        self.overlay.config(cursor=self.remote_view.viewer_cursor)
                         entry_x = self.overlay_center_x
                         entry_y = self.overlay_center_y
                         target_rect, proj, pos = self._get_remote_geometry_and_projection()

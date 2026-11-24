@@ -28,6 +28,9 @@ H264Encoder::~H264Encoder() {
 }
 
 void H264Encoder::Cleanup() {
+    m_input_cursor_modes.clear();
+    m_last_error = S_OK;
+    m_recovering_output = false;
     m_encoder.Reset();
     m_dxgi_manager.Reset();
     m_output_view.Reset();
@@ -208,8 +211,23 @@ void H264Encoder::RequestKeyframe() {
     m_force_keyframe = true;
 }
 
-bool H264Encoder::EncodeFrame(ID3D11Texture2D* pTexture, uint32_t frame_id, std::vector<EncodedPacket>* out_packets) {
+bool H264Encoder::EncodeFrame(ID3D11Texture2D* pTexture, uint32_t frame_id, std::vector<EncodedPacket>* out_packets,
+                              int cursor_in_frame) {
+    m_last_error = S_OK;
     if (!pTexture || !m_encoder || !out_packets) return false;
+    auto output_failed = [&](HRESULT error) {
+        m_last_error = error;
+        m_force_keyframe = true;
+        m_recovering_output = true;
+        m_input_cursor_modes.clear();
+        out_packets->clear(); // Partial drain output is unsafe after an unknown loss.
+        // A failed ProcessOutput may retain its sample. Without flushing, the
+        // next ProcessInput can return NOTACCEPTING forever. Retain media types
+        // and restart input, then wait for a self-contained IDR.
+        if (SUCCEEDED(m_encoder->ProcessMessage(MFT_MESSAGE_COMMAND_FLUSH, 0)))
+            m_encoder->ProcessMessage(MFT_MESSAGE_NOTIFY_START_OF_STREAM, 0);
+        return false;
+    };
 
     // 1. GPU Color conversion & scaling: BGRA -> NV12
     D3D11_VIDEO_PROCESSOR_INPUT_VIEW_DESC inViewDesc = {};
@@ -262,22 +280,35 @@ bool H264Encoder::EncodeFrame(ID3D11Texture2D* pTexture, uint32_t frame_id, std:
 
     if (m_force_keyframe) {
         ComPtr<ICodecAPI> codecApi;
-        if (SUCCEEDED(m_encoder.As(&codecApi))) {
+        HRESULT requested = m_encoder.As(&codecApi);
+        if (SUCCEEDED(requested)) {
             VARIANT var = {};
             var.vt = VT_UI4;
             var.ulVal = 1;
-            codecApi->SetValue(&CODECAPI_AVEncVideoForceKeyFrame, &var);
+            requested = codecApi->SetValue(&CODECAPI_AVEncVideoForceKeyFrame, &var);
         }
-        m_force_keyframe = false;
+        // Keep retrying unsupported/transient requests; a natural IDR can
+        // still recover the stream. Do not call NeedMoreInput an encoder fault.
+        if (SUCCEEDED(requested)) m_force_keyframe = false;
+        else m_last_error = requested;
     }
 
     // 3. Feed input into encoder
     hr = m_encoder->ProcessInput(0, inputSample.Get(), 0);
-    if (FAILED(hr)) return false;
+    if (FAILED(hr)) {
+        if (hr != MF_E_NOTACCEPTING) {
+            m_last_error = hr;
+            m_force_keyframe = true;
+        }
+        return false;
+    }
+    m_input_cursor_modes[m_sample_time - m_frame_duration] = cursor_in_frame;
+    while (m_input_cursor_modes.size() > 64) m_input_cursor_modes.erase(m_input_cursor_modes.begin());
 
     // 4. Drain encoded output
     MFT_OUTPUT_STREAM_INFO streamInfo = {};
-    m_encoder->GetOutputStreamInfo(0, &streamInfo);
+    hr = m_encoder->GetOutputStreamInfo(0, &streamInfo);
+    if (FAILED(hr)) return output_failed(hr);
 
     while (true) {
         MFT_OUTPUT_DATA_BUFFER outputData = {};
@@ -285,44 +316,72 @@ bool H264Encoder::EncodeFrame(ID3D11Texture2D* pTexture, uint32_t frame_id, std:
 
         ComPtr<IMFSample> outSample;
         hr = MFCreateSample(&outSample);
-        if (FAILED(hr)) break;
+        if (FAILED(hr)) return output_failed(hr);
 
         ComPtr<IMFMediaBuffer> outBuffer;
         hr = MFCreateMemoryBuffer(streamInfo.cbSize > 0 ? streamInfo.cbSize : 256 * 1024, &outBuffer);
-        if (FAILED(hr)) break;
+        if (FAILED(hr)) return output_failed(hr);
 
-        outSample->AddBuffer(outBuffer.Get());
+        hr = outSample->AddBuffer(outBuffer.Get());
+        if (FAILED(hr)) return output_failed(hr);
         outputData.pSample = outSample.Get();
 
         DWORD status = 0;
         hr = m_encoder->ProcessOutput(0, 1, &outputData, &status);
+        if (outputData.pEvents) outputData.pEvents->Release();
         if (hr == MF_E_TRANSFORM_NEED_MORE_INPUT) {
             break; // Finished draining for this input frame
         }
         if (FAILED(hr)) {
-            break;
+            return output_failed(hr);
         }
 
         // Extract H.264 data from sample
         DWORD totalLength = 0;
-        outputData.pSample->GetTotalLength(&totalLength);
+        hr = outputData.pSample->GetTotalLength(&totalLength);
+        if (FAILED(hr)) return output_failed(hr);
         if (totalLength > 0) {
             BYTE* pData = nullptr;
             DWORD currentLength = 0;
-            if (SUCCEEDED(outBuffer->Lock(&pData, nullptr, &currentLength)) && pData && currentLength > 0) {
+            hr = outBuffer->Lock(&pData, nullptr, &currentLength);
+            if (FAILED(hr)) return output_failed(hr);
+            if (!pData || !currentLength) {
+                outBuffer->Unlock();
+                return output_failed(E_UNEXPECTED);
+            }
+            if (pData && currentLength > 0) {
                 EncodedPacket packet = {};
                 packet.data.assign(pData, pData + currentLength);
                 packet.frame_id = frame_id;
                 packet.timestamp_ms = static_cast<uint32_t>(m_sample_time / 10000);
+                LONGLONG output_time = -1;
+                if (SUCCEEDED(outputData.pSample->GetSampleTime(&output_time))) {
+                    packet.timestamp_ms = static_cast<uint32_t>(output_time / 10000);
+                    auto metadata = m_input_cursor_modes.find(output_time);
+                    if (metadata != m_input_cursor_modes.end()) {
+                        packet.cursor_in_frame = metadata->second;
+                        m_input_cursor_modes.erase(m_input_cursor_modes.begin(), std::next(metadata));
+                    }
+                }
 
                 UINT32 cleanPoint = 0;
                 outputData.pSample->GetUINT32(MFSampleExtension_CleanPoint, &cleanPoint);
                 packet.is_keyframe = (cleanPoint != 0);
 
+                if (m_recovering_output && !packet.is_keyframe) {
+                    m_force_keyframe = true;
+                    outBuffer->Unlock();
+                    continue;
+                }
+                if (packet.is_keyframe) {
+                    m_recovering_output = false;
+                    m_force_keyframe = false;
+                }
+
                 out_packets->push_back(std::move(packet));
                 outBuffer->Unlock();
             }
-        }
+        } else return output_failed(E_UNEXPECTED);
     }
 
     return !out_packets->empty();

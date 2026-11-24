@@ -205,6 +205,13 @@ class ServerVideoReceiver:
     def is_native_active(self):
         return bool(getattr(self, '_native_active', False) and not self._stop.is_set())
 
+    def cursor_in_frame(self):
+        receiver = getattr(self, '_native_receiver', None)
+        if not self.is_native_active() or receiver is None:
+            return None
+        reader = getattr(receiver, 'get_cursor_in_frame', None)
+        return reader() if reader is not None else None
+
     def resize(self, width, height):
         self.viewport = (width, height)
         with self._lock:

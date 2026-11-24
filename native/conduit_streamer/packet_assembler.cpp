@@ -1,4 +1,5 @@
 #include "packet_assembler.h"
+#include "video_cursor_policy.h"
 #include "latency_trace.h"
 
 PacketAssembler::PacketAssembler()
@@ -55,12 +56,14 @@ void PacketAssembler::IngestFragment(const PacketHeader& header, const uint8_t* 
     }
     auto& pending = m_pending_frames[header.frame_id];
     const bool keyframe = (header.flags & STREAMER_FLAG_KEYFRAME) != 0;
+    const uint8_t cursor_flags = header.flags & (STREAMER_FLAG_CURSOR_KNOWN | STREAMER_FLAG_CURSOR_IN_FRAME);
     if (pending.fragments.empty()) {
         pending.frame_id = header.frame_id; pending.timestamp_ms = header.timestamp_ms;
         pending.total_fragments = header.total_fragments; pending.received_fragments = 0;
         pending.is_keyframe = keyframe; pending.first_rx_us = conduit::QpcNowUs(); pending.bytes = 0;
+        pending.cursor_flags = cursor_flags;
     } else if (pending.total_fragments != header.total_fragments || pending.timestamp_ms != header.timestamp_ms ||
-               pending.is_keyframe != keyframe) {
+               pending.is_keyframe != keyframe || pending.cursor_flags != cursor_flags) {
         m_pending_bytes -= pending.bytes; m_pending_frames.erase(header.frame_id);
         request_keyframe = true; notify(); return;
     }
@@ -79,6 +82,7 @@ void PacketAssembler::IngestFragment(const PacketHeader& header, const uint8_t* 
         frame.data.insert(frame.data.end(), fragment.second.begin(), fragment.second.end());
     frame.frame_id = pending.frame_id; frame.timestamp_ms = pending.timestamp_ms;
     frame.is_keyframe = pending.is_keyframe; frame.first_rx_us = pending.first_rx_us;
+    frame.cursor_in_frame = conduit::CursorPolicyFromFlags(pending.cursor_flags);
     frame.complete_us = conduit::QpcNowUs();
     m_latest_completed_frame = frame.frame_id;
     auto it = m_pending_frames.begin();

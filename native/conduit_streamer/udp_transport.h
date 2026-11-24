@@ -43,6 +43,7 @@ public:
 
     bool Start();
     void Stop();
+    std::string GetStats() const;
 
 private:
     void ReceiveLoop();
@@ -55,6 +56,7 @@ private:
     std::atomic<bool> m_running;
     uint32_t m_max_sequence;
     uint64_t m_replay_window;
+    std::atomic<uint64_t> m_packets{0}, m_authenticated{0}, m_auth_rejected{0}, m_replay_rejected{0};
 };
 
 #endif // CONDUIT_STREAMER_UDP_TRANSPORT_H
