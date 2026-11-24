@@ -12,15 +12,17 @@ logger = logging.getLogger(__name__)
 
 
 class UpdatePanel(ctk.CTkFrame):
-    def __init__(self, parent, *, on_close, on_available=None):
+    def __init__(self, parent, *, on_close, on_available=None, on_status=None):
         super().__init__(parent, fg_color='transparent')
         self.on_close = on_close
         self.on_available = on_available
+        self.on_status = on_status
         self.busy = False
         self.update = None
         self.download = None
         self.results = queue.Queue()
         self.timer = None
+        self._notify_status('unknown')
         ctk.CTkLabel(self, text=f'Conduit {PRODUCT_VERSION}').pack(pady=(20, 5))
         channel = 'Preview and stable releases' if '-' in PRODUCT_VERSION else 'Stable releases'
         ctk.CTkLabel(self, text=channel).pack(pady=5)
@@ -32,6 +34,10 @@ class UpdatePanel(ctk.CTkFrame):
         if self._automatic:
             self.timer = self.after(3000, self.check)
 
+    def _notify_status(self, state):
+        if self.on_status is not None:
+            self.on_status(state, self.update is not None)
+
     def _start(self, operation, work):
         if self.busy:
             return
@@ -39,6 +45,7 @@ class UpdatePanel(ctk.CTkFrame):
             self.after_cancel(self.timer)
             self.timer = None
         self.busy = True
+        self._notify_status('checking' if operation == 'check' else 'downloading')
         self.action.configure(state='disabled')
         self.status.configure(text='Checking GitHub…' if operation == 'check' else 'Downloading and verifying…')
 
@@ -69,10 +76,12 @@ class UpdatePanel(ctk.CTkFrame):
         self.busy = False
         self.action.configure(state='normal')
         if error:
+            self._notify_status('error')
             self.status.configure(text=f'Could not {operation} the update. Check your connection and try again.')
             self.action.configure(text='Check again', command=self.check)
         elif operation == 'check':
             self.update, self.download = result, None
+            self._notify_status('current' if result is None else 'available')
             if result is None:
                 self.status.configure(text='You have the latest version for this channel.')
                 self.action.configure(text='Check again', command=self.check)
@@ -83,6 +92,7 @@ class UpdatePanel(ctk.CTkFrame):
                     self.on_available(result.version)
         else:
             self.download = result
+            self._notify_status('downloaded')
             if can_install():
                 self.status.configure(text='Download verified. Installing will close Conduit and disconnect active sessions.')
                 self.action.configure(text='Install update', command=self._install)
@@ -97,6 +107,7 @@ class UpdatePanel(ctk.CTkFrame):
             verified_installer(self.download)
             launch_installer(self.download)
         except Exception as error:
+            self._notify_status('error')
             logger.warning('Update installation failed (%s)', type(error).__name__)
             self.status.configure(text='Could not start the verified installer. Check for updates and download again.')
             self.action.configure(text='Check again', command=self.check)
