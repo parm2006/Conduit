@@ -4,7 +4,7 @@ import logging
 from contextlib import contextmanager
 from dataclasses import dataclass
 from functools import partial
-import hashlib
+from app.hashing import new_hasher
 import hmac
 import ipaddress
 import secrets
@@ -248,7 +248,7 @@ class SessionRegistry:
         if not isinstance(token, str) or not isinstance(session_id, str):
             raise SessionAuthenticationError("lane token is invalid")
         peer_address = self._normalize_peer_address(peer_address)
-        digest = hashlib.sha256(token.encode("utf-8")).digest()
+        digest = new_hasher(token.encode("utf-8")).digest()
         with self._lock:
             record = self._tokens.get(digest)
             if record is None:
@@ -505,7 +505,7 @@ class SessionRegistry:
 
     def _issue_locked(self, session, purpose):
         token = secrets.token_urlsafe(32)
-        digest = hashlib.sha256(token.encode("utf-8")).digest()
+        digest = new_hasher(token.encode("utf-8")).digest()
         self._tokens[digest] = _LaneToken(
             session.session_id,
             purpose,

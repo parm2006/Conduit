@@ -1,4 +1,5 @@
 import hashlib
+from app.hashing import new_hasher
 import hmac
 import threading
 import json
@@ -22,7 +23,7 @@ class SessionAuthenticator:
     def __init__(self, token):
         if not isinstance(token, str) or len(token) < 8:
             raise ValueError("session token is too short")
-        self._token_digest = hashlib.sha256(token.encode("utf-8")).digest()
+        self._token_digest = new_hasher(token.encode("utf-8")).digest()
         self._consumed = False
         self._lock = threading.Lock()
 
@@ -30,7 +31,7 @@ class SessionAuthenticator:
         with self._lock:
             if self._consumed or not isinstance(candidate, str):
                 raise AuthenticationError("session token is invalid or already used")
-            candidate_digest = hashlib.sha256(candidate.encode("utf-8")).digest()
+            candidate_digest = new_hasher(candidate.encode("utf-8")).digest()
             if not hmac.compare_digest(candidate_digest, self._token_digest):
                 raise AuthenticationError("session token is invalid or already used")
             self._consumed = True

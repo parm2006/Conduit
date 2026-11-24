@@ -1,6 +1,6 @@
 import base64
 import binascii
-import hashlib
+from app.hashing import new_hasher
 import json
 import zlib
 from dataclasses import dataclass
@@ -62,7 +62,7 @@ class ClipboardSnapshot:
             raise ClipboardPayloadError("clipboard snapshot exceeds its size limit")
 
     def fingerprint(self):
-        hasher = hashlib.sha256()
+        hasher = new_hasher()
         for entry in sorted(self.entries, key=lambda e: e.kind):
             hasher.update(entry.kind.encode("utf-8"))
             hasher.update(entry.data)
