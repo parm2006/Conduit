@@ -16,6 +16,7 @@ DxgiCapture::~DxgiCapture() {
 }
 
 void DxgiCapture::Cleanup() {
+    m_cursor_policy.Reset();
     m_duplication.Reset();
     m_output1.Reset();
     m_shared_texture.Reset();
@@ -102,6 +103,7 @@ int DxgiCapture::Initialize(int output_index) {
 }
 
 HRESULT DxgiCapture::SetupDuplication() {
+    m_cursor_policy.Reset();
     m_duplication.Reset();
     if (!m_output1 || !m_device) return E_POINTER;
 
@@ -144,6 +146,7 @@ bool DxgiCapture::AcquireFrame(CapturedFrame* out_frame, uint32_t timeout_ms) {
     out_frame->cursor_x = m_last_cursor_x;
     out_frame->cursor_y = m_last_cursor_y;
     out_frame->cursor_visible = m_cursor_visible;
+    out_frame->cursor_in_frame = m_cursor_policy.Value();
 
     if (!m_duplication) {
         if (!SetupDuplication()) return false;
@@ -172,6 +175,8 @@ bool DxgiCapture::AcquireFrame(CapturedFrame* out_frame, uint32_t timeout_ms) {
     }
 
     // Cursor position update
+    const bool cursor_policy_changed = m_cursor_policy.Update(
+        frameInfo.LastMouseUpdateTime.QuadPart != 0, frameInfo.PointerPosition.Visible != FALSE);
     if (frameInfo.PointerPosition.Visible) {
         m_last_cursor_x = frameInfo.PointerPosition.Position.x;
         m_last_cursor_y = frameInfo.PointerPosition.Position.y;
@@ -182,6 +187,7 @@ bool DxgiCapture::AcquireFrame(CapturedFrame* out_frame, uint32_t timeout_ms) {
     out_frame->cursor_x = m_last_cursor_x;
     out_frame->cursor_y = m_last_cursor_y;
     out_frame->cursor_visible = m_cursor_visible;
+    out_frame->cursor_in_frame = m_cursor_policy.Value();
 
     bool copied = false;
     if (desktopResource) {
@@ -191,7 +197,7 @@ bool DxgiCapture::AcquireFrame(CapturedFrame* out_frame, uint32_t timeout_ms) {
             m_context->CopyResource(m_shared_texture.Get(), acquiredTex.Get());
             out_frame->texture = m_shared_texture;
             out_frame->has_new_frame = true;
-            out_frame->desktop_changed = frameInfo.LastPresentTime.QuadPart != 0;
+            out_frame->desktop_changed = frameInfo.LastPresentTime.QuadPart != 0 || cursor_policy_changed;
             copied = true;
         }
         acquiredTex.Reset();

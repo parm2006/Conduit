@@ -12,6 +12,9 @@
 #define STREAMER_FLAG_KEYFRAME       0x01
 #define STREAMER_FLAG_START_OF_FRAME 0x02
 #define STREAMER_FLAG_END_OF_FRAME   0x04
+// Optional authenticated metadata. Old peers omit both bits (unknown).
+#define STREAMER_FLAG_CURSOR_KNOWN   0x08
+#define STREAMER_FLAG_CURSOR_IN_FRAME 0x10
 
 #define STREAMER_MAX_PAYLOAD_SIZE 1280 // Keeps datagram comfortably below 1500 byte MTU
 #define STREAMER_GCM_IV_LEN       12

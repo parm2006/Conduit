@@ -24,6 +24,7 @@ struct EncodedFrame {
     uint32_t sender_ts_ms = 0;
     uint64_t first_rx_us = 0;
     uint64_t complete_us = 0;
+    int cursor_in_frame = -1;
 };
 struct PipelineConfig {
     size_t max_queue_depth = 3;
@@ -144,6 +145,7 @@ struct DecodedFrame {
     // input's timestamps unless the adapter matched the output sample correctly.
     bool source_timing_known = false;
     uint64_t first_rx_us = 0, complete_us = 0;
+    int cursor_in_frame = -1;
 };
 struct PipelineCallbacks {
     // All callbacks except request_keyframe run on the COM MTA worker. The

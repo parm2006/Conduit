@@ -8,6 +8,8 @@ from ctypes import wintypes
 import logging
 import os
 import sys
+import threading
+import hashlib
 
 logger = logging.getLogger(__name__)
 
@@ -15,6 +17,7 @@ STREAMER_EVENT_STARTED = 1
 STREAMER_EVENT_STOPPED = 2
 STREAMER_EVENT_FIRST_FRAME = 3
 STREAMER_EVENT_NEED_KEYFRAME = 4
+STREAMER_EVENT_WARNING = 5
 STREAMER_EVENT_ERROR = -1
 
 STREAMER_EVENT_CALLBACK = ctypes.WINFUNCTYPE(
@@ -114,6 +117,10 @@ def get_streamer_dll():
 
         dll.streamer_receiver_get_frame_count.restype = ctypes.c_uint64
         dll.streamer_receiver_get_frame_count.argtypes = [ctypes.c_void_p]
+        cursor_reader = getattr(dll, 'streamer_receiver_get_cursor_in_frame', None)
+        if cursor_reader is not None:
+            cursor_reader.restype = ctypes.c_int
+            cursor_reader.argtypes = [ctypes.c_void_p]
 
         # Stage 1 diagnostics are optional so the baseline DLL remains usable.
         for name in ("streamer_sender_get_stats", "streamer_receiver_get_stats"):
@@ -122,6 +129,13 @@ def get_streamer_dll():
                 reader.restype = ctypes.c_int
                 reader.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_char), ctypes.c_int]
 
+        try:
+            with open(dll_path, 'rb') as binary:
+                fingerprint = hashlib.sha256(binary.read()).hexdigest()
+        except OSError:
+            fingerprint = 'unavailable'
+        logger.info('Native video DLL loaded (path=%s sha256=%s cursor_metadata=%s)',
+                    dll_path, fingerprint, cursor_reader is not None)
         _DLL = dll
         return _DLL
     except Exception as error:
@@ -181,6 +195,8 @@ class NativeStreamerSender:
 
     def _callback_handler(self, event_code, message, user_data):
         msg_str = message.decode("utf-8", "ignore") if message else ""
+        if event_code == STREAMER_EVENT_WARNING:
+            logger.warning('Native encoder recovery: %s', msg_str)
         if self._on_event:
             try:
                 self._on_event(event_code, msg_str)
@@ -232,6 +248,7 @@ class NativeStreamerSender:
 
 class NativeStreamerReceiver:
     def __init__(self, hwnd, on_event=None):
+        self._lifecycle_lock = threading.Lock()
         self._dll = get_streamer_dll()
         if not self._dll:
             raise RuntimeError("conduit_streamer.dll is not available")
@@ -264,6 +281,19 @@ class NativeStreamerReceiver:
     def resize(self, width, height):
         return self._dll.streamer_receiver_resize(self._handle, int(width), int(height)) == 0
 
+    def get_cursor_in_frame(self):
+        # Never block Tk behind renderer teardown: Present may need Tk messages.
+        if not self._lifecycle_lock.acquire(blocking=False):
+            return None
+        try:
+            reader = getattr(self._dll, 'streamer_receiver_get_cursor_in_frame', None)
+            if not self._handle or reader is None:
+                return None
+            mode = int(reader(self._handle))
+            return bool(mode) if mode in (0, 1) else None
+        finally:
+            self._lifecycle_lock.release()
+
     def get_frame_count(self) -> int:
         if self._handle and hasattr(self._dll, "streamer_receiver_get_frame_count"):
             return int(self._dll.streamer_receiver_get_frame_count(self._handle))
@@ -280,9 +310,10 @@ class NativeStreamerReceiver:
                 logger.info("Native video receiver stats before stop:\n%s", stats)
 
     def destroy(self):
-        if self._handle:
-            self._dll.streamer_receiver_destroy(self._handle)
-            self._handle = None
+        with self._lifecycle_lock:
+            if getattr(self, '_handle', None):
+                self._dll.streamer_receiver_destroy(self._handle)
+                self._handle = None
 
     def __del__(self):
         self.destroy()

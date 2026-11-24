@@ -15,6 +15,7 @@ struct AssembledFrame {
     bool is_keyframe;
     uint64_t first_rx_us = 0;
     uint64_t complete_us = 0;
+    int cursor_in_frame = -1;
 };
 
 typedef std::function<void(AssembledFrame&&)> FrameReadyCallback;
@@ -37,6 +38,7 @@ private:
         uint16_t total_fragments;
         uint16_t received_fragments;
         bool is_keyframe;
+        uint8_t cursor_flags = 0;
         uint64_t first_rx_us = 0;
         size_t bytes = 0;
         std::map<uint16_t, std::vector<uint8_t>> fragments;

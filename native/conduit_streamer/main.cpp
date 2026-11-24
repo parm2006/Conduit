@@ -166,6 +166,9 @@ struct StreamerSenderState {
     bool stage1_sender = false;
     conduit::StageStats capture_time, encode_time, send_time;
     std::atomic<uint64_t> send_failures{0};
+    std::atomic<uint64_t> encoder_errors{0};
+    std::atomic<uint32_t> last_encoder_error{0};
+    uint64_t last_encoder_warning_us = 0;
 
     StreamerSenderState(StreamerEventCallback cb, void* ud)
         : callback(cb)
@@ -252,8 +255,21 @@ static void StreamerSenderLoop(StreamerSenderState* state) {
             packets.clear();
             const uint64_t enc_at = conduit::QpcNowUs();
             const uint32_t input_id = state->stage1_sender ? frame_id : frame_id++;
-            const bool output = state->encoder.EncodeFrame(frame.texture.Get(), input_id, &packets);
+            const bool output = state->encoder.EncodeFrame(frame.texture.Get(), input_id, &packets, frame.cursor_in_frame);
             state->encode_time.Add(conduit::QpcNowUs() - enc_at);
+            const HRESULT encoder_error = state->encoder.GetLastError();
+            if (FAILED(encoder_error)) {
+                ++state->encoder_errors;
+                state->last_encoder_error = static_cast<uint32_t>(encoder_error);
+                const uint64_t now = conduit::QpcNowUs();
+                if (!state->last_encoder_warning_us || now - state->last_encoder_warning_us >= 1000000) {
+                    char message[128];
+                    std::snprintf(message, sizeof message, "Encoder HRESULT=0x%08X; keyframe recovery requested",
+                                  static_cast<unsigned>(encoder_error));
+                    state->Notify(STREAMER_EVENT_WARNING, message);
+                    state->last_encoder_warning_us = now;
+                }
+            }
             if (output && !packets.empty()) {
                 const uint64_t send_at = conduit::QpcNowUs();
                 for (auto& packet : packets) {
@@ -355,13 +371,18 @@ struct StreamerReceiverState {
     std::atomic<bool> running;
     std::atomic<bool> first_frame_rendered;
     std::atomic<uint64_t> frame_count;
+    std::atomic<int> cursor_in_frame{-1};
     std::mutex render_mutex;
     bool stage1_receiver = false;
     bool worker_mf_started = false;
     std::atomic<bool> need_keyframe{false};
     std::atomic<uint64_t> pending_resize{0};
     std::unique_ptr<conduit::ReceivePipeline> pipeline;
-    std::map<LONGLONG, std::pair<uint64_t, uint64_t>> input_timings;
+    struct InputMetadata {
+        uint64_t first_rx_us, complete_us;
+        int cursor_in_frame;
+    };
+    std::map<LONGLONG, InputMetadata> input_timings;
 
     StreamerReceiverState(HWND hwnd, StreamerEventCallback cb, void* ud)
         : target_hwnd(hwnd)
@@ -414,7 +435,7 @@ static bool StartReceiverPipeline(StreamerReceiverState* state) {
     };
     cb.decode = [state](const conduit::EncodedFrame& frame, conduit::DecodedFrame* out) {
         const LONGLONG input_time = state->decoder.GetNextSampleTime();
-        state->input_timings[input_time] = {frame.first_rx_us, frame.complete_us};
+        state->input_timings[input_time] = {frame.first_rx_us, frame.complete_us, frame.cursor_in_frame};
         while (state->input_timings.size() > 64) state->input_timings.erase(state->input_timings.begin());
         auto holder = std::make_shared<Stage1DecodedHolder>();
         HRESULT status = E_FAIL;
@@ -430,8 +451,9 @@ static bool StartReceiverPipeline(StreamerReceiverState* state) {
         auto timing = state->input_timings.find(output_time);
         if (timing != state->input_timings.end()) {
             out->source_timing_known = true;
-            out->first_rx_us = timing->second.first;
-            out->complete_us = timing->second.second;
+            out->first_rx_us = timing->second.first_rx_us;
+            out->complete_us = timing->second.complete_us;
+            out->cursor_in_frame = timing->second.cursor_in_frame;
             state->input_timings.erase(state->input_timings.begin(), std::next(timing));
         }
         out->handle = holder;
@@ -440,7 +462,10 @@ static bool StartReceiverPipeline(StreamerReceiverState* state) {
     cb.present = [state](const conduit::DecodedFrame& frame) {
         auto* holder = static_cast<Stage1DecodedHolder*>(frame.handle.get());
         const bool ok = holder && state->renderer.RenderFrame(holder->texture.Get(), frame.width, frame.height, holder->subresource);
-        if (ok) ++state->frame_count;
+        if (ok) {
+            state->cursor_in_frame = frame.cursor_in_frame;
+            ++state->frame_count;
+        }
         return ok;
     };
     // Never invoke a Python/TLS callback on the UDP receive thread.
@@ -463,6 +488,8 @@ STREAMER_API int streamer_receiver_start(StreamerReceiverHandle handle, int list
 
     state->stage1_receiver = Stage1Enabled(L"receiver");
     state->first_frame_rendered = false;
+    state->cursor_in_frame = -1;
+    state->input_timings.clear();
     state->need_keyframe = false;
     state->pending_resize = 0;
     if (state->pipeline) { state->pipeline->Stop(); state->pipeline.reset(); }
@@ -491,6 +518,7 @@ STREAMER_API int streamer_receiver_start(StreamerReceiverHandle handle, int list
             encoded.frame_id = frame.frame_id; encoded.keyframe = frame.is_keyframe;
             encoded.sender_ts_ms = frame.timestamp_ms;
             encoded.first_rx_us = frame.first_rx_us; encoded.complete_us = frame.complete_us;
+            encoded.cursor_in_frame = frame.cursor_in_frame;
             state->pipeline->Submit(std::move(encoded));
             return;
         }
@@ -500,9 +528,19 @@ STREAMER_API int streamer_receiver_start(StreamerReceiverHandle handle, int list
         ComPtr<ID3D11Texture2D> decodedTexture;
         ComPtr<IMFSample> sampleHolder;
         uint32_t src_w = 0, src_h = 0;
-        if (state->decoder.DecodeFrame(frame.data.data(), frame.data.size(), &decodedTexture, &src_w, &src_h, &sampleHolder)) {
+        uint32_t subresource = 0;
+        LONGLONG output_time = -1;
+        state->input_timings[state->decoder.GetNextSampleTime()] = {
+            frame.first_rx_us, frame.complete_us, frame.cursor_in_frame};
+        while (state->input_timings.size() > 64) state->input_timings.erase(state->input_timings.begin());
+        if (state->decoder.DecodeFrame(frame.data.data(), frame.data.size(), &decodedTexture,
+                &src_w, &src_h, &sampleHolder, &subresource, &output_time)) {
             if (decodedTexture) {
-                state->renderer.RenderFrame(decodedTexture.Get(), src_w, src_h);
+                if (!state->renderer.RenderFrame(decodedTexture.Get(), src_w, src_h, subresource)) return;
+                const auto metadata = state->input_timings.find(output_time);
+                state->cursor_in_frame = metadata != state->input_timings.end() ? metadata->second.cursor_in_frame : -1;
+                if (metadata != state->input_timings.end())
+                    state->input_timings.erase(state->input_timings.begin(), std::next(metadata));
                 state->frame_count.fetch_add(1);
                 if (!state->first_frame_rendered.exchange(true)) {
                     state->Notify(STREAMER_EVENT_FIRST_FRAME, "First frame presented");
@@ -551,6 +589,11 @@ STREAMER_API uint64_t streamer_receiver_get_frame_count(StreamerReceiverHandle h
     return state->frame_count.load();
 }
 
+STREAMER_API int streamer_receiver_get_cursor_in_frame(StreamerReceiverHandle handle) {
+    if (!handle) return -1;
+    return static_cast<StreamerReceiverState*>(handle)->cursor_in_frame.load();
+}
+
 STREAMER_API int streamer_receiver_stop(StreamerReceiverHandle handle) {
     if (!handle) return -1;
     auto* state = static_cast<StreamerReceiverState*>(handle);
@@ -583,10 +626,17 @@ STREAMER_API int streamer_sender_get_stats(StreamerSenderHandle handle, char* bu
     report += state->encode_time.Format("encode call");
     report += state->send_time.Format("send call");
     report += "send_failures=" + std::to_string(state->send_failures.load()) + "\n";
+    char error[96];
+    std::snprintf(error, sizeof error, "encoder_errors=%llu last_encoder_hresult=0x%08X\n",
+                  static_cast<unsigned long long>(state->encoder_errors.load()), state->last_encoder_error.load());
+    report += error;
     return CopyStats(report, buffer, size);
 }
 STREAMER_API int streamer_receiver_get_stats(StreamerReceiverHandle handle, char* buffer, int size) {
     if (!handle) return 0;
     auto* state = static_cast<StreamerReceiverState*>(handle);
-    return CopyStats(state->pipeline ? state->pipeline->Report() : "receiver mode=baseline\n", buffer, size);
+    std::string report = state->pipeline ? state->pipeline->Report() : "receiver mode=baseline\n";
+    report += "cursor_in_frame=" + std::to_string(state->cursor_in_frame.load()) + "\n";
+    report += state->udp.GetStats();
+    return CopyStats(report, buffer, size);
 }

@@ -1,4 +1,5 @@
 #include "udp_transport.h"
+#include "video_cursor_policy.h"
 
 // ----------------------------------------------------------------------------
 // UdpSender
@@ -86,6 +87,7 @@ bool UdpSender::SendFrame(const EncodedPacket& packet) {
         header.magic = STREAMER_PACKET_MAGIC;
         header.version = STREAMER_PROTOCOL_VERSION;
         header.flags = 0;
+        header.flags |= conduit::CursorPolicyFlags(packet.cursor_in_frame);
         if (packet.is_keyframe) header.flags |= STREAMER_FLAG_KEYFRAME;
         if (frag == 0) header.flags |= STREAMER_FLAG_START_OF_FRAME;
         if (frag == total_fragments - 1) header.flags |= STREAMER_FLAG_END_OF_FRAME;
@@ -163,6 +165,7 @@ bool UdpReceiver::Initialize(int listen_port, const uint8_t* key, size_t key_len
                              FrameReadyCallback on_frame, KeyframeNeededCallback on_keyframe_needed) {
     Stop();
     Cleanup();
+    m_packets = 0; m_authenticated = 0; m_auth_rejected = 0; m_replay_rejected = 0;
     if (listen_port <= 0 || !key || key_len != 32) {
         return false;
     }
@@ -238,6 +241,7 @@ void UdpReceiver::ReceiveLoop() {
         if (bytes <= 0 || !m_running) {
             break;
         }
+        ++m_packets;
 
         if (bytes < static_cast<int>(sizeof(PacketHeader) + STREAMER_GCM_TAG_LEN)) {
             continue; // Too small to be valid packet
@@ -269,8 +273,10 @@ void UdpReceiver::ReceiveLoop() {
                               auth_tag, STREAMER_GCM_TAG_LEN,
                               plaintext_buffer.data())) {
             // Authentication failed - corrupted or unauthorized packet, discard
+            ++m_auth_rejected;
             continue;
         }
+        ++m_authenticated;
 
         // Replay protection: 64-packet sliding window bitmask
         if (header.sequence_number > m_max_sequence) {
@@ -286,6 +292,7 @@ void UdpReceiver::ReceiveLoop() {
             uint32_t diff = m_max_sequence - header.sequence_number;
             if (diff >= 64 || (m_replay_window & (1ULL << diff)) != 0) {
                 // Duplicate or replayed packet - discard
+                ++m_replay_rejected;
                 continue;
             }
             m_replay_window |= (1ULL << diff);
@@ -294,4 +301,11 @@ void UdpReceiver::ReceiveLoop() {
         // Ingest validated fragment into reassembler
         m_assembler.IngestFragment(header, plaintext_buffer.data(), header.payload_len);
     }
+}
+
+std::string UdpReceiver::GetStats() const {
+    return "udp_packets=" + std::to_string(m_packets.load()) +
+        " authenticated=" + std::to_string(m_authenticated.load()) +
+        " auth_rejected=" + std::to_string(m_auth_rejected.load()) +
+        " replay_rejected=" + std::to_string(m_replay_rejected.load()) + "\n";
 }

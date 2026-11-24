@@ -5,6 +5,7 @@
 #include <dxgi1_2.h>
 #include <wrl/client.h>
 #include <stdint.h>
+#include "video_cursor_policy.h"
 
 using Microsoft::WRL::ComPtr;
 
@@ -17,6 +18,7 @@ struct CapturedFrame {
     bool cursor_visible;
     bool has_new_frame;
     bool desktop_changed = false;
+    int cursor_in_frame = -1;
 };
 
 class DxgiCapture {
@@ -51,6 +53,7 @@ private:
     int m_last_cursor_x;
     int m_last_cursor_y;
     bool m_cursor_visible;
+    conduit::CaptureCursorPolicy m_cursor_policy;
 };
 
 #endif // CONDUIT_STREAMER_DXGI_CAPTURE_H

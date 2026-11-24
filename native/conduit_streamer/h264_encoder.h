@@ -9,6 +9,7 @@
 #include <wrl/client.h>
 #include <vector>
 #include <stdint.h>
+#include <map>
 
 using Microsoft::WRL::ComPtr;
 
@@ -17,6 +18,7 @@ struct EncodedPacket {
     bool is_keyframe;
     uint32_t frame_id;
     uint32_t timestamp_ms;
+    int cursor_in_frame = -1;
 };
 
 class H264Encoder {
@@ -31,10 +33,12 @@ public:
     void RequestKeyframe();
 
     // Encode a captured D3D11 texture into H.264 NALUs
-    bool EncodeFrame(ID3D11Texture2D* pTexture, uint32_t frame_id, std::vector<EncodedPacket>* out_packets);
+    bool EncodeFrame(ID3D11Texture2D* pTexture, uint32_t frame_id, std::vector<EncodedPacket>* out_packets,
+                     int cursor_in_frame = -1);
 
     uint32_t GetOutputWidth() const { return m_target_width; }
     uint32_t GetOutputHeight() const { return m_target_height; }
+    HRESULT GetLastError() const { return m_last_error; }
 
 private:
     bool SetupColorConverter();
@@ -49,6 +53,9 @@ private:
     bool m_force_keyframe;
     LONGLONG m_frame_duration;
     LONGLONG m_sample_time;
+    std::map<LONGLONG, int> m_input_cursor_modes;
+    HRESULT m_last_error = S_OK;
+    bool m_recovering_output = false;
 
     ComPtr<ID3D11Device> m_device;
     ComPtr<ID3D11DeviceContext> m_context;
