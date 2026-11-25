@@ -228,7 +228,16 @@ class ClipboardHandler:
         return "files" if file_available else "ordinary"
 
     def read_file_selection(self):
-        win32clipboard.OpenClipboard()
+        # Explorer/clipboard listeners can briefly own the clipboard. Retry
+        # source acquisition here instead of requiring another Ctrl+V.
+        for attempt in range(5):
+            try:
+                win32clipboard.OpenClipboard()
+                break
+            except Exception:
+                if attempt == 4:
+                    raise
+                time.sleep(0.02)
         try:
             if not win32clipboard.IsClipboardFormatAvailable(self._file_drop_format):
                 return ()
