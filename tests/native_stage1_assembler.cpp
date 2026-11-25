@@ -58,6 +58,25 @@ int main() {
     header.frame_id = 4; header.flags = 0; // old sender stays explicitly unknown
     cursor_assembler.IngestFragment(header, &data, 1);
     if (delivered_count != 3 || delivered_mode != -1) return 13;
+
+    // An out-of-order P-frame completing first must NOT erase an in-flight IDR keyframe.
+    std::vector<uint32_t> idr_order;
+    PacketAssembler idr_assembler;
+    idr_assembler.Initialize([&](AssembledFrame&& frame) {
+        idr_order.push_back(frame.frame_id);
+    }, [] {});
+    PacketHeader idr_hdr = {};
+    idr_hdr.frame_id = 10; idr_hdr.total_fragments = 2; idr_hdr.fragment_index = 0;
+    idr_hdr.flags = STREAMER_FLAG_KEYFRAME | conduit::CursorPolicyFlags(0);
+    idr_assembler.IngestFragment(idr_hdr, &data, 1);
+    PacketHeader p_hdr = {};
+    p_hdr.frame_id = 11; p_hdr.total_fragments = 1; p_hdr.fragment_index = 0;
+    p_hdr.flags = conduit::CursorPolicyFlags(0);
+    idr_assembler.IngestFragment(p_hdr, &data, 1);
+    idr_hdr.fragment_index = 1;
+    idr_assembler.IngestFragment(idr_hdr, &data, 1);
+    if (idr_order.size() != 2 || idr_order[0] != 11 || idr_order[1] != 10) return 14;
+
     std::puts("assembler callback, metadata consistency, and bounds passed");
     return 0;
 }

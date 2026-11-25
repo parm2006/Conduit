@@ -69,17 +69,15 @@ class RemoteCursorPolicyTests(unittest.TestCase):
     def test_unknown_display_starts_with_local_arrow(self):
         self.assert_cursors('arrow')
 
-    def test_native_policy_applies_to_both_widgets_and_does_not_reconfigure_each_tick(self):
+    def test_native_policy_keeps_server_cursor_visible_and_does_not_reconfigure_each_tick(self):
         self.receiver.is_native_active.return_value = True
-        for policy, expected in ((True, 'none'), (None, 'arrow'),
-                                 (True, 'none'), (False, 'arrow')):
+        for policy in (True, None, False):
             with self.subTest(policy=policy):
                 self.receiver.cursor_in_frame.return_value = policy
-                self.view._update()
-                self.assert_cursors(expected)
                 self.overlay.config.reset_mock()
                 self.canvas.config.reset_mock()
                 self.view._update()
+                self.assert_cursors('arrow')
                 self.overlay.config.assert_not_called()
                 self.canvas.config.assert_not_called()
 

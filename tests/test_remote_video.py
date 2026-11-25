@@ -160,3 +160,63 @@ class RemoteVideoTests(unittest.TestCase):
             video.decode_frame(dict(frame, width=64))
         with self.assertRaises(ValueError):
             video.decode_frame(dict(frame, jpeg='not base64'))
+
+    def test_native_ack_preserves_initial_startup_window_before_first_frame(self):
+        from unittest.mock import Mock, patch
+        import app.native_streamer as native_streamer
+        video = self.module()
+        receiver = self.receiver()
+        receiver.viewport = (2496, 1664)
+        receiver.viewport_hwnd = 12345
+        receiver.stream_port = 28906
+        receiver._native_receiver = None
+        receiver._native_active = False
+        receiver._native_stream_id = None
+        receiver._native_failed_selection = None
+        receiver._native_started_event = threading.Event()
+        receiver._native_started_success = False
+        receiver._selection_started_at = 10.0
+        receiver.last_frame_at = 0.0
+        receiver.server.control_network = SimpleNamespace(
+            send_message=lambda msg, session_id=None: (
+                receiver._on_stream_started({'stream_id': msg['stream_id'], 'success': True}),
+                True,
+            )[1]
+        )
+        fake_native = Mock()
+        fake_native.start.return_value = True
+        with patch.object(native_streamer, 'is_native_streaming_supported', return_value=True), \
+                patch.object(native_streamer, 'NativeStreamerReceiver', return_value=fake_native):
+            self.assertTrue(receiver._start_native(receiver.selection))
+        self.assertEqual(receiver.last_frame_at, 0.0)
+        self.assertTrue(receiver._native_active)
+
+    def test_stalled_gives_native_and_jpeg_fallback_separate_windows(self):
+        video = self.module()
+        receiver = self.receiver()
+        receiver.viewport_hwnd = 12345
+        receiver._native_failed_selection = None
+        receiver._selection_started_at = 10.0
+        receiver.started_at = 10.0
+        receiver.last_frame_at = 0.0
+        self.assertFalse(receiver.stalled(11.1))
+        self.assertFalse(receiver.stalled(14.0))
+        receiver._native_failed_selection = receiver.selection
+        receiver.started_at = 14.0
+        receiver.last_frame_at = 0.0
+        self.assertFalse(receiver.stalled(15.5))
+        self.assertTrue(receiver.stalled(14.0 + video.JPEG_INITIAL_FRAME_TIMEOUT))
+
+    def test_live_native_stream_does_not_stall_after_startup_window(self):
+        video = self.module()
+        receiver = self.receiver()
+        receiver.viewport_hwnd = 12345
+        receiver._native_failed_selection = None
+        receiver._selection_started_at = 10.0
+        receiver.started_at = 10.0
+        receiver.last_frame_at = 29.8
+        self.assertFalse(receiver.stalled(30.0))
+        self.assertFalse(receiver.stalled(33.2))
+        self.assertTrue(receiver.stalled(
+            29.8 + video.NATIVE_FRAME_TIMEOUT + video.JPEG_INITIAL_FRAME_TIMEOUT + 0.01
+        ))

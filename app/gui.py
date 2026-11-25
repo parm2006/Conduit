@@ -1,6 +1,7 @@
 import customtkinter as ctk
 import logging
 import socket
+import sys
 import threading
 from pathlib import Path
 from tkinter import messagebox
@@ -2262,7 +2263,7 @@ class ConduitGUI(ctk.CTk):
         self.destroy()
 
     def _init_overlay(self):
-        from app.input_geometry import windows_work_area, work_area_geometry
+        from app.input_geometry import set_physical_toplevel_rect, windows_work_area
 
         self.overlay = ctk.CTkToplevel(self)
         self.overlay.title("Conduit")
@@ -2278,8 +2279,8 @@ class ConduitGUI(ctk.CTk):
             # CTkToplevel schedules its own Windows icon at 200 ms.
             overlay.after(250, apply_overlay_icon)
         left, top, right, bottom = windows_work_area()
-        self.overlay.geometry(work_area_geometry((left, top, right, bottom)))
         self.overlay.overrideredirect(True)
+        set_physical_toplevel_rect(self.overlay, (left, top, right, bottom))
         self.overlay_center_x = (right - left) // 2
         self.overlay_center_y = (bottom - top) // 2
         self.overlay.attributes("-alpha", 0.01) # Almost invisible
@@ -2321,6 +2322,40 @@ class ConduitGUI(ctk.CTk):
             router.remote_viewport = self.server.remote_viewport
         view.set_primary(primary)
 
+    def _warp_remote_entry_cursor(self, canvas, entry_x, entry_y):
+        if not isinstance(canvas, tkinter.Misc) or sys.platform != "win32":
+            return None, None
+        try:
+            root_x = canvas.winfo_rootx()
+            root_y = canvas.winfo_rooty()
+        except Exception:
+            return None, None
+        view = self.__dict__.get("remote_view")
+        primary = getattr(view, "primary", None) if view is not None else None
+        if primary is not None and root_x == 0 and root_y == 0:
+            root_x, root_y = primary.left, primary.top
+        target_screen = (int(root_x + entry_x), int(root_y + entry_y))
+        observed_screen = None
+        input_handler = getattr(getattr(self, "server", None), "input_handler", None)
+        injector = getattr(input_handler, "inject_position", None)
+        if callable(injector):
+            try:
+                observed_screen = injector(*target_screen)
+            except Exception:
+                observed_screen = None
+        if observed_screen is None:
+            try:
+                import ctypes
+                from ctypes import wintypes
+
+                ctypes.windll.user32.SetCursorPos(*target_screen)
+                point = wintypes.POINT()
+                if ctypes.windll.user32.GetCursorPos(ctypes.byref(point)):
+                    observed_screen = (int(point.x), int(point.y))
+            except Exception:
+                observed_screen = None
+        return target_screen, observed_screen
+
     def show_overlay(self):
         from app.input_router import RemoteClient, Transitioning
         requested_router = getattr(self.server, 'input_router', None)
@@ -2343,7 +2378,15 @@ class ConduitGUI(ctk.CTk):
                     return
                 if not isinstance(state, RemoteClient):
                     return
+                if (self.__dict__.get('remote_view') is not None
+                        and self.__dict__.get('overlay_active', False)
+                        and '_remote_overlay_handoff' in self.__dict__
+                        and self.__dict__.get('_remote_overlay_handoff') == state.handoff_id):
+                    return
                 if self.overlay and self.overlay.winfo_exists():
+                    # Ignore mapping/focusing motion events until entry warp finishes.
+                    self._remote_overlay_handoff = None
+                    self._remote_overlay_ready = False
                     self.overlay_active = True
                     self.overlay.deiconify() # Show it
                     self.overlay.focus_force()
@@ -2353,24 +2396,72 @@ class ConduitGUI(ctk.CTk):
                     # Initial position
                     if self.__dict__.get('remote_view') is not None:
                         self.overlay.config(cursor=self.remote_view.viewer_cursor)
+                        canvas = self.remote_view.canvas
+                        primary = getattr(self.remote_view, 'primary', None)
+                        if primary is not None:
+                            try:
+                                from app.input_geometry import set_physical_toplevel_rect
+                                set_physical_toplevel_rect(
+                                    self.overlay,
+                                    (primary.left, primary.top, primary.right, primary.bottom),
+                                )
+                            except Exception:
+                                pass
+                        canvas.update_idletasks()
                         entry_x = self.overlay_center_x
                         entry_y = self.overlay_center_y
                         target_rect, proj, pos = self._get_remote_geometry_and_projection()
+                        expected_side = None
                         if target_rect is not None and proj is not None and pos is not None:
-                            dest_x, dest_y, fitted_w, fitted_h = proj
-                            client_w = max(1, target_rect.right - target_rect.left)
-                            client_h = max(1, target_rect.bottom - target_rect.top)
-                            ratio_x = max(0.0, min(1.0, (pos[0] - target_rect.left) / client_w))
-                            ratio_y = max(0.0, min(1.0, (pos[1] - target_rect.top) / client_h))
-                            entry_x = dest_x + round(ratio_x * fitted_w)
-                            entry_y = dest_y + round(ratio_y * fitted_h)
-                            entry_x = max(dest_x, min(dest_x + fitted_w - 1, entry_x))
-                            entry_y = max(dest_y, min(dest_y + fitted_h - 1, entry_y))
+                            from app.input_geometry import (
+                                expected_entry_side,
+                                project_safe_viewport_entry,
+                                viewport_point_matches_entry_side,
+                            )
+                            entry_x, entry_y = project_safe_viewport_entry(target_rect, proj, pos)
+                            expected_side = expected_entry_side(target_rect, pos)
 
                         self.last_x = entry_x
                         self.last_y = entry_y
-                        self.warp_count = 1
-                        self.overlay.event_generate('<Motion>', warp=True, x=entry_x, y=entry_y)
+                        self._remote_overlay_handoff = state.handoff_id
+                        self._warp_remote_entry_cursor(canvas, entry_x, entry_y)
+                        canvas.event_generate('<Motion>', warp=True, x=entry_x, y=entry_y, when='tail')
+
+                        entry_token = object()
+                        self._remote_overlay_entry = entry_token
+                        entry_event = f'<<ConduitRemoteEntryReady-{id(entry_token)}>>'
+
+                        def _entry_ready(event):
+                            canvas.unbind(entry_event, binding_id)
+                            current = getattr(router, 'state', None)
+                            if (self.overlay_active and self.server.input_router is router
+                                    and isinstance(current, RemoteClient)
+                                    and current.handoff_id == state.handoff_id
+                                    and self.__dict__.get('_remote_overlay_entry') is entry_token
+                                    and self.__dict__.get('_remote_overlay_handoff') == state.handoff_id):
+                                if isinstance(canvas, tkinter.Misc) and sys.platform == "win32":
+                                    try:
+                                        import ctypes
+                                        from ctypes import wintypes
+
+                                        point = wintypes.POINT()
+                                        if ctypes.windll.user32.GetCursorPos(ctypes.byref(point)):
+                                            rx = canvas.winfo_rootx()
+                                            ry = canvas.winfo_rooty()
+                                            if primary is not None and rx == 0 and ry == 0:
+                                                rx, ry = primary.left, primary.top
+                                            obs_vp = (int(point.x) - rx, int(point.y) - ry)
+                                            if (proj is not None and expected_side is not None
+                                                    and not viewport_point_matches_entry_side(proj, obs_vp, expected_side)):
+                                                self._warp_remote_entry_cursor(canvas, entry_x, entry_y)
+                                    except Exception:
+                                        pass
+                                self.last_x = entry_x
+                                self.last_y = entry_y
+                                self._remote_overlay_ready = True
+
+                        binding_id = canvas.bind(entry_event, _entry_ready)
+                        canvas.event_generate(entry_event, when='tail')
                     else:
                         self.last_x = self.overlay_center_x
                         self.last_y = self.overlay_center_y
@@ -2408,20 +2499,23 @@ class ConduitGUI(ctk.CTk):
         if target_rect is None:
             return None, None, None
 
-        w = max(1, self.overlay.winfo_width())
-        h = max(1, self.overlay.winfo_height())
-        client_w = max(1, target_rect.right - target_rect.left)
-        client_h = max(1, target_rect.bottom - target_rect.top)
-        scale = min(w / client_w, h / client_h)
-        fitted_w = max(1, round(client_w * scale))
-        fitted_h = max(1, round(client_h * scale))
-        dest_x = (w - fitted_w) // 2
-        dest_y = (h - fitted_h) // 2
-        proj = (dest_x, dest_y, fitted_w, fitted_h)
+        from app.input_geometry import fit_projection
+
+        view = self.__dict__.get('remote_view')
+        viewport = view.canvas if view is not None else self.overlay
+        raw_w = viewport.winfo_width()
+        raw_h = viewport.winfo_height()
+        if (raw_w <= 1 or raw_h <= 1) and view is not None and getattr(view, 'viewport', None):
+            w, h = max(1, view.viewport[0]), max(1, view.viewport[1])
+        else:
+            w, h = max(1, raw_w), max(1, raw_h)
+        proj = fit_projection((w, h), target_rect)
 
         return target_rect, proj, pos
 
     def hide_overlay(self):
+        self._remote_overlay_handoff = None
+        self._remote_overlay_ready = False
         def _hide():
             try:
                 if self.overlay and self.overlay.winfo_exists():
@@ -2437,30 +2531,28 @@ class ConduitGUI(ctk.CTk):
 
     def on_overlay_motion(self, event):
         if self.__dict__.get('remote_view') is not None:
-            if self.warp_count > 0:
-                self.warp_count -= 1
-                self.last_x = event.x
-                self.last_y = event.y
+            from app.input_router import RemoteClient
+            state = getattr(getattr(self.server, 'input_router', None), 'state', None)
+            if (not self.overlay_active or not self.__dict__.get('_remote_overlay_ready', False)
+                    or not isinstance(state, RemoteClient)
+                    or self.__dict__.get('_remote_overlay_handoff') != state.handoff_id):
                 return
 
-            dx = event.x - self.last_x
-            dy = event.y - self.last_y
-            self.last_x = event.x
-            self.last_y = event.y
+            canvas = self.remote_view.canvas
+            if hasattr(event, 'x_root') and hasattr(event, 'y_root'):
+                x = event.x_root - canvas.winfo_rootx()
+                y = event.y_root - canvas.winfo_rooty()
+            else:
+                x, y = event.x, event.y
+            dx, dy = x - self.last_x, y - self.last_y
+            self.last_x, self.last_y = x, y
+            if dx == 0 and dy == 0:
+                return
 
             target_rect, proj, _ = self._get_remote_geometry_and_projection()
             if target_rect is not None and proj is not None:
-                dest_x, dest_y, fitted_w, fitted_h = proj
-                client_w = max(1, target_rect.right - target_rect.left)
-                client_h = max(1, target_rect.bottom - target_rect.top)
-
-                norm_x = (event.x - dest_x) / fitted_w
-                norm_y = (event.y - dest_y) / fitted_h
-                client_x = target_rect.left + round(norm_x * client_w)
-                client_y = target_rect.top + round(norm_y * client_h)
-                client_x = max(target_rect.left, min(target_rect.right - 1, client_x))
-                client_y = max(target_rect.top, min(target_rect.bottom - 1, client_y))
-
+                from app.input_geometry import project_viewport_to_client
+                client_x, client_y = project_viewport_to_client(target_rect, proj, x, y)
                 if self.server:
                     self.server.on_mouse_position(client_x, client_y)
             elif dx != 0 or dy != 0:

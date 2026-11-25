@@ -86,7 +86,9 @@ static void TestKeyframeSupersedes() {
 
 static void TestOverflowAndAgeAndStale() {
     {
-        FrameQueue q;
+        PipelineConfig c;
+        c.max_queue_depth = 3;
+        FrameQueue q(c);
         q.Push(mk(1, true, 0), 0); q.Push(mk(2, false, 0), 0); q.Push(mk(3, false, 0), 0);
         CHECK(q.Push(mk(4, false, 0), 0));  // depth 3 exceeded
         CHECK(q.Size() == 0 && q.AwaitingKeyframe());
@@ -104,6 +106,17 @@ static void TestOverflowAndAgeAndStale() {
         q.Push(mk(5, true, 0), 0);
         CHECK(!q.Push(mk(3, false, 0), 0));
         CHECK(q.GetStats().dropped_stale == 1 && q.Size() == 1);
+    }
+    {
+        // A late-completing IDR keyframe must still be accepted even if a smaller
+        // P-frame with a higher frame_id was dropped while awaiting_key_ == true.
+        FrameQueue q;
+        EncodedFrame f;
+        CHECK(q.Push(mk(11, false, 0), 0));
+        CHECK(q.AwaitingKeyframe());
+        CHECK(!q.Push(mk(10, true, 1000), 1000));
+        CHECK(!q.AwaitingKeyframe());
+        CHECK(q.TryPop(&f, 1000) && f.frame_id == 10 && f.keyframe);
     }
 }
 

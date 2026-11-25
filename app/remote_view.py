@@ -6,6 +6,7 @@ import tkinter as tk
 from PIL import ImageTk
 
 from app.error_codes import REMOTE_VIDEO_UNAVAILABLE
+from app.input_geometry import set_physical_toplevel_rect
 from app.input_router import RemoteClient, Transitioning
 from app.remote_video import ServerVideoReceiver
 from app.remote_map import map_bounds, cursor_near_map, render_map
@@ -60,11 +61,10 @@ class RemoteView:
         if receiver is not None:
             receiver.viewport = self.viewport
             receiver.resize(*self.viewport)
-        import win32con
-        import win32gui
-        hwnd = win32gui.GetAncestor(self.gui.overlay.winfo_id(), win32con.GA_ROOT)
-        win32gui.SetWindowPos(hwnd, win32con.HWND_TOPMOST, primary.left, primary.top,
-                             *self.viewport, win32con.SWP_NOACTIVATE)
+        set_physical_toplevel_rect(
+            self.gui.overlay,
+            (primary.left, primary.top, primary.right, primary.bottom),
+        )
         self.gui.overlay_center_x, self.gui.overlay_center_y = self.viewport[0] // 2, self.viewport[1] // 2
 
     def close(self):
@@ -99,7 +99,6 @@ class RemoteView:
             'Status: Remote video unavailable. Returned to Server display.',
             'orange',
             error_code=REMOTE_VIDEO_UNAVAILABLE,
-            client_name=getattr(getattr(self, "client", None), "windows_name", None),
             client_specific=True,
         )
         threading.Thread(target=self.server._return_cursor_to_server,
@@ -123,11 +122,12 @@ class RemoteView:
                 self._photo = None
                 self._cursor = None
                 self._set_viewer_cursor('arrow')
-            if not self.gui.overlay_active:
+            if (not self.gui.overlay_active
+                    or self.gui.__dict__.get('_remote_overlay_handoff') != remote.handoff_id):
                 self.gui.show_overlay()
             if self.receiver.is_native_active():
-                self._set_viewer_cursor(
-                    'none' if self.receiver.cursor_in_frame() is True else 'arrow')
+                # Always keep the zero-latency Server OS cursor visible in native mode.
+                self._set_viewer_cursor('arrow')
             else:
                 frame = self.receiver.take_frame()
                 if frame is not None and frame[0] == remote:

@@ -283,6 +283,66 @@ class InputGeometryTests(unittest.TestCase):
         self.assertIsNotNone(Api.SetWindowPos.argtypes)
         self.assertIsNotNone(Api.SetWindowPos.restype)
 
+    def test_fit_projection_and_safe_entry_across_mixed_scales_and_edges(self):
+        from app.display_topology import EDGE_HIT_TOLERANCE, edge_entry_point
+        from app.input_geometry import (
+            expected_entry_side,
+            fit_projection,
+            project_safe_viewport_entry,
+            project_viewport_to_client,
+            viewport_point_matches_entry_side,
+        )
+
+        surface = NativeRect(0, 0, 2496, 1664)
+        pc = NativeRect(0, 0, 1920, 1080)
+        for server_rect, client_rect in ((surface, pc), (pc, surface)):
+            proj = fit_projection(
+                (server_rect.right - server_rect.left, server_rect.bottom - server_rect.top),
+                client_rect,
+            )
+            for side in ("left", "right", "top", "bottom"):
+                client_pos = edge_entry_point(client_rect, side, 0.45)
+                vp_entry = project_safe_viewport_entry(client_rect, proj, client_pos)
+                self.assertTrue(
+                    viewport_point_matches_entry_side(proj, vp_entry, expected_entry_side(client_rect, client_pos))
+                )
+                mapped_client = project_viewport_to_client(client_rect, proj, *vp_entry)
+                if side == "left":
+                    self.assertGreater(mapped_client[0] - client_rect.left, EDGE_HIT_TOLERANCE)
+                elif side == "right":
+                    self.assertGreater((client_rect.right - 1) - mapped_client[0], EDGE_HIT_TOLERANCE)
+                elif side == "top":
+                    self.assertGreater(mapped_client[1] - client_rect.top, EDGE_HIT_TOLERANCE)
+                else:
+                    self.assertGreater((client_rect.bottom - 1) - mapped_client[1], EDGE_HIT_TOLERANCE)
+
+    def test_set_physical_toplevel_rect_bypasses_ctk_dpi_scaling(self):
+        import tkinter as tk
+        from app.input_geometry import set_physical_toplevel_rect
+
+        calls = []
+
+        class FakeTop(tk.Misc):
+            def winfo_id(self):
+                return 77
+
+            def update_idletasks(self):
+                calls.append("update_idletasks")
+
+        fake = object.__new__(FakeTop)
+        with patch("tkinter.Toplevel.wm_geometry", side_effect=lambda win, g: calls.append(("wm_geometry", g))), \
+                patch("win32gui.GetAncestor", return_value=88), \
+                patch("win32gui.SetWindowPos", side_effect=lambda hwnd, z, x, y, w, h, f: calls.append(("SetWindowPos", hwnd, x, y, w, h))):
+            set_physical_toplevel_rect(fake, (0, 0, 2496, 1664))
+        self.assertEqual(
+            calls,
+            [
+                ("wm_geometry", "2496x1664+0+0"),
+                ("SetWindowPos", 88, 0, 0, 2496, 1664),
+                "update_idletasks",
+            ],
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

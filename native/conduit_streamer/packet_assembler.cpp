@@ -30,6 +30,7 @@ void PacketAssembler::Reset() {
     m_pending_frames.clear();
     m_pending_bytes = 0;
     m_latest_completed_frame = 0;
+    m_latest_completed_keyframe = 0;
 }
 
 void PacketAssembler::IngestFragment(const PacketHeader& header, const uint8_t* payload, size_t payload_len) {
@@ -38,8 +39,15 @@ void PacketAssembler::IngestFragment(const PacketHeader& header, const uint8_t* 
     constexpr size_t max_fragments = (max_bytes + STREAMER_MAX_PAYLOAD_SIZE - 1) / STREAMER_MAX_PAYLOAD_SIZE;
     if (!payload || !payload_len || payload_len > STREAMER_MAX_PAYLOAD_SIZE || !header.total_fragments ||
         header.total_fragments > max_fragments || header.fragment_index >= header.total_fragments) return;
+    const bool keyframe = (header.flags & STREAMER_FLAG_KEYFRAME) != 0;
     std::unique_lock<std::mutex> lock(m_mutex);
-    if (m_latest_completed_frame && static_cast<int32_t>(header.frame_id - m_latest_completed_frame) <= 0) return;
+    if (m_latest_completed_frame && static_cast<int32_t>(header.frame_id - m_latest_completed_frame) <= 0) {
+        // Allow an in-flight IDR keyframe to finish even if a smaller P-frame completed first.
+        if (!keyframe || (m_latest_completed_keyframe &&
+                          static_cast<int32_t>(header.frame_id - m_latest_completed_keyframe) <= 0)) {
+            return;
+        }
+    }
     bool request_keyframe = false;
     auto notify = [&] {
         auto callback = m_on_keyframe_needed;
@@ -55,7 +63,6 @@ void PacketAssembler::IngestFragment(const PacketHeader& header, const uint8_t* 
         }
     }
     auto& pending = m_pending_frames[header.frame_id];
-    const bool keyframe = (header.flags & STREAMER_FLAG_KEYFRAME) != 0;
     const uint8_t cursor_flags = header.flags & (STREAMER_FLAG_CURSOR_KNOWN | STREAMER_FLAG_CURSOR_IN_FRAME);
     if (pending.fragments.empty()) {
         pending.frame_id = header.frame_id; pending.timestamp_ms = header.timestamp_ms;
@@ -84,10 +91,22 @@ void PacketAssembler::IngestFragment(const PacketHeader& header, const uint8_t* 
     frame.is_keyframe = pending.is_keyframe; frame.first_rx_us = pending.first_rx_us;
     frame.cursor_in_frame = conduit::CursorPolicyFromFlags(pending.cursor_flags);
     frame.complete_us = conduit::QpcNowUs();
-    m_latest_completed_frame = frame.frame_id;
+    if (frame.is_keyframe &&
+        (!m_latest_completed_keyframe || static_cast<int32_t>(frame.frame_id - m_latest_completed_keyframe) > 0)) {
+        m_latest_completed_keyframe = frame.frame_id;
+    }
+    if (!m_latest_completed_frame || static_cast<int32_t>(frame.frame_id - m_latest_completed_frame) > 0) {
+        m_latest_completed_frame = frame.frame_id;
+    }
+    auto completed_it = m_pending_frames.find(frame.frame_id);
+    if (completed_it != m_pending_frames.end()) {
+        m_pending_bytes -= completed_it->second.bytes;
+        m_pending_frames.erase(completed_it);
+    }
     auto it = m_pending_frames.begin();
     while (it != m_pending_frames.end()) {
-        if (static_cast<int32_t>(it->first - frame.frame_id) <= 0) {
+        if (static_cast<int32_t>(it->first - frame.frame_id) < 0 &&
+            (frame.is_keyframe || !it->second.is_keyframe)) {
             m_pending_bytes -= it->second.bytes; it = m_pending_frames.erase(it);
         } else ++it;
     }

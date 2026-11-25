@@ -27,9 +27,9 @@ struct EncodedFrame {
     int cursor_in_frame = -1;
 };
 struct PipelineConfig {
-    size_t max_queue_depth = 3;
+    size_t max_queue_depth = 8;
     size_t max_queue_bytes = 16 * 1024 * 1024;
-    uint64_t max_queue_age_us = 100000;
+    uint64_t max_queue_age_us = 250000;
     uint64_t keyframe_request_interval_us = 250000;
     uint64_t max_present_gap_us = 33000;
     // Zero disables this heuristic: NeedMoreInput is normal decoder backpressure.
@@ -61,13 +61,6 @@ public:
     bool Push(EncodedFrame&& f, uint64_t now_us) {
         std::lock_guard<std::mutex> lock(m_);
         ++stats_.pushed;
-        bool gap = false;
-        if (have_last_) {
-            const uint32_t delta = f.frame_id - last_id_;
-            if (!delta || delta > 0x7fffffffU) { ++stats_.dropped_stale; return false; }
-            gap = delta != 1;
-        }
-        have_last_ = true; last_id_ = f.frame_id;
         if (f.data.empty() || f.data.size() > cfg_.max_queue_bytes) {
             Flush(stats_.dropped_overflow); ++stats_.dropped_overflow;
             awaiting_key_ = true; return WantKey(now_us);
@@ -77,9 +70,16 @@ public:
             awaiting_key_ = true; return WantKey(now_us);
         }
         if (f.keyframe) {
+            have_last_ = true; last_id_ = f.frame_id;
             Flush(stats_.dropped_superseded);
             awaiting_key_ = false; bytes_ = f.data.size();
             q_.push_back(std::move(f)); return false;
+        }
+        bool gap = false;
+        if (have_last_) {
+            const uint32_t delta = f.frame_id - last_id_;
+            if (!delta || delta > 0x7fffffffU) { ++stats_.dropped_stale; return false; }
+            gap = delta != 1;
         }
         if (gap) {
             ++stats_.gaps;
@@ -94,6 +94,7 @@ public:
             Flush(stats_.dropped_overflow); ++stats_.dropped_overflow;
             awaiting_key_ = true; return WantKey(now_us);
         }
+        have_last_ = true; last_id_ = f.frame_id;
         bytes_ += f.data.size(); q_.push_back(std::move(f)); return false;
     }
     bool TryPop(EncodedFrame* out, uint64_t now_us = QpcNowUs()) {

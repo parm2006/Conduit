@@ -50,6 +50,7 @@ private:
 
     size_t m_pending_bytes = 0;
     uint32_t m_latest_completed_frame;
+    uint32_t m_latest_completed_keyframe = 0;
     std::map<uint32_t, PendingFrame> m_pending_frames;
 };
 

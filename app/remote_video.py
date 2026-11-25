@@ -8,6 +8,7 @@ import binascii
 from io import BytesIO
 import logging
 import secrets
+import socket
 import threading
 import time
 import uuid
@@ -27,6 +28,10 @@ MAX_DIMENSION = 8192
 MAX_PIXELS = 34_000_000
 MAX_JPEG_BYTES = 12 * 1024 * 1024
 FRAME_TIMEOUT = 1.0
+JPEG_INITIAL_FRAME_TIMEOUT = 2.5
+NATIVE_INITIAL_FRAME_TIMEOUT = 4.0
+NATIVE_FRAME_TIMEOUT = 3.5
+MAX_CONSECUTIVE_JPEG_FAILURES = 2
 FRAME_INTERVAL = 1 / 20
 
 
@@ -176,6 +181,8 @@ class ServerVideoReceiver:
         self.selection = None
         self.last_frame_at = 0.0
         self.started_at = 0.0
+        self._selection_started_at = 0.0
+        self._jpeg_failures = 0
         self.failed_selection = None
 
         # Native streaming state
@@ -267,7 +274,8 @@ class ServerVideoReceiver:
 
             def on_native_event(code, msg):
                 if code == STREAMER_EVENT_FIRST_FRAME:
-                    self.last_frame_at = time.monotonic()
+                    with self._lock:
+                        self.last_frame_at = time.monotonic()
                     self._native_active = True
                 elif code == STREAMER_EVENT_NEED_KEYFRAME:
                     try:
@@ -280,8 +288,12 @@ class ServerVideoReceiver:
                         pass
                 elif code == STREAMER_EVENT_ERROR:
                     logger.warning("Native receiver error (%s), falling back to GDI/JPEG", msg)
-                    self._native_failed_selection = selection
-                    self._native_active = False
+                    with self._lock:
+                        self._native_failed_selection = selection
+                        self._native_active = False
+                        self.started_at = time.monotonic()
+                        self.last_frame_at = 0.0
+                        self._jpeg_failures = 0
 
             self._native_receiver = NativeStreamerReceiver(self.viewport_hwnd, on_event=on_native_event)
             started = self._native_receiver.start(self.stream_port, stream_key)
@@ -304,10 +316,13 @@ class ServerVideoReceiver:
                 self._stop_native()
                 return False
 
-            # Wait up to 500ms for client's stream_started acknowledgment
+            # Wait up to 500ms for client's stream_started acknowledgment.
+            # Do not set last_frame_at until an actual native frame arrives.
             if self._native_started_event.wait(0.5) and self._native_started_success:
+                with self._lock:
+                    self.started_at = time.monotonic()
+                    self.last_frame_at = 0.0
                 self._native_active = True
-                self.last_frame_at = time.monotonic()
                 logger.info("Native hardware video streaming active for %s", selection.display_id)
                 return True
             else:
@@ -384,10 +399,24 @@ class ServerVideoReceiver:
         selection = self.current_selection()
         if selection is None or selection != self.selection:
             return False
-        elapsed = now - self.last_frame_at if self.last_frame_at > 0.0 else now - self.started_at
-        timeout = FRAME_TIMEOUT if self.last_frame_at > 0.0 else 2.5
         if selection == self.failed_selection:
             return True
+        with self._lock:
+            last_frame_at = self.last_frame_at
+            started_at = self.started_at
+            selection_started_at = getattr(self, '_selection_started_at', started_at)
+            viewport_hwnd = getattr(self, 'viewport_hwnd', None)
+            native_failed = getattr(self, '_native_failed_selection', None)
+        if viewport_hwnd is not None and selection != native_failed:
+            if last_frame_at > 0.0:
+                elapsed = now - last_frame_at
+                timeout = NATIVE_FRAME_TIMEOUT + JPEG_INITIAL_FRAME_TIMEOUT
+            else:
+                elapsed = now - selection_started_at
+                timeout = NATIVE_INITIAL_FRAME_TIMEOUT + JPEG_INITIAL_FRAME_TIMEOUT
+        else:
+            elapsed = now - last_frame_at if last_frame_at > 0.0 else now - started_at
+            timeout = FRAME_TIMEOUT if last_frame_at > 0.0 else JPEG_INITIAL_FRAME_TIMEOUT
         return elapsed >= timeout
 
     def _run(self):
@@ -413,11 +442,14 @@ class ServerVideoReceiver:
             if selection != self.selection:
                 if self.selection is not None:
                     self._stop_native(self.selection.session_id)
-                self.selection = selection
-                self.started_at = time.monotonic()
-                self.last_frame_at = 0.0
-                self._last_polled_frame_count = 0
+                now = time.monotonic()
                 with self._lock:
+                    self.selection = selection
+                    self._selection_started_at = now
+                    self.started_at = now
+                    self.last_frame_at = 0.0
+                    self._jpeg_failures = 0
+                    self._last_polled_frame_count = 0
                     self._latest = self._incoming = self._expected = None
 
             if selection is None or selection == self.failed_selection:
@@ -430,9 +462,14 @@ class ServerVideoReceiver:
                     and selection != self._native_failed_selection
                     and not self._native_active):
                 if self._start_native(selection):
-                    self.started_at = time.monotonic()
+                    with self._lock:
+                        self.started_at = time.monotonic()
                 else:
-                    self._native_failed_selection = selection
+                    with self._lock:
+                        self._native_failed_selection = selection
+                        self.started_at = time.monotonic()
+                        self.last_frame_at = 0.0
+                        self._jpeg_failures = 0
 
             # While native streaming is active, monitor its liveness without pulling JPEG frames
             if self._native_active:
@@ -450,18 +487,24 @@ class ServerVideoReceiver:
                         current_count = receiver.get_frame_count()
                         if current_count > last_native_count:
                             last_native_count = current_count
-                            self.last_frame_at = time.monotonic()
+                            with self._lock:
+                                self.last_frame_at = time.monotonic()
 
-                    elapsed = (time.monotonic() - self.last_frame_at
-                               if self.last_frame_at > 0.0
-                               else time.monotonic() - self.started_at)
-                    timeout = FRAME_TIMEOUT if self.last_frame_at > 0.0 else 2.5
+                    with self._lock:
+                        last_frame_at = self.last_frame_at
+                        started_at = self.started_at
+                    elapsed = (time.monotonic() - last_frame_at
+                               if last_frame_at > 0.0
+                               else time.monotonic() - started_at)
+                    timeout = NATIVE_FRAME_TIMEOUT if last_frame_at > 0.0 else NATIVE_INITIAL_FRAME_TIMEOUT
                     if elapsed >= timeout:
                         logger.warning("Native stream stalled, falling back to GDI/JPEG")
+                        with self._lock:
+                            self._native_failed_selection = selection
+                            self.started_at = time.monotonic()
+                            self.last_frame_at = 0.0
+                            self._jpeg_failures = 0
                         self._stop_native()
-                        self._native_failed_selection = selection
-                        self.started_at = time.monotonic()
-                        self.last_frame_at = 0.0
                         break
                     self._stop.wait(0.02)
                 if self._stop.is_set() or self.current_selection() != selection:
@@ -503,8 +546,12 @@ class ServerVideoReceiver:
                     with self._lock:
                         self._latest = (selection, image, (x, y), frame.get('cursor'))
                         self.last_frame_at = time.monotonic()
+                        self._jpeg_failures = 0
             except Exception as error:
-                logger.warning('Remote video unavailable (%s)', type(error).__name__)
-                self.failed_selection = selection
+                self._jpeg_failures += 1
+                logger.warning('Remote video unavailable (%s, attempt=%d/%d)',
+                               type(error).__name__, self._jpeg_failures, MAX_CONSECUTIVE_JPEG_FAILURES)
+                if self._jpeg_failures >= MAX_CONSECUTIVE_JPEG_FAILURES:
+                    self.failed_selection = selection
             self._stop.wait(max(0, FRAME_INTERVAL - (time.monotonic() - started)))
 

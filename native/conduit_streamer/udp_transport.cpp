@@ -140,8 +140,6 @@ UdpReceiver::UdpReceiver()
     : m_socket(INVALID_SOCKET)
     , m_listen_port(0)
     , m_running(false)
-    , m_max_sequence(0)
-    , m_replay_window(0)
 {
 }
 
@@ -157,8 +155,7 @@ void UdpReceiver::Cleanup() {
     }
     m_crypto.Cleanup();
     m_assembler.Reset();
-    m_max_sequence = 0;
-    m_replay_window = 0;
+    m_replay.Reset();
 }
 
 bool UdpReceiver::Initialize(int listen_port, const uint8_t* key, size_t key_len,
@@ -179,8 +176,7 @@ bool UdpReceiver::Initialize(int listen_port, const uint8_t* key, size_t key_len
 
     m_assembler.Initialize(std::move(on_frame), std::move(on_keyframe_needed));
     m_listen_port = listen_port;
-    m_max_sequence = 0;
-    m_replay_window = 0;
+    m_replay.Reset();
 
     m_socket = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
     if (m_socket == INVALID_SOCKET) {
@@ -278,24 +274,10 @@ void UdpReceiver::ReceiveLoop() {
         }
         ++m_authenticated;
 
-        // Replay protection: 64-packet sliding window bitmask
-        if (header.sequence_number > m_max_sequence) {
-            uint32_t diff = header.sequence_number - m_max_sequence;
-            if (diff < 64) {
-                m_replay_window <<= diff;
-            } else {
-                m_replay_window = 0;
-            }
-            m_replay_window |= 1ULL;
-            m_max_sequence = header.sequence_number;
-        } else {
-            uint32_t diff = m_max_sequence - header.sequence_number;
-            if (diff >= 64 || (m_replay_window & (1ULL << diff)) != 0) {
-                // Duplicate or replayed packet - discard
-                ++m_replay_rejected;
-                continue;
-            }
-            m_replay_window |= (1ULL << diff);
+        // Replay protection: 256-packet sliding window bitmask
+        if (!m_replay.Accept(header.sequence_number)) {
+            ++m_replay_rejected;
+            continue;
         }
 
         // Ingest validated fragment into reassembler

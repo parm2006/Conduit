@@ -211,8 +211,9 @@ class NativeStreamIntegrationTests(unittest.TestCase):
 
             self.assertTrue(receiver.is_native_active())
 
-            # Simulate silence / stall (last frame was 1.5 seconds ago)
-            receiver.last_frame_at = time.monotonic() - 1.5
+            # Simulate silence / stall beyond the native frame timeout
+            from app.remote_video import NATIVE_FRAME_TIMEOUT
+            receiver.last_frame_at = time.monotonic() - (NATIVE_FRAME_TIMEOUT + 0.5)
 
             # Wait for receiver loop to detect stall and fall back
             deadline = time.monotonic() + 1.0

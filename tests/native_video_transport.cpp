@@ -24,6 +24,8 @@ struct Socket {
     Socket(const Socket&) = delete;
     Socket& operator=(const Socket&) = delete;
     int BindLoopback() {
+        int rcvbuf = 2 * 1024 * 1024;
+        setsockopt(handle, SOL_SOCKET, SO_RCVBUF, reinterpret_cast<const char*>(&rcvbuf), sizeof(rcvbuf));
         sockaddr_in address = {};
         address.sin_family = AF_INET;
         address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
@@ -127,6 +129,16 @@ static EncodedPacket Frame(uint32_t id, int cursor) {
     return frame;
 }
 
+static EncodedPacket LargeIdrFrame(uint32_t id, size_t fragments) {
+    EncodedPacket frame = {};
+    frame.frame_id = id; frame.timestamp_ms = id * 33; frame.is_keyframe = true;
+    frame.cursor_in_frame = 0;
+    frame.data.resize(fragments * STREAMER_MAX_PAYLOAD_SIZE);
+    for (size_t index = 0; index < frame.data.size(); ++index)
+        frame.data[index] = static_cast<uint8_t>((index * 13 + id * 7) & 255);
+    return frame;
+}
+
 static void Roundtrip() {
     Transport transport;
     size_t count = 0;
@@ -136,6 +148,13 @@ static void Roundtrip() {
         Check(transport.observed.WaitFor(count), "fragmented frame did not arrive");
         transport.observed.Expect(count, frame);
     }
+    // Exercise >64-fragment reordered IDR frame (256-packet sliding replay window).
+    const auto large_idr = LargeIdrFrame(static_cast<uint32_t>(++count), 100);
+    transport.ForwardReversed(transport.Capture(large_idr));
+    Check(transport.observed.WaitFor(count, 2000), "large reordered IDR frame did not arrive");
+    transport.observed.Expect(count, large_idr);
+    Check(transport.receiver.GetStats().find("replay_rejected=0") != std::string::npos,
+          "large reordered IDR triggered false replay rejection");
     std::puts("roundtrip: reordered fragmented payloads and cursor modes -1/0/1 passed");
 }
 

@@ -83,8 +83,42 @@ HRESULT H264Decoder::SetupDecoder() {
     hr = m_decoder->SetInputType(0, inType.Get(), 0);
     if (FAILED(hr)) return hr;
 
-    // Query and select available output type (NV12)
-    bool outputSet = false;
+    // Query and select available output type (prefer NV12 for D3D11 VideoProcessor)
+    hr = SelectOutputType();
+    if (FAILED(hr)) {
+        printf("[DECODER] SelectOutputType failed in SetupDecoder: 0x%08X\n", hr);
+        fflush(stdout);
+        return hr;
+    }
+
+    m_decoder->ProcessMessage(MFT_MESSAGE_NOTIFY_BEGIN_STREAMING, 0);
+    m_decoder->ProcessMessage(MFT_MESSAGE_NOTIFY_START_OF_STREAM, 0);
+
+    return S_OK;
+}
+
+void H264Decoder::UpdateOutputDimensions(IMFMediaType* mediaType) {
+    if (!mediaType) return;
+    MFVideoArea aperture = {};
+    UINT32 blobSize = 0;
+    if (SUCCEEDED(mediaType->GetBlob(MF_MT_MINIMUM_DISPLAY_APERTURE, reinterpret_cast<UINT8*>(&aperture), sizeof(aperture), &blobSize))
+        && blobSize == sizeof(aperture)
+        && aperture.Area.cx > 0 && aperture.Area.cy > 0) {
+        m_width = static_cast<uint32_t>(aperture.Area.cx);
+        m_height = static_cast<uint32_t>(aperture.Area.cy);
+        return;
+    }
+    UINT32 w = 0, h = 0;
+    if (SUCCEEDED(MFGetAttributeSize(mediaType, MF_MT_FRAME_SIZE, &w, &h)) && w > 0 && h > 0) {
+        m_width = w;
+        m_height = h;
+    }
+}
+
+HRESULT H264Decoder::SelectOutputType() {
+    if (!m_decoder) return E_POINTER;
+
+    HRESULT lastHr = MF_E_INVALIDMEDIATYPE;
     for (DWORD i = 0; ; ++i) {
         ComPtr<IMFMediaType> availType;
         HRESULT availHr = m_decoder->GetOutputAvailableType(0, i, &availType);
@@ -93,29 +127,26 @@ HRESULT H264Decoder::SetupDecoder() {
         GUID subtype = {};
         availType->GetGUID(MF_MT_SUBTYPE, &subtype);
         if (subtype == MFVideoFormat_NV12) {
-            hr = m_decoder->SetOutputType(0, availType.Get(), 0);
-            if (SUCCEEDED(hr)) {
-                outputSet = true;
-                break;
+            HRESULT setHr = m_decoder->SetOutputType(0, availType.Get(), 0);
+            if (SUCCEEDED(setHr)) {
+                UpdateOutputDimensions(availType.Get());
+                return S_OK;
             }
+            lastHr = setHr;
         }
     }
 
-    if (!outputSet) {
-        // Fallback: use first available output type
-        ComPtr<IMFMediaType> firstType;
-        if (SUCCEEDED(m_decoder->GetOutputAvailableType(0, 0, &firstType))) {
-            hr = m_decoder->SetOutputType(0, firstType.Get(), 0);
-            if (SUCCEEDED(hr)) outputSet = true;
+    ComPtr<IMFMediaType> firstType;
+    HRESULT firstHr = m_decoder->GetOutputAvailableType(0, 0, &firstType);
+    if (SUCCEEDED(firstHr)) {
+        HRESULT setHr = m_decoder->SetOutputType(0, firstType.Get(), 0);
+        if (SUCCEEDED(setHr)) {
+            UpdateOutputDimensions(firstType.Get());
+            return S_OK;
         }
+        return setHr;
     }
-
-    if (!outputSet) return MF_E_INVALIDMEDIATYPE;
-
-    m_decoder->ProcessMessage(MFT_MESSAGE_NOTIFY_BEGIN_STREAMING, 0);
-    m_decoder->ProcessMessage(MFT_MESSAGE_NOTIFY_START_OF_STREAM, 0);
-
-    return S_OK;
+    return FAILED(lastHr) ? lastHr : firstHr;
 }
 
 bool H264Decoder::DecodeFrame(const uint8_t* data, size_t size, ComPtr<ID3D11Texture2D>* out_texture,
@@ -153,42 +184,45 @@ bool H264Decoder::DecodeFrame(const uint8_t* data, size_t size, ComPtr<ID3D11Tex
     if (FAILED(hr)) { if (out_status) *out_status = hr; return false; }
 
     // 2. Drain decoded output
-    MFT_OUTPUT_DATA_BUFFER outputData = {};
-    outputData.dwStreamID = 0;
-
-    MFT_OUTPUT_STREAM_INFO streamInfo = {};
-    m_decoder->GetOutputStreamInfo(0, &streamInfo);
-
-    // If decoder does not provide its own samples, allocate one
-    ComPtr<IMFSample> outSample;
-    ComPtr<IMFMediaBuffer> outBuffer;
-    if ((streamInfo.dwFlags & (MFT_OUTPUT_STREAM_PROVIDES_SAMPLES | MFT_OUTPUT_STREAM_CAN_PROVIDE_SAMPLES)) == 0) {
-        hr = MFCreateSample(&outSample);
-        if (SUCCEEDED(hr)) {
-            hr = MFCreateMemoryBuffer(streamInfo.cbSize > 0 ? streamInfo.cbSize : m_width * m_height * 2, &outBuffer);
-            if (SUCCEEDED(hr)) {
-                outSample->AddBuffer(outBuffer.Get());
-                outputData.pSample = outSample.Get();
+    auto prepare_output_buffer = [&](MFT_OUTPUT_DATA_BUFFER& outData, ComPtr<IMFSample>& sampleHolder, ComPtr<IMFMediaBuffer>& bufHolder) {
+        outData = {};
+        outData.dwStreamID = 0;
+        sampleHolder.Reset();
+        bufHolder.Reset();
+        MFT_OUTPUT_STREAM_INFO streamInfo = {};
+        m_decoder->GetOutputStreamInfo(0, &streamInfo);
+        if ((streamInfo.dwFlags & (MFT_OUTPUT_STREAM_PROVIDES_SAMPLES | MFT_OUTPUT_STREAM_CAN_PROVIDE_SAMPLES)) == 0) {
+            HRESULT allocHr = MFCreateSample(&sampleHolder);
+            if (SUCCEEDED(allocHr)) {
+                allocHr = MFCreateMemoryBuffer(streamInfo.cbSize > 0 ? streamInfo.cbSize : m_width * m_height * 2, &bufHolder);
+                if (SUCCEEDED(allocHr)) {
+                    sampleHolder->AddBuffer(bufHolder.Get());
+                    outData.pSample = sampleHolder.Get();
+                }
             }
         }
-    }
+    };
+
+    MFT_OUTPUT_DATA_BUFFER outputData = {};
+    ComPtr<IMFSample> outSample;
+    ComPtr<IMFMediaBuffer> outBuffer;
+    prepare_output_buffer(outputData, outSample, outBuffer);
 
     DWORD status = 0;
     hr = m_decoder->ProcessOutput(0, 1, &outputData, &status);
     if (hr == MF_E_TRANSFORM_STREAM_CHANGE) {
-        // Negotiate new output type if decoder detected SPS/PPS change
-        ComPtr<IMFMediaType> newType;
-        hr = m_decoder->GetOutputAvailableType(0, 0, &newType);
-        if (SUCCEEDED(hr)) {
-            m_decoder->SetOutputType(0, newType.Get(), 0);
-            UINT32 w = 0, h = 0;
-            MFGetAttributeSize(newType.Get(), MF_MT_FRAME_SIZE, &w, &h);
-            if (w > 0 && h > 0) {
-                m_width = w;
-                m_height = h;
-            }
+        if (outputData.pEvents) {
+            outputData.pEvents->Release();
+            outputData.pEvents = nullptr;
         }
-        // Retry process output
+        hr = SelectOutputType();
+        if (FAILED(hr)) {
+            printf("[DECODER] SelectOutputType failed on stream change: 0x%08X\n", hr);
+            fflush(stdout);
+            if (out_status) *out_status = hr;
+            return false;
+        }
+        prepare_output_buffer(outputData, outSample, outBuffer);
         hr = m_decoder->ProcessOutput(0, 1, &outputData, &status);
     }
 
