@@ -7,6 +7,7 @@ from PIL import Image, ImageDraw, ImageTk
 import tkinter as tk
 
 from app.display_topology import DraftTopology, PlacedMachine
+from app.keyboard_nav import make_button_keyboard_accessible
 
 
 CELL_SIZE = 40
@@ -488,6 +489,8 @@ class TopologyEditor(ctk.CTkFrame):
             command=self._cancel,
         )
         self.cancel_button.place(relx=1.0, x=-50, y=10, anchor="ne")
+        make_button_keyboard_accessible(self.apply_button)
+        make_button_keyboard_accessible(self.cancel_button)
         self._action_tooltip = _HoverTooltip(
             self.apply_button,
             "Apply layout",

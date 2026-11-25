@@ -5,6 +5,7 @@ import threading
 from tkinter import messagebox
 import customtkinter as ctk
 
+from app.keyboard_nav import make_button_keyboard_accessible
 from app.updater import check_for_updates, download_update, can_install, launch_installer, verified_installer
 from app.version import PRODUCT_VERSION
 
@@ -29,6 +30,7 @@ class UpdatePanel(ctk.CTkFrame):
         self.status = ctk.CTkLabel(self, text='Check for a newer version.', wraplength=290)
         self.status.pack(pady=15)
         self.action = ctk.CTkButton(self, text='Check for updates', command=self.check)
+        make_button_keyboard_accessible(self.action)
         self.action.pack(pady=10)
         # Check on the next Tk turn in every build; installation eligibility
         # only gates the existing install controls, never update discovery.

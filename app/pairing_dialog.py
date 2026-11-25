@@ -8,6 +8,10 @@ import tkinter as tk
 import customtkinter as ctk
 
 from app.crypto import pairing_code_from_fingerprint
+from app.keyboard_nav import (
+    disable_textbox_tab_trap, focus_target, install_tab_traversal,
+    make_button_keyboard_accessible,
+)
 from app.network import PairingTimeout
 
 
@@ -131,6 +135,7 @@ class PairingDialog:
             f"Server: {prompt.server}\n\nFingerprint:\n{prompt.fingerprint}",
         )
         self.details.configure(state="disabled")
+        disable_textbox_tab_trap(self.details)
 
         self.actions = ctk.CTkFrame(self.window, fg_color="transparent")
         self.actions.grid(row=4, column=0, padx=20, pady=(5, 18))
@@ -138,12 +143,15 @@ class PairingDialog:
             self.actions, text=prompt.approve_label, width=120,
             command=self._approve,
         )
+        make_button_keyboard_accessible(self.approve)
         self.approve.pack(side="left", padx=5)
         self.decline = ctk.CTkButton(
             self.actions, text=prompt.decline_label, width=100,
             fg_color="red", hover_color="darkred", command=self._decline,
         )
+        make_button_keyboard_accessible(self.decline)
         self.decline.pack(side="left", padx=5)
+        install_tab_traversal(self.window, lambda: (self.approve, self.decline))
 
         self.window.bind("<Configure>", self._resize_content, add="+")
         self.window.update_idletasks()
@@ -153,6 +161,14 @@ class PairingDialog:
         self.window.grab_set()
         self.window.lift()
         self.window.focus_force()
+        decline_target = focus_target(self.decline)
+        if decline_target is not None:
+            decline_target.focus_set()
+            self.window.after_idle(
+                lambda target=decline_target: (
+                    target.focus_set() if target.winfo_exists() else None
+                )
+            )
 
     def _resize_content(self, event):
         if event.widget is self.window:

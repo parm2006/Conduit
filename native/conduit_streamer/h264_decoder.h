@@ -27,6 +27,7 @@ public:
 
 private:
     HRESULT SetupDecoder();
+    HRESULT SelectOutputType();
 
     bool m_low_latency_mode = false;
     uint32_t m_width;

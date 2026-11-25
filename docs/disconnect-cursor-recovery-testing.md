@@ -29,6 +29,22 @@ This is a development preview, not a published beta.
 - Remote Mode queues an entry warp and then a Tk readiness marker. Stale startup
   motions cannot immediately send the pointer back across the entry edge. Entry
   projection rounds inward, and every new handoff refreshes the marker.
+- Native H.264 decoder stream-change negotiation now selects NV12 and refreshes
+  output buffer metadata on resolution changes (`MF_E_TRANSFORM_STREAM_CHANGE`).
+  `ServerVideoReceiver` keeps `last_frame_at` unset until the first frame
+  actually arrives, and `stalled()` gives native startup and JPEG fallback
+  separate timeout windows so a native stall transitions cleanly to JPEG instead
+  of dropping Remote Mode early. `ClientVideoCapture` eagerly loads Pillow's
+  JPEG encoder plugin and discovers displays if missing.
+- Remote Mode overlay creation and updates use `tkinter.Toplevel.wm_geometry`
+  with physical coordinates (bypassing CustomTkinter DPI scaling), perform a
+  synchronous Win32 cursor warp before queuing Tk's entry marker, and log
+  wrong-side placement separately from later return-edge bounces.
+- Main window tabs, Server/Client controls, topology buttons, Updates view,
+  Pairing dialog, Firewall dialog, and Replacement dialog support full keyboard
+  navigation (`Tab`, `Shift+Tab`, arrow keys on tabs/combobox, `Enter`/`Space`
+  activation, and visible blue focus rings) while preserving focus across
+  connect/disconnect and start/stop transitions.
 - INFO logs record handoff readiness, selected display, native stream request/ACK,
   first frame, errors, JPEG fallback, timeouts and cursor policy transitions.
   Per-movement warp logs are DEBUG to keep normal diagnostics readable.
@@ -90,3 +106,9 @@ Clear it afterward with `Remove-Item Env:CONDUIT_LOG_LEVEL` to restore INFO logg
   2.6 ms and 3.3 ms window startup on this PC, all inside the 100 ms budget.
 - Physical two-PC disconnect/hotplug/typing and repeated laptop-Server crossings
   remain acceptance checks for this preview.
+- Local SHA-256 file-preparation benchmark on this PC (68.93 GiB free on `C:`):
+  256 MiB in 0.768s (333.4 MiB/s), 512 MiB in 1.209s (423.6 MiB/s), 1024 MiB in
+  2.598s (394.2 MiB/s), and 2048 MiB in 4.896s (418.3 MiB/s). With the 5-second
+  manifest preparation deadline, the practical local preparation limit is
+  ~2 GiB (2,048 MiB). Larger end-to-end two-PC transfer limits remain to be
+  measured between the laptop and desktop.

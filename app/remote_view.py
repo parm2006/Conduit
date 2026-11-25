@@ -65,6 +65,12 @@ class RemoteView:
             receiver.resize(*self.viewport)
         import win32con
         import win32gui
+        from app.input_geometry import work_area_geometry
+        if isinstance(self.gui.overlay, tk.Misc):
+            tk.Toplevel.wm_geometry(
+                self.gui.overlay,
+                work_area_geometry((primary.left, primary.top, primary.right, primary.bottom)),
+            )
         hwnd = win32gui.GetAncestor(self.gui.overlay.winfo_id(), win32con.GA_ROOT)
         win32gui.SetWindowPos(hwnd, win32con.HWND_TOPMOST, primary.left, primary.top,
                              *self.viewport, win32con.SWP_NOACTIVATE)

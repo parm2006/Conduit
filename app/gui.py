@@ -2,6 +2,7 @@ import customtkinter as ctk
 import logging
 import queue
 import socket
+import sys
 import threading
 from pathlib import Path
 from tkinter import messagebox
@@ -10,6 +11,18 @@ from app.server import ConduitServer
 from app.client import ConduitClient
 from app.file_transfer.toast import TransferToast
 from app.crypto import certificate_fingerprint, pairing_code_from_fingerprint
+from app.keyboard_nav import (
+    disable_textbox_tab_trap,
+    focus_first_available,
+    focus_target,
+    install_tab_traversal,
+    make_button_keyboard_accessible,
+    make_combobox_keyboard_accessible,
+    make_entry_keyboard_accessible,
+    make_switch_keyboard_accessible,
+    make_tabview_keyboard_accessible,
+    tabview_tab_buttons,
+)
 from app.pairing_dialog import PairingApprovalController
 from app.safe_errors import error_name, public_error_message
 from app.error_codes import (
@@ -197,32 +210,46 @@ def ask_firewall_start_choice(
         result["value"] = value
         dialog.destroy()
 
+    buttons = []
     if repair_required:
-        ctk.CTkButton(
+        btn = ctk.CTkButton(
             dialog,
             text="Repair and start",
             command=lambda: choose("repair"),
-        ).pack(fill="x", padx=40, pady=4)
+        )
+        btn.pack(fill="x", padx=40, pady=4)
+        buttons.append(btn)
     elif configure_allowed:
-        ctk.CTkButton(
+        btn = ctk.CTkButton(
             dialog,
             text="Configure and start",
             command=lambda: choose("configure"),
-        ).pack(fill="x", padx=40, pady=4)
+        )
+        btn.pack(fill="x", padx=40, pady=4)
+        buttons.append(btn)
     if not repair_required:
-        ctk.CTkButton(
+        btn = ctk.CTkButton(
             dialog,
             text="Start without setup",
             command=lambda: choose("without_setup"),
-        ).pack(fill="x", padx=40, pady=4)
-    ctk.CTkButton(
+        )
+        btn.pack(fill="x", padx=40, pady=4)
+        buttons.append(btn)
+    cancel_btn = ctk.CTkButton(
         dialog,
         text="Cancel",
         fg_color="gray",
         command=lambda: choose("cancel"),
-    ).pack(fill="x", padx=40, pady=4)
+    )
+    cancel_btn.pack(fill="x", padx=40, pady=4)
+    buttons.append(cancel_btn)
+    for btn in buttons:
+        make_button_keyboard_accessible(btn)
+    install_tab_traversal(dialog, lambda: buttons)
+    dialog.bind("<Escape>", lambda _e: choose("cancel"))
     dialog.protocol("WM_DELETE_WINDOW", lambda: choose("cancel"))
     dialog.grab_set()
+    dialog.after_idle(lambda: focus_first_available(buttons))
     dialog.wait_window()
     return result["value"]
 
@@ -451,6 +478,7 @@ class ConduitGUI(ctk.CTk):
         self.tab_server = self.tabview.add("Server (Host)")
         self.tab_client = self.tabview.add("Client")
         restore_saved_role(self.tabview, saved_role)
+        make_tabview_keyboard_accessible(self.tabview)
 
         # A machine may switch roles while testing or reconnecting. Keep one
         # in-memory password across both tabs so the hidden fields cannot drift
@@ -466,6 +494,7 @@ class ConduitGUI(ctk.CTk):
         self.server_port_entry.insert(0, saved_server_port)
         self.server_port_entry.pack(pady=5)
         enable_textbox_qol(self.server_port_entry)
+        make_entry_keyboard_accessible(self.server_port_entry)
         self.server_port_entry.bind(
             "<KeyRelease>",
             lambda event: self._schedule_firewall_refresh(),
@@ -490,6 +519,7 @@ class ConduitGUI(ctk.CTk):
             height=28,
             command=self._on_firewall_action,
         )
+        make_button_keyboard_accessible(self.firewall_action_btn)
         
         self.server_password_label = ctk.CTkLabel(self.tab_server, text="Password:")
         self.server_password_label.pack(pady=2)
@@ -500,6 +530,7 @@ class ConduitGUI(ctk.CTk):
         )
         self.server_password_entry.pack(pady=2)
         enable_textbox_qol(self.server_password_entry)
+        make_entry_keyboard_accessible(self.server_password_entry)
         
         saved_topology = self.preferences.load_active_topology()
         windows_name = socket.gethostname()
@@ -542,12 +573,15 @@ class ConduitGUI(ctk.CTk):
         self.topology_editor.pack(pady=8)
         
         self.server_start_btn = ctk.CTkButton(self.tab_server, text="Start Server", command=self.start_server)
+        make_button_keyboard_accessible(self.server_start_btn)
         self.server_start_btn.pack(pady=10)
         self.server_stop_btn = ctk.CTkButton(self.tab_server, text="Stop Server", fg_color="red", hover_color="darkred", command=self.stop_server)
+        make_button_keyboard_accessible(self.server_stop_btn)
         self.remote_mode_var = tkinter.BooleanVar(value=False)
         self.remote_mode_toggle = ctk.CTkSwitch(
             self.tab_server, text='Remote Mode', variable=self.remote_mode_var,
         )
+        make_switch_keyboard_accessible(self.remote_mode_toggle)
         self.remote_mode_toggle.pack(side='bottom', pady=12)
         
         # Client UI
@@ -561,6 +595,7 @@ class ConduitGUI(ctk.CTk):
         self.client_ip_entry.set(default_ip)
         self.client_ip_entry.pack(pady=5)
         enable_textbox_qol(self.client_ip_entry)
+        make_combobox_keyboard_accessible(self.client_ip_entry)
         
         self.client_port_label = ctk.CTkLabel(self.tab_client, text="Port:")
         self.client_port_label.pack(pady=5)
@@ -573,6 +608,7 @@ class ConduitGUI(ctk.CTk):
         self.client_port_entry.insert(0, default_port)
         self.client_port_entry.pack(pady=5)
         enable_textbox_qol(self.client_port_entry)
+        make_entry_keyboard_accessible(self.client_port_entry)
         
         self.client_password_label = ctk.CTkLabel(self.tab_client, text="Password:")
         self.client_password_label.pack(pady=5)
@@ -583,19 +619,24 @@ class ConduitGUI(ctk.CTk):
         )
         self.client_password_entry.pack(pady=5)
         enable_textbox_qol(self.client_password_entry)
+        make_entry_keyboard_accessible(self.client_password_entry)
         
         self.client_connect_btn = ctk.CTkButton(self.tab_client, text="Connect", command=self.connect_client)
+        make_button_keyboard_accessible(self.client_connect_btn)
         self.client_connect_btn.pack(pady=10)
         self.client_disconnect_btn = ctk.CTkButton(self.tab_client, text="Disconnect", fg_color="red", hover_color="darkred", command=self.disconnect_client)
+        make_button_keyboard_accessible(self.client_disconnect_btn)
 
         self.repair_btn = ctk.CTkButton(
             self.tab_client, text="Forget saved identity and re-pair",
             command=self.clear_client_trust,
         )
+        make_button_keyboard_accessible(self.repair_btn)
         self.repair_btn.pack(pady=5)
 
         self.status_text = ctk.CTkTextbox(self, height=92, wrap="word")
         self.status_text.grid(row=1, column=0, padx=20, pady=(0, 14), sticky="nsew")
+        disable_textbox_tab_trap(self.status_text)
         self._set_status("Status: Idle", "gray", error_code=OK)
         
         # Global Hotkey Monitor
@@ -616,6 +657,68 @@ class ConduitGUI(ctk.CTk):
             ),
         )
         self.update_panel = self.update_navigation.panel
+        install_tab_traversal(self, self._keyboard_focus_order)
+        self.after_idle(self._focus_initial_control)
+
+    def _keyboard_focus_order(self):
+        nav = self.__dict__.get("update_navigation")
+        if nav is not None and nav.page.winfo_ismapped():
+            panel = self.__dict__.get("update_panel")
+            controls = [nav.back]
+            if panel is not None:
+                controls.append(panel.action)
+            return controls
+        tabview = self.__dict__.get("tabview")
+        tabs = tabview_tab_buttons(tabview) if tabview is not None else []
+        role = tabview.get() if tabview is not None else "Server (Host)"
+        if role == "Server (Host)":
+            editor = self.__dict__.get("topology_editor")
+            controls = [
+                *tabs,
+                self.server_port_entry,
+                self.firewall_action_btn,
+                self.server_password_entry,
+            ]
+            if editor is not None:
+                controls.extend([editor.cancel_button, editor.apply_button])
+            controls.extend([
+                self.server_start_btn,
+                self.server_stop_btn,
+                self.remote_mode_toggle,
+            ])
+        else:
+            controls = [
+                *tabs,
+                self.client_ip_entry,
+                self.client_port_entry,
+                self.client_password_entry,
+                self.client_connect_btn,
+                self.client_disconnect_btn,
+                self.repair_btn,
+            ]
+        if nav is not None:
+            controls.append(nav.button)
+        return controls
+
+    def _focus_initial_control(self):
+        try:
+            if self.focus_get() is None:
+                focus_first_available(self._keyboard_focus_order())
+        except Exception:
+            pass
+
+    def _ensure_control_focus(self, preferred, fallback=None):
+        if "tk" not in self.__dict__:
+            return
+        try:
+            current = self.focus_get()
+        except Exception:
+            return
+        fallback_target = focus_target(fallback) if fallback is not None else None
+        if current in (None, self, fallback, fallback_target):
+            target = focus_target(preferred)
+            if target is not None and target.winfo_exists():
+                target.focus_set()
 
     def load_known_hosts(self):
         try:
@@ -984,6 +1087,7 @@ class ConduitGUI(ctk.CTk):
             )
             self.server_start_btn.pack_forget()
             self.server_stop_btn.pack(pady=10)
+            self._ensure_control_focus(self.server_stop_btn, fallback=self.server_start_btn)
             self._start_server_display_monitor(self.server)
             if remote_enabled:
                 try:
@@ -1105,6 +1209,7 @@ class ConduitGUI(ctk.CTk):
             self.save_known_host(ip, port)
             self.client_connect_btn.pack_forget()
             self.client_disconnect_btn.pack(pady=10)
+            self._ensure_control_focus(self.client_disconnect_btn, fallback=self.client_connect_btn)
         else:
             toast = self.__dict__.get("topology_toast")
             if toast is not None:
@@ -1116,6 +1221,7 @@ class ConduitGUI(ctk.CTk):
                 client_name=getattr(source, "windows_name", None),
                 client_specific=True,
             )
+            self._ensure_control_focus(self.client_connect_btn)
 
     def _start_server_display_monitor(self, source):
         self._stop_server_display_monitor()
@@ -1248,6 +1354,7 @@ class ConduitGUI(ctk.CTk):
                 self._server_stopping = False
         self.server_stop_btn.pack_forget()
         self.server_start_btn.pack(pady=10)
+        self._ensure_control_focus(self.server_start_btn, fallback=self.server_stop_btn)
         editor = self.__dict__.get("topology_editor")
         if editor is not None:
             self._set_topology_action_mode("apply")
@@ -1276,6 +1383,7 @@ class ConduitGUI(ctk.CTk):
             self.client_disconnect_btn.pack_forget()
             self.client_connect_btn.pack(pady=10)
             self.client_connect_btn.configure(state="normal")
+            self._ensure_control_focus(self.client_connect_btn, fallback=self.client_disconnect_btn)
             self._set_status("Status: Disconnected", "gray", error_code=OK)
             self.ensure_visible()
 
@@ -1492,21 +1600,31 @@ class ConduitGUI(ctk.CTk):
                 except Exception:
                     pass
 
+        buttons = []
         for session in source.session_registry.active_sessions():
-            ctk.CTkButton(
+            btn = ctk.CTkButton(
                 dialog,
                 text=f"Replace {session.label}",
                 command=lambda session_id=session.session_id: choose(
                     CandidateDecision.REPLACE,
                     session_id,
                 ),
-            ).pack(fill="x", padx=34, pady=4)
-        ctk.CTkButton(
+            )
+            btn.pack(fill="x", padx=34, pady=4)
+            buttons.append(btn)
+        reject_btn = ctk.CTkButton(
             dialog,
             text="Reject",
             fg_color="#374151",
             command=lambda: choose(CandidateDecision.REJECT),
-        ).pack(fill="x", padx=34, pady=4)
+        )
+        reject_btn.pack(fill="x", padx=34, pady=4)
+        buttons.append(reject_btn)
+        for btn in buttons:
+            make_button_keyboard_accessible(btn)
+        install_tab_traversal(dialog, lambda: buttons)
+        dialog.bind("<Escape>", lambda _e: choose(CandidateDecision.REJECT))
+        dialog.after_idle(lambda: focus_first_available(buttons))
         dialog.protocol(
             "WM_DELETE_WINDOW",
             lambda: choose(CandidateDecision.REJECT),
@@ -2308,7 +2426,11 @@ class ConduitGUI(ctk.CTk):
             # CTkToplevel schedules its own Windows icon at 200 ms.
             overlay.after(250, apply_overlay_icon)
         left, top, right, bottom = windows_work_area()
-        self.overlay.geometry(work_area_geometry((left, top, right, bottom)))
+        geom = work_area_geometry((left, top, right, bottom))
+        if isinstance(self.overlay, tkinter.Toplevel):
+            tkinter.Toplevel.wm_geometry(self.overlay, geom)
+        else:
+            self.overlay.geometry(geom)
         self.overlay.overrideredirect(True)
         self.overlay_center_x = (right - left) // 2
         self.overlay_center_y = (bottom - top) // 2
@@ -2351,6 +2473,39 @@ class ConduitGUI(ctk.CTk):
             router.remote_viewport = self.server.remote_viewport
         view.set_primary(primary)
 
+    def _warp_remote_entry_cursor(self, canvas, entry_x, entry_y):
+        if not isinstance(canvas, tkinter.Misc) or sys.platform != "win32":
+            return None, None
+        try:
+            root_x = canvas.winfo_rootx()
+            root_y = canvas.winfo_rooty()
+        except Exception:
+            return None, None
+        view = self.__dict__.get("remote_view")
+        primary = getattr(view, "primary", None) if view is not None else None
+        if primary is not None and root_x == 0 and root_y == 0:
+            root_x, root_y = primary.left, primary.top
+        target_screen = (int(root_x + entry_x), int(root_y + entry_y))
+        observed_screen = None
+        input_handler = getattr(getattr(self, "server", None), "input_handler", None)
+        injector = getattr(input_handler, "inject_position", None)
+        if callable(injector):
+            try:
+                observed_screen = injector(*target_screen)
+            except Exception:
+                observed_screen = None
+        if observed_screen is None:
+            try:
+                import ctypes
+                from ctypes import wintypes
+                ctypes.windll.user32.SetCursorPos(*target_screen)
+                point = wintypes.POINT()
+                if ctypes.windll.user32.GetCursorPos(ctypes.byref(point)):
+                    observed_screen = (int(point.x), int(point.y))
+            except Exception:
+                observed_screen = None
+        return target_screen, observed_screen
+
     def show_overlay(self):
         from app.input_router import RemoteClient, Transitioning
         requested_router = getattr(self.server, 'input_router', None)
@@ -2383,6 +2538,7 @@ class ConduitGUI(ctk.CTk):
                     # treat them as input for the newly acknowledged handoff.
                     self._remote_overlay_handoff = None
                     self._remote_overlay_ready = False
+                    self._remote_overlay_first_motion = False
                     self.overlay_active = True
                     self.overlay.deiconify() # Show it
                     self.overlay.focus_force()
@@ -2393,19 +2549,83 @@ class ConduitGUI(ctk.CTk):
                     if self.__dict__.get('remote_view') is not None:
                         self.overlay.config(cursor=self.remote_view.viewer_cursor)
                         canvas = self.remote_view.canvas
+                        primary = getattr(self.remote_view, 'primary', None)
+                        if (isinstance(self.overlay, tkinter.Misc)
+                                and sys.platform == "win32"
+                                and primary is not None):
+                            try:
+                                import win32con
+                                import win32gui
+                                from app.input_geometry import work_area_geometry
+                                tkinter.Toplevel.wm_geometry(
+                                    self.overlay,
+                                    work_area_geometry((primary.left, primary.top, primary.right, primary.bottom)),
+                                )
+                                hwnd = win32gui.GetAncestor(self.overlay.winfo_id(), win32con.GA_ROOT)
+                                win32gui.SetWindowPos(
+                                    hwnd,
+                                    win32con.HWND_TOPMOST,
+                                    primary.left,
+                                    primary.top,
+                                    primary.right - primary.left,
+                                    primary.bottom - primary.top,
+                                    win32con.SWP_NOACTIVATE,
+                                )
+                                self.overlay.update_idletasks()
+                            except Exception:
+                                pass
                         canvas.update_idletasks()
                         entry_x = self.overlay_center_x
                         entry_y = self.overlay_center_y
                         target_rect, proj, pos = self._get_remote_geometry_and_projection()
+                        expected_side = None
                         if target_rect is not None and proj is not None and pos is not None:
-                            from app.input_geometry import project_safe_viewport_entry
+                            from app.input_geometry import (
+                                expected_entry_side,
+                                project_safe_viewport_entry,
+                                viewport_point_matches_entry_side,
+                            )
                             entry_x, entry_y = project_safe_viewport_entry(target_rect, proj, pos)
+                            expected_side = expected_entry_side(target_rect, pos)
 
                         self.last_x = entry_x
                         self.last_y = entry_y
                         self._remote_overlay_handoff = state.handoff_id
-                        logger.info('[remote-entry] Queued handoff=%s display=%s source=%s viewport_entry=(%s,%s) projection=%s',
-                                    state.handoff_id, state.display_id, pos, entry_x, entry_y, proj)
+                        self._remote_overlay_expected_side = expected_side
+                        self._remote_overlay_projection = proj
+                        target_screen, observed_screen = self._warp_remote_entry_cursor(
+                            canvas, entry_x, entry_y
+                        )
+                        if (observed_screen is not None and proj is not None
+                                and expected_side is not None and target_screen is not None):
+                            root_x = target_screen[0] - entry_x
+                            root_y = target_screen[1] - entry_y
+                            observed_viewport = (
+                                observed_screen[0] - root_x,
+                                observed_screen[1] - root_y,
+                            )
+                            if not viewport_point_matches_entry_side(proj, observed_viewport, expected_side):
+                                logger.warning(
+                                    '[remote-entry] Wrong-side placement handoff=%s expected_side=%s target_viewport=(%s,%s) observed_viewport=%s projection=%s',
+                                    state.handoff_id,
+                                    expected_side,
+                                    entry_x,
+                                    entry_y,
+                                    observed_viewport,
+                                    proj,
+                                )
+                        logger.info(
+                            '[remote-entry] Queued handoff=%s display=%s side=%s source=%s viewport_entry=(%s,%s) target_screen=%s observed_screen=%s projection=%s',
+                            state.handoff_id,
+                            state.display_id,
+                            expected_side,
+                            pos,
+                            entry_x,
+                            entry_y,
+                            target_screen,
+                            observed_screen,
+                            proj,
+                        )
                         # Queue the entry behind pending mapping motions. An
                         # event count is unreliable across DPI/window managers.
                         canvas.event_generate('<Motion>', warp=True, x=entry_x, y=entry_y, when='tail')
@@ -2422,6 +2642,33 @@ class ConduitGUI(ctk.CTk):
                                     and current.handoff_id == state.handoff_id
                                     and self.__dict__.get('_remote_overlay_entry') is entry_token
                                     and self.__dict__.get('_remote_overlay_handoff') == state.handoff_id):
+                                if isinstance(canvas, tkinter.Misc) and sys.platform == "win32":
+                                    try:
+                                        import ctypes
+                                        from ctypes import wintypes
+                                        point = wintypes.POINT()
+                                        if ctypes.windll.user32.GetCursorPos(ctypes.byref(point)):
+                                            rx = canvas.winfo_rootx()
+                                            ry = canvas.winfo_rooty()
+                                            if primary is not None and rx == 0 and ry == 0:
+                                                rx, ry = primary.left, primary.top
+                                            obs_vp = (int(point.x) - rx, int(point.y) - ry)
+                                            if (proj is not None and expected_side is not None
+                                                    and not viewport_point_matches_entry_side(proj, obs_vp, expected_side)):
+                                                logger.warning(
+                                                    '[remote-entry] Re-warping stale cursor before ready handoff=%s expected_side=%s observed_viewport=%s target_viewport=(%s,%s)',
+                                                    state.handoff_id,
+                                                    expected_side,
+                                                    obs_vp,
+                                                    entry_x,
+                                                    entry_y,
+                                                )
+                                                self._warp_remote_entry_cursor(canvas, entry_x, entry_y)
+                                    except Exception:
+                                        pass
+                                self.last_x = entry_x
+                                self.last_y = entry_y
+                                self._remote_overlay_first_motion = True
                                 self._remote_overlay_ready = True
                                 logger.info('[remote-entry] Ready handoff=%s display=%s', state.handoff_id, state.display_id)
 
@@ -2469,8 +2716,12 @@ class ConduitGUI(ctk.CTk):
 
         view = self.__dict__.get('remote_view')
         viewport = view.canvas if view is not None else self.overlay
-        w = max(1, viewport.winfo_width())
-        h = max(1, viewport.winfo_height())
+        raw_w = viewport.winfo_width()
+        raw_h = viewport.winfo_height()
+        if (raw_w <= 1 or raw_h <= 1) and view is not None and getattr(view, 'viewport', None):
+            w, h = max(1, view.viewport[0]), max(1, view.viewport[1])
+        else:
+            w, h = max(1, raw_w), max(1, raw_h)
         client_w = max(1, target_rect.right - target_rect.left)
         client_h = max(1, target_rect.bottom - target_rect.top)
         scale = min(w / client_w, h / client_h)
@@ -2520,6 +2771,21 @@ class ConduitGUI(ctk.CTk):
             self.last_x, self.last_y = x, y
             if dx == 0 and dy == 0:
                 return
+
+            if self.__dict__.pop('_remote_overlay_first_motion', False):
+                expected_side = self.__dict__.get('_remote_overlay_expected_side')
+                saved_proj = self.__dict__.get('_remote_overlay_projection')
+                if expected_side is not None and saved_proj is not None:
+                    from app.input_geometry import viewport_point_matches_entry_side
+                    if not viewport_point_matches_entry_side(saved_proj, (x, y), expected_side):
+                        logger.warning(
+                            '[remote-entry] First motion on wrong side handoff=%s expected_side=%s viewport=(%s,%s) projection=%s',
+                            state.handoff_id,
+                            expected_side,
+                            x,
+                            y,
+                            saved_proj,
+                        )
 
             target_rect, proj, _ = self._get_remote_geometry_and_projection()
             if target_rect is not None and proj is not None:

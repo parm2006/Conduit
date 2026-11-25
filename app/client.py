@@ -269,11 +269,18 @@ class ConduitClient:
         self.is_active = False
         self._stop_cursor_fallback()
         self._stop_native_sender()
-        self.clipboard.stop()
-        self.clipboard_sender.stop()
-        self.paste_coordinator.reset()
-        self.hotkey_monitor.stop()
-        self.global_hotkey_monitor.stop()
+        for component, method in (
+            (getattr(self, 'clipboard', None), 'stop'),
+            (getattr(self, 'clipboard_sender', None), 'stop'),
+            (getattr(self, 'paste_coordinator', None), 'reset'),
+            (getattr(self, 'hotkey_monitor', None), 'stop'),
+            (getattr(self, 'global_hotkey_monitor', None), 'stop'),
+        ):
+            if component is not None:
+                try:
+                    getattr(component, method)()
+                except Exception as error:
+                    logger.debug("Disconnect cleanup failed on %s (%s)", type(component).__name__, error_name(error))
         if internal_disconnect:
             return
         if report_setup_failure:

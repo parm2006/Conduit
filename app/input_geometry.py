@@ -19,6 +19,40 @@ def project_safe_viewport_entry(rect, projection, position):
             axis(position[1], rect.top, rect.bottom - rect.top, y, height))
 
 
+def expected_entry_side(rect, position, inset=None):
+    """Return which edge of rect an entry position targets, or None."""
+    from app.display_topology import EDGE_ENTRY_INSET
+
+    if rect is None or position is None:
+        return None
+    if inset is None:
+        inset = EDGE_ENTRY_INSET
+    x, y = position
+    distances = {
+        "left": abs(x - rect.left),
+        "right": abs((rect.right - 1) - x),
+        "top": abs(y - rect.top),
+        "bottom": abs((rect.bottom - 1) - y),
+    }
+    side, distance = min(distances.items(), key=lambda item: item[1])
+    return side if distance <= inset else None
+
+
+def viewport_point_matches_entry_side(projection, point, side):
+    """Return whether point lies in the expected entry half of projection."""
+    if projection is None or point is None or side not in {"left", "right", "top", "bottom"}:
+        return True
+    dest_x, dest_y, fitted_w, fitted_h = projection
+    x, y = point
+    if side == "left":
+        return x < dest_x + fitted_w / 2
+    if side == "right":
+        return x >= dest_x + fitted_w / 2
+    if side == "top":
+        return y < dest_y + fitted_h / 2
+    return y >= dest_y + fitted_h / 2
+
+
 def client_entry_position(
     direction, width, height, ratio, edge_inset=1, ratio_margin=10
 ):

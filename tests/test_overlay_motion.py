@@ -277,6 +277,35 @@ class OverlayMotionTests(unittest.TestCase):
         self.assertEqual(gui.server.moves, [(3, 4)])
         self.assertEqual(gui.warp_count, 0)
 
+    def test_remote_entry_logs_wrong_side_placement_separately(self):
+        from app.display_topology import NativeRect
+        gui = self.remote_gui()
+        gui._remote_overlay_handoff = 'old'
+        queued, warps, markers = [], [], {}
+        gui.after = lambda delay, callback: queued.append(callback)
+        gui.overlay = SimpleNamespace(
+            winfo_exists=lambda: True, deiconify=lambda: None,
+            focus_force=lambda: None, grab_set=lambda: None,
+            config=lambda **kwargs: None,
+        )
+        gui.transfer_toast = SimpleNamespace(raise_if_visible=lambda: None)
+        gui.overlay_center_x, gui.overlay_center_y = 1248, 832
+        gui.remote_view.canvas.update_idletasks = lambda: None
+        gui.remote_view.canvas.event_generate = lambda *args, **kwargs: warps.append((args, kwargs))
+        gui.remote_view.canvas.bind = lambda name, callback: markers.setdefault(name, callback)
+        gui.remote_view.canvas.unbind = lambda *args: None
+        gui._warp_remote_entry_cursor = lambda canvas, x, y: ((x, y), (2490, y))
+
+        with self.assertLogs('app.gui', level='WARNING') as logs:
+            gui.show_overlay()
+            queued.pop(0)()
+        self.assertTrue(any('Wrong-side placement' in entry for entry in logs.output))
+        markers.popitem()[1](None)
+        self.assertTrue(gui._remote_overlay_ready)
+        with self.assertLogs('app.gui', level='WARNING') as motion_logs:
+            gui.on_overlay_motion(SimpleNamespace(x=2490, y=871, x_root=2591, y_root=1072))
+        self.assertTrue(any('First motion on wrong side' in entry for entry in motion_logs.output))
+
 
 if __name__ == "__main__":
     unittest.main()

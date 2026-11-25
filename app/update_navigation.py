@@ -3,6 +3,7 @@ import tkinter
 
 import customtkinter as ctk
 
+from app.keyboard_nav import focus_target, make_button_keyboard_accessible
 from app.update_panel import UpdatePanel
 
 
@@ -18,7 +19,7 @@ class UpdateNavigation(ctk.CTkFrame):
             takefocus=True, relief='flat', bg='#2b2b2b', fg='white',
             activebackground='#404040', activeforeground='white', padx=8, pady=5,
         )
-        self.back.bind('<Return>', lambda event: self.back.invoke())
+        make_button_keyboard_accessible(self.back)
         self.back.pack(anchor='w', padx=12, pady=12)
         # CTk draws the icon without the native button's dotted focus rectangle.
         self.button = ctk.CTkButton(
@@ -26,15 +27,13 @@ class UpdateNavigation(ctk.CTkFrame):
             fg_color='#404040', hover_color='#505050', text_color='#a0a0a0',
             font=('Segoe UI', 18), corner_radius=0,
         )
-        self.button._canvas.configure(takefocus=True)
+        make_button_keyboard_accessible(self.button)
         self.notification = ctk.CTkLabel(
             self, text='•', text_color='#f4cc58', width=8, height=8,
             font=('Segoe UI', 12), fg_color='#404040',
         )
         self.description = tkinter.StringVar(master=self)
         self.button.pack(side='right')
-        self.button.bind('<Return>', lambda event: self.button.invoke())
-        self.button.bind('<space>', lambda event: self.button.invoke())
         self.place(relx=1, rely=1, anchor='se', x=-12, y=-12)
         self.panel = UpdatePanel(
             self.page, on_close=on_close, on_available=on_available,
@@ -72,4 +71,6 @@ class UpdateNavigation(ctk.CTkFrame):
     def hide(self):
         self.page.grid_remove()
         self.roles.grid()
-        self.button.focus_set()
+        target = focus_target(self.button)
+        if target is not None:
+            target.focus_set()

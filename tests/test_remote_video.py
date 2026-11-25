@@ -160,3 +160,77 @@ class RemoteVideoTests(unittest.TestCase):
             video.decode_frame(dict(frame, width=64))
         with self.assertRaises(ValueError):
             video.decode_frame(dict(frame, jpeg='not base64'))
+
+    def test_native_ack_preserves_initial_startup_window_before_first_frame(self):
+        from unittest.mock import Mock, patch
+        import app.native_streamer as native_streamer
+        video = self.module()
+        receiver = self.receiver()
+        receiver.viewport = (2496, 1664)
+        receiver.viewport_hwnd = 12345
+        receiver.stream_port = 28906
+        receiver._native_receiver = None
+        receiver._native_active = False
+        receiver._native_stream_id = None
+        receiver._native_failed_selection = None
+        receiver._native_started_event = threading.Event()
+        receiver._native_started_success = False
+        receiver._selection_started_at = 10.0
+        receiver.last_frame_at = 0.0
+        receiver.server.control_network = SimpleNamespace(
+            send_message=lambda msg, session_id=None: (
+                receiver._on_stream_started({'stream_id': msg['stream_id'], 'success': True}),
+                True,
+            )[1]
+        )
+        fake_native = Mock()
+        fake_native.start.return_value = True
+        with patch.object(native_streamer, 'is_native_streaming_supported', return_value=True), \
+                patch.object(native_streamer, 'NativeStreamerReceiver', return_value=fake_native):
+            self.assertTrue(receiver._start_native(receiver.selection))
+        self.assertEqual(receiver.last_frame_at, 0.0)
+        self.assertTrue(receiver._native_active)
+
+    def test_stalled_gives_native_and_jpeg_fallback_separate_windows(self):
+        video = self.module()
+        receiver = self.receiver()
+        receiver.viewport_hwnd = 12345
+        receiver._native_failed_selection = None
+        receiver._selection_started_at = 10.0
+        receiver.started_at = 10.0
+        receiver.last_frame_at = 0.0
+        # While native is starting/falling back, stalled() does not fire at 1.0s or 2.6s.
+        self.assertFalse(receiver.stalled(11.1))
+        self.assertFalse(receiver.stalled(12.6))
+        # Once native fallback moves to JPEG, JPEG gets its own startup window.
+        receiver._native_failed_selection = receiver.selection
+        receiver.started_at = 12.6
+        receiver.last_frame_at = 0.0
+        self.assertFalse(receiver.stalled(13.6))
+        self.assertTrue(receiver.stalled(12.6 + video.INITIAL_FRAME_TIMEOUT))
+
+    def test_client_capture_discovers_displays_when_missing(self):
+        video = self.module()
+        from app.display_topology import NativeRect
+        sent = []
+        lane = SimpleNamespace(authenticated=True, send_message=lambda frame: sent.append(frame))
+        discovered_group = SimpleNamespace(
+            display=lambda did: SimpleNamespace(enabled=True, rect=NativeRect(0, 0, 32, 24))
+        )
+        client = SimpleNamespace(
+            is_active=True,
+            data_network=lane,
+            machine_id='client-id',
+            windows_name='client-pc',
+            display_group=None,
+            display_discovery=SimpleNamespace(discover=lambda m, w: discovered_group),
+            active_topology_config={'destination_display_id': 'display-1', 'handoff_id': 'h1', 'topology_version': 1},
+        )
+        producer = video.ClientVideoCapture(client, lambda _r: (Image.new('RGB', (32, 24)), (0.5, 0.5)))
+        self.assertTrue(producer._produce(
+            dict(request_id='r1', display_id='display-1', handoff_id='h1', topology_version=1, max_width=32, max_height=24),
+            lane,
+            producer._generation,
+        ) is None)
+        self.assertEqual(len(sent), 1)
+        self.assertIs(client.display_group, discovered_group)

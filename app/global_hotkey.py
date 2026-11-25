@@ -112,15 +112,15 @@ class GlobalHotkeyMonitor:
         )
 
     def stop(self):
-        if self.listener is not None:
-            try:
-                self.listener.stop()
-            except Exception:
-                pass
-            self.listener = None
         with self._lock:
+            listener, self.listener = self.listener, None
             self.pressed_keys.clear()
             self._return_shortcut.reset()
+        if listener is not None:
+            try:
+                listener.stop()
+            except Exception:
+                pass
 
     @staticmethod
     def _normalize_key(key):
