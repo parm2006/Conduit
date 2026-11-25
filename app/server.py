@@ -3,6 +3,7 @@ import os
 import threading
 import time
 from pathlib import Path
+from app.debug_log_exchange import attach_peer_log_exchange, send_live_build_info
 from app.network import NetworkServer
 from app.crypto import load_identity
 from app.session import SessionRegistry
@@ -219,6 +220,12 @@ class ConduitServer:
         self._topology_transaction = None
         self._active_topology_session_ids = set()
         self.routing_suspended = False
+        self.peer_log_exchange = attach_peer_log_exchange(
+            self,
+            self.control_network,
+            role="server",
+            machine_id=self.server_machine_id,
+        )
         
         # Setup control network callbacks
         self.control_network.register_callback('connected', lambda d: self._on_socket_connected('control', d))
@@ -419,11 +426,16 @@ class ConduitServer:
             "Client session %s connected on all lanes; waiting for topology Apply before input routing.",
             str(session_id)[:8] if session_id else "legacy",
         )
+        if len(getattr(self, '_ready_session_ids', ())) <= 1:
+            exchange = getattr(self, 'peer_log_exchange', None)
+            if exchange is not None:
+                exchange.mark_session_start()
         message = {'type': 'display_inventory_request'}
         if session_id is None:
             self.control_network.send_message(message)
         else:
             self.control_network.send_message(message, session_id=session_id)
+        send_live_build_info(self, session_id=session_id)
         if len(getattr(self, '_ready_session_ids', ())) <= 1:
             self.clipboard.start()
             self.hotkey_monitor.start()

@@ -4,6 +4,7 @@ import threading
 import os
 import socket
 from pathlib import Path
+from app.debug_log_exchange import attach_peer_log_exchange, send_live_build_info
 from app.network import NetworkClient
 from app.trust import PeerTrustStore
 from app.file_transfer.transport import FileLaneClient
@@ -132,6 +133,12 @@ class ConduitClient:
         self.control_connected = False
         self.data_connected = False
         self._disconnecting = False
+        self.peer_log_exchange = attach_peer_log_exchange(
+            self,
+            self.control_network,
+            role="client",
+            machine_id=self.machine_id,
+        )
         
         # Setup control network callbacks
         self.control_network.register_callback('layout_config', self.on_layout_config)
@@ -432,6 +439,10 @@ class ConduitClient:
                         "secure session disconnected while starting services"
                     )
                 logger.info("[ALL LANES BOUND] Control, Data, and File lanes successfully established!")
+                exchange = getattr(self, "peer_log_exchange", None)
+                if exchange is not None:
+                    exchange.mark_session_start()
+                send_live_build_info(self)
                 self._report_connect(True, None)
                 return True
             except Exception as error:

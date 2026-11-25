@@ -287,7 +287,11 @@ class ServerVideoReceiver:
                     except Exception:
                         pass
                 elif code == STREAMER_EVENT_ERROR:
-                    logger.warning("Native receiver error (%s), falling back to GDI/JPEG", msg)
+                    logger.warning(
+                        "[remote-diag] Native receiver error (%s) display=%s, falling back to GDI/JPEG",
+                        msg,
+                        selection.display_id,
+                    )
                     with self._lock:
                         self._native_failed_selection = selection
                         self._native_active = False
@@ -336,6 +340,31 @@ class ServerVideoReceiver:
 
     def _stop_native(self, session_id=None):
         if self._native_stream_id is not None:
+            native_rx = getattr(self, '_native_receiver', None)
+            frames = cif = stats = None
+            if native_rx is not None:
+                try:
+                    frames = native_rx.get_frame_count()
+                except Exception:
+                    pass
+                try:
+                    cif = native_rx.get_cursor_in_frame()
+                except Exception:
+                    pass
+                try:
+                    if hasattr(native_rx, 'get_stats'):
+                        raw_stats = native_rx.get_stats()
+                        if raw_stats:
+                            stats = ' | '.join(line.strip() for line in str(raw_stats).splitlines() if line.strip())[:240]
+                except Exception:
+                    pass
+            logger.info(
+                '[remote-diag] stop_native stream=%s frames=%s cif=%s stats=%s',
+                self._native_stream_id,
+                frames,
+                cif,
+                stats,
+            )
             sid = session_id or (self.selection.session_id if self.selection else None)
             if sid:
                 try:
@@ -498,7 +527,15 @@ class ServerVideoReceiver:
                                else time.monotonic() - started_at)
                     timeout = NATIVE_FRAME_TIMEOUT if last_frame_at > 0.0 else NATIVE_INITIAL_FRAME_TIMEOUT
                     if elapsed >= timeout:
-                        logger.warning("Native stream stalled, falling back to GDI/JPEG")
+                        logger.warning(
+                            "[remote-diag] Native stream stalled (elapsed=%.2fs timeout=%.2fs "
+                            "last_frame_at=%.3f started_at=%.3f frames=%s), falling back to GDI/JPEG",
+                            elapsed,
+                            timeout,
+                            last_frame_at,
+                            started_at,
+                            last_native_count,
+                        )
                         with self._lock:
                             self._native_failed_selection = selection
                             self.started_at = time.monotonic()
@@ -552,6 +589,11 @@ class ServerVideoReceiver:
                 logger.warning('Remote video unavailable (%s, attempt=%d/%d)',
                                type(error).__name__, self._jpeg_failures, MAX_CONSECUTIVE_JPEG_FAILURES)
                 if self._jpeg_failures >= MAX_CONSECUTIVE_JPEG_FAILURES:
+                    logger.warning(
+                        '[remote-diag] JPEG fallback exhausted display=%s failures=%d',
+                        selection.display_id,
+                        self._jpeg_failures,
+                    )
                     self.failed_selection = selection
             self._stop.wait(max(0, FRAME_INTERVAL - (time.monotonic() - started)))
 

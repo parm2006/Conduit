@@ -76,3 +76,36 @@ class RemoteViewLifecycleTests(unittest.TestCase):
         view.receiver.stop.assert_called_once()
         view.map_window.close.assert_called_once()
         view.gui.after_cancel.assert_called_once_with('tick')
+
+    def test_restore_local_logs_remote_diag_and_triggers_stall_exchange(self):
+        from unittest.mock import patch
+        from app.remote_view import RemoteView
+        from app.input_router import RemoteClient
+
+        view = RemoteView.__new__(RemoteView)
+        view._returning = False
+        view.canvas = SimpleNamespace(delete=Mock(), config=Mock())
+        view.viewer_cursor = 'arrow'
+        view.gui = SimpleNamespace(
+            overlay=SimpleNamespace(config=Mock()),
+            hide_overlay=Mock(),
+            _set_status=Mock(),
+        )
+        view.receiver = SimpleNamespace(
+            is_native_active=lambda: False,
+            last_frame_at=10.0,
+            started_at=9.0,
+            _native_receiver=SimpleNamespace(get_stats=lambda: 'line1\nline2'),
+        )
+        view.server = SimpleNamespace(
+            input_router=SimpleNamespace(state=RemoteClient('s', 'c', 'd', (1, 2), 'h')),
+            _return_cursor_to_server=Mock(),
+        )
+        with patch('app.remote_view.async_exchange_on_stall') as stall_exchange, \
+                patch('app.remote_view.threading.Thread') as thread_cls, \
+                self.assertLogs('app.remote_view', level='WARNING') as captured:
+            view._restore_local(reason='stalled')
+
+        self.assertTrue(any('[remote-diag] restore_local reason=stalled' in line for line in captured.output))
+        stall_exchange.assert_called_once_with(view.server, reason='remote_video_stalled')
+        thread_cls.return_value.start.assert_called_once()

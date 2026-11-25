@@ -3,9 +3,16 @@ import logging
 import socket
 import sys
 import threading
+import time
 from pathlib import Path
 from tkinter import messagebox
 
+from app.debug_log_exchange import (
+    exchange_endpoint_logs,
+    format_build_summary,
+    local_build_info,
+    win32_dpi_context,
+)
 from app.server import ConduitServer
 from app.client import ConduitClient
 from app.file_transfer.toast import TransferToast
@@ -1228,6 +1235,7 @@ class ConduitGUI(ctk.CTk):
             self._server_stopping = True
             try:
                 if getattr(server, 'control_connected', False) and getattr(server, 'control_network', None):
+                    exchange_endpoint_logs(server, reason='server_stopping')
                     try:
                         self._notify_ready_clients(
                             server,
@@ -1236,7 +1244,6 @@ class ConduitGUI(ctk.CTk):
                                 'reason': 'server_stopping',
                             },
                         )
-                        import time
                         time.sleep(0.05)
                     except Exception:
                         pass
@@ -1263,9 +1270,10 @@ class ConduitGUI(ctk.CTk):
             self.client = None
         if client:
             if getattr(client, 'control_connected', False) and getattr(client, 'control_network', None):
+                if target_client is None:
+                    exchange_endpoint_logs(client, reason='client_disconnecting')
                 try:
                     client.control_network.send_message({'type': 'disconnect_notice', 'reason': 'client_disconnecting'})
-                    import time
                     time.sleep(0.05)
                 except Exception:
                     pass
@@ -2256,9 +2264,11 @@ class ConduitGUI(ctk.CTk):
             self.hide_overlay()
         self._stop_server_display_monitor()
         if self.server:
+            exchange_endpoint_logs(self.server, reason='window_closing')
             self.server.stop()
         if self.client:
             client, self.client = self.client, None
+            exchange_endpoint_logs(client, reason='window_closing')
             client.disconnect()
         self.destroy()
 
@@ -2322,18 +2332,22 @@ class ConduitGUI(ctk.CTk):
             router.remote_viewport = self.server.remote_viewport
         view.set_primary(primary)
 
+    def _remote_canvas_origin(self, canvas):
+        root_x = canvas.winfo_rootx()
+        root_y = canvas.winfo_rooty()
+        view = self.__dict__.get("remote_view")
+        primary = getattr(view, "primary", None) if view is not None else None
+        if primary is not None and root_x == 0 and root_y == 0:
+            return int(primary.left), int(primary.top)
+        return int(root_x), int(root_y)
+
     def _warp_remote_entry_cursor(self, canvas, entry_x, entry_y):
         if not isinstance(canvas, tkinter.Misc) or sys.platform != "win32":
             return None, None
         try:
-            root_x = canvas.winfo_rootx()
-            root_y = canvas.winfo_rooty()
+            root_x, root_y = self._remote_canvas_origin(canvas)
         except Exception:
             return None, None
-        view = self.__dict__.get("remote_view")
-        primary = getattr(view, "primary", None) if view is not None else None
-        if primary is not None and root_x == 0 and root_y == 0:
-            root_x, root_y = primary.left, primary.top
         target_screen = (int(root_x + entry_x), int(root_y + entry_y))
         observed_screen = None
         input_handler = getattr(getattr(self, "server", None), "input_handler", None)
@@ -2354,6 +2368,14 @@ class ConduitGUI(ctk.CTk):
                     observed_screen = (int(point.x), int(point.y))
             except Exception:
                 observed_screen = None
+        logger.info(
+            "[remote-diag] warp origin=%s entry=(%s,%s) target_screen=%s observed_screen=%s",
+            (root_x, root_y),
+            entry_x,
+            entry_y,
+            target_screen,
+            observed_screen,
+        )
         return target_screen, observed_screen
 
     def show_overlay(self):
@@ -2424,21 +2446,53 @@ class ConduitGUI(ctk.CTk):
                         self.last_x = entry_x
                         self.last_y = entry_y
                         self._remote_overlay_handoff = state.handoff_id
+                        try:
+                            canvas_wh = (canvas.winfo_width(), canvas.winfo_height())
+                            canvas_mapped = canvas.winfo_ismapped()
+                        except Exception:
+                            canvas_wh, canvas_mapped = None, None
+                        logger.info(
+                            "[remote-diag] show_overlay handoff=%s display=%s view_viewport=%s "
+                            "canvas_wh=%s canvas_mapped=%s primary=%s target_rect=%s proj=%s "
+                            "client_pos=%s entry=(%s,%s)",
+                            state.handoff_id,
+                            state.display_id,
+                            getattr(self.remote_view, 'viewport', None),
+                            canvas_wh,
+                            canvas_mapped,
+                            (primary.left, primary.top, primary.right, primary.bottom) if primary is not None else None,
+                            (target_rect.left, target_rect.top, target_rect.right, target_rect.bottom) if target_rect is not None else None,
+                            proj,
+                            pos,
+                            entry_x,
+                            entry_y,
+                        )
                         self._warp_remote_entry_cursor(canvas, entry_x, entry_y)
                         canvas.event_generate('<Motion>', warp=True, x=entry_x, y=entry_y, when='tail')
 
+                        queued_at = time.monotonic()
                         entry_token = object()
                         self._remote_overlay_entry = entry_token
                         entry_event = f'<<ConduitRemoteEntryReady-{id(entry_token)}>>'
+                        entry_completed = False
 
                         def _entry_ready(event):
-                            canvas.unbind(entry_event, binding_id)
+                            nonlocal entry_completed
+                            if entry_completed:
+                                return
+                            entry_completed = True
+                            try:
+                                canvas.unbind(entry_event, binding_id)
+                            except Exception:
+                                pass
                             current = getattr(router, 'state', None)
                             if (self.overlay_active and self.server.input_router is router
                                     and isinstance(current, RemoteClient)
                                     and current.handoff_id == state.handoff_id
                                     and self.__dict__.get('_remote_overlay_entry') is entry_token
                                     and self.__dict__.get('_remote_overlay_handoff') == state.handoff_id):
+                                obs_vp = None
+                                rewarped = False
                                 if isinstance(canvas, tkinter.Misc) and sys.platform == "win32":
                                     try:
                                         import ctypes
@@ -2446,22 +2500,36 @@ class ConduitGUI(ctk.CTk):
 
                                         point = wintypes.POINT()
                                         if ctypes.windll.user32.GetCursorPos(ctypes.byref(point)):
-                                            rx = canvas.winfo_rootx()
-                                            ry = canvas.winfo_rooty()
-                                            if primary is not None and rx == 0 and ry == 0:
-                                                rx, ry = primary.left, primary.top
+                                            rx, ry = self._remote_canvas_origin(canvas)
                                             obs_vp = (int(point.x) - rx, int(point.y) - ry)
                                             if (proj is not None and expected_side is not None
                                                     and not viewport_point_matches_entry_side(proj, obs_vp, expected_side)):
                                                 self._warp_remote_entry_cursor(canvas, entry_x, entry_y)
+                                                rewarped = True
                                     except Exception:
                                         pass
+                                try:
+                                    ready_wh = (canvas.winfo_width(), canvas.winfo_height())
+                                except Exception:
+                                    ready_wh = None
+                                logger.info(
+                                    "[remote-diag] entry_ready handoff=%s elapsed_ms=%.1f "
+                                    "canvas_wh=%s obs_vp=%s expected_side=%s rewarped=%s",
+                                    state.handoff_id,
+                                    (time.monotonic() - queued_at) * 1000.0,
+                                    ready_wh,
+                                    obs_vp,
+                                    expected_side,
+                                    rewarped,
+                                )
                                 self.last_x = entry_x
                                 self.last_y = entry_y
                                 self._remote_overlay_ready = True
 
                         binding_id = canvas.bind(entry_event, _entry_ready)
                         canvas.event_generate(entry_event, when='tail')
+                        if isinstance(canvas, tkinter.Misc) and not canvas.winfo_ismapped():
+                            self.after(20, lambda: _entry_ready(None))
                     else:
                         self.last_x = self.overlay_center_x
                         self.last_y = self.overlay_center_y
@@ -2502,13 +2570,13 @@ class ConduitGUI(ctk.CTk):
         from app.input_geometry import fit_projection
 
         view = self.__dict__.get('remote_view')
-        viewport = view.canvas if view is not None else self.overlay
-        raw_w = viewport.winfo_width()
-        raw_h = viewport.winfo_height()
-        if (raw_w <= 1 or raw_h <= 1) and view is not None and getattr(view, 'viewport', None):
-            w, h = max(1, view.viewport[0]), max(1, view.viewport[1])
+        if view is not None and getattr(view, 'viewport', None):
+            w = max(1, int(view.viewport[0]))
+            h = max(1, int(view.viewport[1]))
         else:
-            w, h = max(1, raw_w), max(1, raw_h)
+            viewport = view.canvas if view is not None else self.overlay
+            w = max(1, viewport.winfo_width())
+            h = max(1, viewport.winfo_height())
         proj = fit_projection((w, h), target_rect)
 
         return target_rect, proj, pos
@@ -2540,8 +2608,9 @@ class ConduitGUI(ctk.CTk):
 
             canvas = self.remote_view.canvas
             if hasattr(event, 'x_root') and hasattr(event, 'y_root'):
-                x = event.x_root - canvas.winfo_rootx()
-                y = event.y_root - canvas.winfo_rooty()
+                root_x, root_y = self._remote_canvas_origin(canvas)
+                x = event.x_root - root_x
+                y = event.y_root - root_y
             else:
                 x, y = event.x, event.y
             dx, dy = x - self.last_x, y - self.last_y
@@ -2655,7 +2724,12 @@ def run_gui():
         ctypes.windll.shcore.SetProcessDpiAwareness(2)
     except Exception:
         pass
-        
+    logger.info(
+        "[remote-diag] gui_env build=%s dpi=%s",
+        format_build_summary(local_build_info()),
+        win32_dpi_context(),
+    )
+
     ctk.set_appearance_mode("dark")
     app = ConduitGUI()
     run_mainloop(app)

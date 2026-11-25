@@ -34,9 +34,12 @@ def configure_runtime_logging(log_root=None):
         handlers=handlers,
         force=True,
     )
+    from app.debug_log_exchange import format_build_summary, local_build_info
+
     logging.getLogger(__name__).info(
-        "Conduit diagnostic logging started (log=%s)",
+        "Conduit diagnostic logging started (log=%s build=%s)",
         log_path,
+        format_build_summary(local_build_info()),
     )
     return log_path
 

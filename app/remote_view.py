@@ -2,9 +2,11 @@
 import logging
 import math
 import threading
+import time
 import tkinter as tk
 from PIL import ImageTk
 
+from app.debug_log_exchange import async_exchange_on_stall
 from app.error_codes import REMOTE_VIDEO_UNAVAILABLE
 from app.input_geometry import set_physical_toplevel_rect
 from app.input_router import RemoteClient, Transitioning
@@ -85,13 +87,37 @@ class RemoteView:
             self._update()
         except Exception as error:
             logger.warning('Remote viewer failed (%s)', type(error).__name__)
-            self._restore_local()
+            self._restore_local(reason=f'exception:{type(error).__name__}')
         self._timer = self.gui.after(25, self._tick)
 
-    def _restore_local(self):
+    def _restore_local(self, reason='stalled'):
         if self._returning:
             return
         self._returning = True
+        router = getattr(self.server, 'input_router', None)
+        receiver = getattr(self, 'receiver', None)
+        now = time.monotonic()
+        last_frame = getattr(receiver, 'last_frame_at', 0.0) or 0.0
+        started = getattr(receiver, 'started_at', 0.0) or 0.0
+        native_rx = getattr(receiver, '_native_receiver', None) if receiver is not None else None
+        stats = None
+        if native_rx is not None and hasattr(native_rx, 'get_stats'):
+            try:
+                raw_stats = native_rx.get_stats()
+                stats = ' | '.join(line.strip() for line in str(raw_stats).splitlines() if line.strip())[:240]
+            except Exception:
+                stats = None
+        logger.warning(
+            '[remote-diag] restore_local reason=%s state=%s native_active=%s '
+            'last_frame_age=%.2fs started_age=%.2fs stats=%s',
+            reason,
+            type(getattr(router, 'state', None)).__name__,
+            receiver.is_native_active() if receiver is not None and hasattr(receiver, 'is_native_active') else None,
+            (now - last_frame) if last_frame > 0.0 else -1.0,
+            (now - started) if started > 0.0 else -1.0,
+            stats,
+        )
+        async_exchange_on_stall(self.server, reason=f'remote_video_{reason}')
         self.canvas.delete('all')
         self._set_viewer_cursor('arrow')
         self.gui.hide_overlay()
