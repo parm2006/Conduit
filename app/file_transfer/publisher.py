@@ -182,12 +182,13 @@ class VirtualPastePublisher:
                 try:
                     self._process(manifest, receiver, keyboard)
                 except Exception as error:
-                    self._report_failure(
-                        receiver, manifest.get("job_id"), "ClipboardPublishFailed"
-                    )
-                    logger.error(
-                        "Virtual paste worker failed (%s)", error_name(error)
-                    )
+                    if not receiver.is_paste_terminal(manifest.get("job_id")):
+                        self._report_failure(
+                            receiver, manifest.get("job_id"), "ClipboardPublishFailed"
+                        )
+                        logger.error(
+                            "Virtual paste worker failed (%s)", error_name(error)
+                        )
                 finally:
                     self._queue.task_done()
                     with self._idle:
@@ -258,7 +259,8 @@ class VirtualPastePublisher:
                     session.request_cancel()
             if owner is not None:
                 suppress_internal_sequence = self._restore_owner(
-                    owner, previous_owner, retain=accepted and not terminal
+                    owner, previous_owner,
+                    retain=accepted and not terminal and outcome is None,
                 )
             if (
                 outcome is not None

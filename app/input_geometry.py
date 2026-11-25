@@ -1,3 +1,24 @@
+def project_safe_viewport_entry(rect, projection, position):
+    """Round entry pixels inward so downscaling cannot recreate an exit hit."""
+    import math
+    from app.display_topology import EDGE_ENTRY_INSET
+
+    def axis(value, start, length, destination, fitted):
+        offset = max(0, min(length - 1, value - start))
+        projected = offset * fitted / max(1, length)
+        if offset <= EDGE_ENTRY_INSET:
+            pixel = math.ceil(projected)
+        elif length - 1 - offset <= EDGE_ENTRY_INSET:
+            pixel = math.floor(projected)
+        else:
+            pixel = round(projected)
+        return destination + max(0, min(fitted - 1, pixel))
+
+    x, y, width, height = projection
+    return (axis(position[0], rect.left, rect.right - rect.left, x, width),
+            axis(position[1], rect.top, rect.bottom - rect.top, y, height))
+
+
 def client_entry_position(
     direction, width, height, ratio, edge_inset=1, ratio_margin=10
 ):

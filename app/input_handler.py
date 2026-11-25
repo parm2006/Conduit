@@ -542,7 +542,7 @@ class InputHandler:
         else:
             self.mouse.position = target
         observed = tuple(self.mouse.position)
-        logger.info(
+        logger.debug(
             "[cursor] Warp before=%s target=%s observed=%s",
             before,
             target,

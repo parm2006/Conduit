@@ -2,7 +2,7 @@
 from PIL import Image
 
 
-def capture_monitor(rect):
+def capture_monitor(rect, cursor_overlay_hwnd=0):
     import win32con
     import win32gui
     import win32ui
@@ -38,6 +38,9 @@ def capture_monitor(rect):
                         win32gui.DeleteObject(handle)
         pixels = bitmap.GetBitmapBits(True)
         image = Image.frombytes('RGB', (width, height), pixels, 'raw', 'BGRX')
+        from app.windows_cursor_overlay import overlay_visible_in_rect, system_cursor_hidden
+        image.info['conduit_cursor_in_frame'] = (
+            not system_cursor_hidden(flags) or overlay_visible_in_rect(cursor_overlay_hwnd, rect))
         return image, ((position[0] - rect.left) / width, (position[1] - rect.top) / height)
     finally:
         if old is not None:

@@ -5,6 +5,7 @@
 #include <dxgi1_2.h>
 #include <wrl/client.h>
 #include <stdint.h>
+#include <atomic>
 #include "video_cursor_policy.h"
 
 using Microsoft::WRL::ComPtr;
@@ -29,6 +30,7 @@ public:
     int Initialize(int output_index);
     void Cleanup();
     ID3D11Device* GetDevice() const { return m_device.Get(); }
+    void SetCursorOverlay(HWND hwnd) { m_cursor_overlay.store(hwnd); }
 
     // Acquires next frame. If timeout occurs and timeout_ok is true, returns true with has_new_frame=false.
     bool AcquireFrame(CapturedFrame* out_frame, uint32_t timeout_ms = 16);
@@ -54,6 +56,9 @@ private:
     int m_last_cursor_y;
     bool m_cursor_visible;
     conduit::CaptureCursorPolicy m_cursor_policy;
+    std::atomic<HWND> m_cursor_overlay{nullptr};
+    RECT m_output_rect{};
+    bool m_have_frame = false;
 };
 
 #endif // CONDUIT_STREAMER_DXGI_CAPTURE_H

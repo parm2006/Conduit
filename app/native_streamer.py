@@ -76,6 +76,10 @@ def get_streamer_dll():
 
         dll.streamer_sender_request_keyframe.restype = ctypes.c_int
         dll.streamer_sender_request_keyframe.argtypes = [ctypes.c_void_p]
+        overlay_setter = getattr(dll, 'streamer_sender_set_cursor_overlay', None)
+        if overlay_setter is not None:
+            overlay_setter.restype = ctypes.c_int
+            overlay_setter.argtypes = [ctypes.c_void_p, wintypes.HWND]
 
         dll.streamer_sender_stop.restype = ctypes.c_int
         dll.streamer_sender_stop.argtypes = [ctypes.c_void_p]
@@ -202,6 +206,10 @@ class NativeStreamerSender:
                 self._on_event(event_code, msg_str)
             except Exception:
                 pass
+
+    def set_cursor_overlay(self, hwnd):
+        setter = getattr(self._dll, 'streamer_sender_set_cursor_overlay', None)
+        return bool(self._handle and setter is not None and setter(self._handle, int(hwnd or 0)) == 0)
 
     def start(self, display_index, target_ip, target_port, session_key, bitrate_kbps=10000, fps=60):
         if not isinstance(session_key, bytes) or len(session_key) != 32:

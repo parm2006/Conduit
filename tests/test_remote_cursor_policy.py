@@ -49,6 +49,7 @@ class RemoteCursorPolicyTests(unittest.TestCase):
         for target, replacement in (
             ('app.remote_view.tk.Canvas', lambda *args, **kwargs: self.canvas),
             ('app.remote_view.WindowsMapOverlay', lambda: self.map_window),
+            ('app.windows_cursor_overlay.WindowsCursorOverlay', Mock),
             ('app.remote_view.ServerVideoReceiver', lambda *args, **kwargs: self.receiver),
             ('app.remote_view.ImageTk.PhotoImage', lambda *args, **kwargs: object()),
             ('win32gui.GetAncestor', Mock(return_value=12)),
@@ -124,11 +125,33 @@ class RemoteCursorPolicyTests(unittest.TestCase):
         self.gui.hide_overlay.assert_called_once()
         self.assertIsNone(self.view._shown_selection)
 
+    def test_jpeg_without_source_cursor_uses_viewer_and_hidden_cursor_fallback(self):
+        frame = self.jpeg_frame()
+        frame[1].info['conduit_cursor_in_frame'] = False
+        self.receiver.take_frame.return_value = frame
+        self.view._update()
+        self.assert_cursors('arrow')
+        self.view.cursor_fallback.start.assert_called_once()
+        self.view.cursor_fallback.reset_mock()
+        self.receiver.take_frame.return_value = self.jpeg_frame()
+        self.view._update()
+        self.assert_cursors('none')
+        self.view.cursor_fallback.stop.assert_called_once()
+
+    def test_remote_to_remote_handoff_refreshes_entry(self):
+        self.gui._remote_overlay_handoff = self.selection.handoff_id
+        self.view._update()
+        self.gui.show_overlay.assert_not_called()
+        self.server.input_router.state = RemoteClient('session', 'client', 'display', (30, 40), 'next-handoff')
+        self.view._update()
+        self.gui.show_overlay.assert_called_once()
+
     def test_close_restores_the_ordinary_hidden_capture_overlay(self):
         self.view.close()
         self.assertEqual(self.overlay.options['cursor'], 'none')
         self.canvas.destroy.assert_called_once()
         self.receiver.stop.assert_called_once()
+        self.view.cursor_fallback.stop.assert_called_once()
 
     def test_show_overlay_respects_the_viewer_choice(self):
         from app.gui import ConduitGUI

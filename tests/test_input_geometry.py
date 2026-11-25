@@ -142,7 +142,7 @@ class InputGeometryTests(unittest.TestCase):
         handler = InputHandler.__new__(InputHandler)
         handler.mouse = Mouse()
 
-        with self.assertLogs("app.input_handler", level="INFO") as captured:
+        with self.assertLogs("app.input_handler", level="DEBUG") as captured:
             observed = handler.inject_position(3, 540)
 
         self.assertEqual(observed, (3, 540))

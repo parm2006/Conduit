@@ -394,6 +394,7 @@ class ServerClusterFileLane:
         self._callbacks = {}
         for frame_type in self.FRAME_TYPES:
             network.register_callback(frame_type, self._remote_frame)
+        network.register_callback("disconnected", self._remote_disconnected)
 
     def register_callback(self, event_type, callback):
         self._callbacks.setdefault(event_type, []).append(callback)
@@ -413,3 +414,9 @@ class ServerClusterFileLane:
         if not isinstance(origin_id, str) or not origin_id:
             return False
         return self.router.relay_frame(origin_id, metadata, payload)
+
+    def _remote_disconnected(self, metadata, payload=b""):
+        origin_id = metadata.get("peer_identity")
+        if not isinstance(origin_id, str) or not origin_id:
+            return False
+        return self.router.endpoint_disconnected(origin_id)

@@ -1,5 +1,6 @@
 from pathlib import Path
 import logging
+import math
 import queue
 import threading
 import time
@@ -37,7 +38,11 @@ class TransferReceiver:
     def __init__(
         self, staging_root, controller=None, clock=time.monotonic,
         timer_factory=threading.Timer, stream_close_grace=1.0,
+        read_timeout_seconds=15.0,
     ):
+        self.read_timeout_seconds = float(read_timeout_seconds)
+        if not math.isfinite(self.read_timeout_seconds) or self.read_timeout_seconds <= 0:
+            raise ValueError("read stall timeout must be finite and positive")
         self.staging_root = Path(staging_root)
         cleanup_staging_root(self.staging_root)
         self.controller = controller
@@ -422,6 +427,9 @@ class TransferReceiver:
         item = job["items"][normalized]
         if offset >= item.size:
             return b""
+        deadline = self.clock() + self.read_timeout_seconds
+        last_available = 0
+        stalled = False
         with job["condition"]:
             while True:
                 if job["error"] is not None:
@@ -431,12 +439,36 @@ class TransferReceiver:
                     staged = completed
                     break
                 staged = job["staged"].get(normalized)
-                if staged is not None and staged.received_size > offset:
+                available = staged.received_size if staged is not None else 0
+                if available > offset:
                     break
-                job["condition"].wait()
+                now = self.clock()
+                if available > last_available:
+                    deadline = now + self.read_timeout_seconds
+                    last_available = available
+                remaining = deadline - now
+                if remaining <= 0:
+                    stalled = True
+                    break
+                job["condition"].wait(remaining)
+        if stalled:
+            message = "file transfer stopped making progress"
+            self._terminalize(
+                job_id, TransferPhase.FAILED, "TransferStalledTimeout", message,
+            )
+            raise TransferAbortedError(self._terminal_reason(job_id) or message)
         # Authenticated decryption and disk I/O must not hold the receiver condition;
         # incoming chunks and cancellation remain responsive during Explorer reads.
-        return staged.read_available(offset, min(count, item.size - offset))
+        try:
+            data = staged.read_available(offset, min(count, item.size - offset))
+        except OSError:
+            if job["error"] is not None:
+                raise TransferAbortedError(job["error"]) from None
+            raise
+        with job["condition"]:
+            if job["error"] is not None:
+                raise TransferAbortedError(job["error"])
+        return data
 
     def cancel_job(self, job_id, reason_code="UserCancelled"):
         return self._terminalize(
@@ -474,6 +506,9 @@ class TransferReceiver:
             if existing is not None:
                 return existing, False
             self._terminal_jobs[job_id] = outcome
+            logger.info('[file] Terminal job=%s phase=%s reason=%s bytes=%s/%s',
+                        job_id, outcome.phase.value, outcome.reason_code,
+                        outcome.bytes_done, outcome.bytes_total)
             self._terminal_jobs.move_to_end(job_id)
             while len(self._terminal_jobs) > self._terminal_limit:
                 self._terminal_jobs.popitem(last=False)
@@ -490,6 +525,8 @@ class TransferReceiver:
         current = self.controller.status(job_id) if self.controller is not None else None
         existing = self.terminal_outcome(job_id)
         if existing is not None:
+            if job is not None and existing.phase is not TransferPhase.COMPLETED:
+                self._abort_job(job_id, job, existing.message)
             return False
         if current is not None and current.is_terminal:
             existing_code = current.error_code or {
@@ -513,6 +550,8 @@ class TransferReceiver:
                     self.clock(),
                 ),
             )
+            if job is not None and current.phase is not TransferPhase.COMPLETED:
+                self._abort_job(job_id, job, existing_message)
             return False
         if job is not None:
             bytes_done = self._paste_covered(job)
@@ -539,17 +578,7 @@ class TransferReceiver:
             return False
 
         if job is not None and phase is not TransferPhase.COMPLETED:
-            with job["condition"]:
-                for staged in job["staged"].values():
-                    staged.abort()
-                for completed in job["completed"].values():
-                    completed.abort()
-                job["staged"].clear()
-                job["completed"].clear()
-                job["error"] = message
-                job["condition"].notify_all()
-                if self._jobs.get(job_id) is job:
-                    self._jobs.pop(job_id, None)
+            self._abort_job(job_id, job, message)
 
         if self.controller is not None:
             if phase is TransferPhase.CANCELLED:
@@ -586,6 +615,20 @@ class TransferReceiver:
                 metadata["error_code"] = reason_code
             self._progress_queue.put(metadata)
         return True
+
+    def _abort_job(self, job_id, job, message):
+        with job["condition"]:
+            # Wake pending IStream reads before disk cleanup, including when a
+            # controller or another callback already published terminal status.
+            job["error"] = message
+            staged_files = tuple(job["staged"].values()) + tuple(job["completed"].values())
+            job["staged"].clear()
+            job["completed"].clear()
+            job["condition"].notify_all()
+            if self._jobs.get(job_id) is job:
+                self._jobs.pop(job_id, None)
+        for staged in staged_files:
+            staged.abort()
 
     def _complete_if_ready(self, job_id, job, covered):
         if not (

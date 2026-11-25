@@ -26,7 +26,7 @@ def configure_runtime_logging(log_root=None):
     if sys.stderr is not None:
         handlers.append(logging.StreamHandler())
     logging.basicConfig(
-        level=logging.INFO,
+        level=logging.DEBUG if os.environ.get('CONDUIT_LOG_LEVEL', '').upper() == 'DEBUG' else logging.INFO,
         format=(
             "%(asctime)s %(levelname)s [%(threadName)s] "
             "%(name)s: %(message)s"

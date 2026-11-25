@@ -336,6 +336,9 @@ class ConduitServer:
         return False
 
     def stop(self):
+        cancellation = getattr(self, 'transfer_cancellation', None)
+        if cancellation is not None:
+            cancellation.disconnect()
         observer = getattr(self, "browser_move_observer", None)
         if observer is not None:
             observer.stop()

@@ -16,6 +16,7 @@ SAFE_DESTINATION_ERROR_CODES = frozenset((
     "ClipboardPublishFailed",
     "PasteInjectionFailed",
     "ExplorerStartTimeout",
+    "TransferStalledTimeout",
 ))
 MAX_IN_FLIGHT_FILE_BYTES = 1 << 20
 
@@ -293,6 +294,11 @@ class TransferSender:
     def _check_cancelled(self, job_id):
         if self.controller:
             self.controller.check_cancelled(job_id)
+            status = self.controller.status(job_id)
+            if status is not None and status.phase is TransferPhase.CANCELLED:
+                raise TransferCancelled(job_id)
+            if status is not None and status.phase is TransferPhase.FAILED:
+                raise DestinationPasteError(_safe_destination_error_code(status.error_code))
 
 def _manifest_label(manifest):
     files = [item for item in manifest.items if item.item_type is ItemType.FILE]

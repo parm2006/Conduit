@@ -36,6 +36,7 @@ typedef void (*StreamerEventCallback)(int event_code, const char* message, void*
 STREAMER_API StreamerSenderHandle streamer_sender_create(StreamerEventCallback cb, void* user_data);
 STREAMER_API int streamer_sender_start(StreamerSenderHandle handle, int display_index, const char* target_ip, int target_port, const unsigned char* session_key, int key_len, int bitrate_kbps, int fps);
 STREAMER_API int streamer_sender_request_keyframe(StreamerSenderHandle handle);
+STREAMER_API int streamer_sender_set_cursor_overlay(StreamerSenderHandle handle, HWND hwnd);
 STREAMER_API int streamer_sender_stop(StreamerSenderHandle handle);
 STREAMER_API void streamer_sender_destroy(StreamerSenderHandle handle);
 

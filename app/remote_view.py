@@ -25,6 +25,8 @@ class RemoteView:
         self._returning = False
         self._photo = None
         self.viewer_cursor = 'arrow'
+        from app.windows_cursor_overlay import WindowsCursorOverlay
+        self.cursor_fallback = WindowsCursorOverlay()
         self.map_window = WindowsMapOverlay()
         overlay = gui.overlay
         overlay.attributes('-alpha', 1.0)
@@ -43,6 +45,7 @@ class RemoteView:
 
     def _set_viewer_cursor(self, cursor):
         if cursor != self.viewer_cursor:
+            logger.info('[cursor] Viewer policy %s -> %s', self.viewer_cursor, cursor)
             self.gui.overlay.config(cursor=cursor)
             self.canvas.config(cursor=cursor)
             self.viewer_cursor = cursor
@@ -68,6 +71,9 @@ class RemoteView:
         self.gui.overlay_center_x, self.gui.overlay_center_y = self.viewport[0] // 2, self.viewport[1] // 2
 
     def close(self):
+        fallback = getattr(self, 'cursor_fallback', None)
+        if fallback is not None:
+            fallback.stop()
         if self._timer is not None:
             self.gui.after_cancel(self._timer)
             self._timer = None
@@ -92,6 +98,9 @@ class RemoteView:
         if self._returning:
             return
         self._returning = True
+        fallback = getattr(self, 'cursor_fallback', None)
+        if fallback is not None:
+            fallback.stop()
         self.canvas.delete('all')
         self._set_viewer_cursor('arrow')
         self.gui.hide_overlay()
@@ -123,7 +132,8 @@ class RemoteView:
                 self._photo = None
                 self._cursor = None
                 self._set_viewer_cursor('arrow')
-            if not self.gui.overlay_active:
+            if (not self.gui.overlay_active
+                    or self.gui.__dict__.get('_remote_overlay_handoff') != remote.handoff_id):
                 self.gui.show_overlay()
             if self.receiver.is_native_active():
                 self._set_viewer_cursor(
@@ -136,17 +146,26 @@ class RemoteView:
                     self.canvas.delete('video')
                     self.canvas.create_image(x, y, image=self._photo, anchor='nw', tags='video')
                     # JPEG capture already draws the actual Client cursor.
-                    self._set_viewer_cursor('none')
+                    self._set_viewer_cursor('none' if image.info.get('conduit_cursor_in_frame', True) else 'arrow')
                     if (isinstance(cursor, (list, tuple)) and len(cursor) == 2
                             and all(type(v) in (int, float) and math.isfinite(v) for v in cursor)):
                         self._cursor = (self.primary.left + x + cursor[0] * image.width,
                                         self.primary.top + y + cursor[1] * image.height)
             active = (remote.machine_id, remote.display_id)
+            fallback = getattr(self, 'cursor_fallback', None)
+            if fallback is not None:
+                if self.viewer_cursor == 'arrow':
+                    fallback.start()
+                else:
+                    fallback.stop()
             cursor = self._cursor or win32gui.GetCursorPos()
         elif isinstance(state, Transitioning):
             return  # Keep the preceding image until ownership is acknowledged.
         else:
             self._returning = False
+            fallback = getattr(self, 'cursor_fallback', None)
+            if fallback is not None:
+                fallback.stop()
             self._shown_selection = None
             self._cursor = None
             self._set_viewer_cursor('arrow')

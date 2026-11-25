@@ -1,6 +1,20 @@
 #include "dxgi_capture.h"
 #include <stdio.h>
 
+static conduit::CursorObservation ObserveCursor(HWND overlay, const RECT& output) {
+    CURSORINFO cursor = {};
+    cursor.cbSize = sizeof cursor;
+    if (!GetCursorInfo(&cursor)) return {};
+    const bool showing = (cursor.flags & CURSOR_SHOWING) && !(cursor.flags & CURSOR_SUPPRESSED);
+    bool in_output = false;
+    if (!showing && overlay && IsWindowVisible(overlay)) {
+        RECT bounds = {}, intersection = {};
+        if (!GetWindowRect(overlay, &bounds)) return {};
+        in_output = IntersectRect(&intersection, &bounds, &output) != FALSE;
+    }
+    return {true, showing, in_output};
+}
+
 DxgiCapture::DxgiCapture()
     : m_output_index(0)
     , m_width(0)
@@ -17,6 +31,7 @@ DxgiCapture::~DxgiCapture() {
 
 void DxgiCapture::Cleanup() {
     m_cursor_policy.Reset();
+    m_have_frame = false;
     m_duplication.Reset();
     m_output1.Reset();
     m_shared_texture.Reset();
@@ -94,6 +109,7 @@ int DxgiCapture::Initialize(int output_index) {
 
     DXGI_OUTPUT_DESC desc;
     targetOutput->GetDesc(&desc);
+    m_output_rect = desc.DesktopCoordinates;
     m_width = desc.DesktopCoordinates.right - desc.DesktopCoordinates.left;
     m_height = desc.DesktopCoordinates.bottom - desc.DesktopCoordinates.top;
 
@@ -104,6 +120,7 @@ int DxgiCapture::Initialize(int output_index) {
 
 HRESULT DxgiCapture::SetupDuplication() {
     m_cursor_policy.Reset();
+    m_have_frame = false;
     m_duplication.Reset();
     if (!m_output1 || !m_device) return E_POINTER;
 
@@ -139,6 +156,7 @@ HRESULT DxgiCapture::SetupDuplication() {
 
 bool DxgiCapture::AcquireFrame(CapturedFrame* out_frame, uint32_t timeout_ms) {
     if (!out_frame) return false;
+    out_frame->texture.Reset();
     out_frame->has_new_frame = false;
     out_frame->desktop_changed = false;
     out_frame->width = m_width;
@@ -149,16 +167,19 @@ bool DxgiCapture::AcquireFrame(CapturedFrame* out_frame, uint32_t timeout_ms) {
     out_frame->cursor_in_frame = m_cursor_policy.Value();
 
     if (!m_duplication) {
-        if (!SetupDuplication()) return false;
+        if (FAILED(SetupDuplication())) return false;
+        out_frame->cursor_in_frame = m_cursor_policy.Value();
     }
 
     DXGI_OUTDUPL_FRAME_INFO frameInfo = {};
     ComPtr<IDXGIResource> desktopResource;
 
+    const HWND cursor_overlay = m_cursor_overlay.load();
+    const auto cursor_before = ObserveCursor(cursor_overlay, m_output_rect);
     HRESULT hr = m_duplication->AcquireNextFrame(timeout_ms, &frameInfo, &desktopResource);
     if (hr == DXGI_ERROR_WAIT_TIMEOUT) {
         // No new frame within timeout, but existing shared texture is still valid
-        if (m_shared_texture) {
+        if (m_have_frame && m_shared_texture) {
             out_frame->texture = m_shared_texture;
             return true;
         }
@@ -175,7 +196,10 @@ bool DxgiCapture::AcquireFrame(CapturedFrame* out_frame, uint32_t timeout_ms) {
     }
 
     // Cursor position update
-    const bool cursor_policy_changed = m_cursor_policy.Update(
+    const auto cursor_after = ObserveCursor(cursor_overlay, m_output_rect);
+    // Retain pointer ownership even if this image is dropped for a source race.
+    // This does not change the policy paired with the last copied texture.
+    m_cursor_policy.ObservePointer(
         frameInfo.LastMouseUpdateTime.QuadPart != 0, frameInfo.PointerPosition.Visible != FALSE);
     if (frameInfo.PointerPosition.Visible) {
         m_last_cursor_x = frameInfo.PointerPosition.Position.x;
@@ -187,17 +211,22 @@ bool DxgiCapture::AcquireFrame(CapturedFrame* out_frame, uint32_t timeout_ms) {
     out_frame->cursor_x = m_last_cursor_x;
     out_frame->cursor_y = m_last_cursor_y;
     out_frame->cursor_visible = m_cursor_visible;
-    out_frame->cursor_in_frame = m_cursor_policy.Value();
 
     bool copied = false;
     if (desktopResource) {
         ComPtr<ID3D11Texture2D> acquiredTex;
         hr = desktopResource.As(&acquiredTex);
-        if (SUCCEEDED(hr) && acquiredTex && m_shared_texture) {
+        if (SUCCEEDED(hr) && acquiredTex && m_shared_texture &&
+            conduit::CursorObservationsAgree(cursor_before, cursor_after)) {
             m_context->CopyResource(m_shared_texture.Get(), acquiredTex.Get());
+            const bool cursor_policy_changed = m_cursor_policy.Update(
+                frameInfo.LastMouseUpdateTime.QuadPart != 0, frameInfo.PointerPosition.Visible != FALSE,
+                cursor_before, cursor_after);
             out_frame->texture = m_shared_texture;
+            out_frame->cursor_in_frame = m_cursor_policy.Value();
             out_frame->has_new_frame = true;
             out_frame->desktop_changed = frameInfo.LastPresentTime.QuadPart != 0 || cursor_policy_changed;
+            m_have_frame = true;
             copied = true;
         }
         acquiredTex.Reset();
@@ -206,7 +235,7 @@ bool DxgiCapture::AcquireFrame(CapturedFrame* out_frame, uint32_t timeout_ms) {
 
     m_duplication->ReleaseFrame();
 
-    if (!copied && m_shared_texture) {
+    if (!copied && m_have_frame && m_shared_texture) {
         out_frame->texture = m_shared_texture;
     }
 

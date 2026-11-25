@@ -135,8 +135,10 @@ class ClientVideoCapture:
             capture = self.capture
             if capture is None:
                 from app.windows_capture import capture_monitor
-                capture = capture_monitor
+                overlay = getattr(self.client, '_cursor_fallback', None)
+                capture = lambda bounds: capture_monitor(bounds, cursor_overlay_hwnd=overlay.hwnd if overlay else 0)
             image, cursor = capture(rect)
+            cursor_in_frame = image.info.get('conduit_cursor_in_frame', True)
             _, _, width, height = fit_rect(
                 (request['max_width'], request['max_height']), image.size)
             # Never upscale on the wire. Viewer upscales when appropriate.
@@ -155,6 +157,7 @@ class ClientVideoCapture:
                 'handoff_id': request['handoff_id'], 'display_id': request['display_id'],
                 'width': image.width, 'height': image.height,
                 'cursor': list(cursor),
+                'cursor_in_frame': cursor_in_frame is True,
                 'jpeg': base64.b64encode(payload).decode('ascii'),
             })
         except Exception as error:
@@ -200,6 +203,8 @@ class ServerVideoReceiver:
         if (self._native_stream_id is not None
                 and message.get('stream_id') == self._native_stream_id):
             self._native_started_success = bool(message.get('success'))
+            logger.info('[video] Start ACK stream=%s success=%s',
+                        self._native_stream_id, self._native_started_success)
             self._native_started_event.set()
 
     def is_native_active(self):
@@ -241,6 +246,9 @@ class ServerVideoReceiver:
         try:
             self._stop_native()
             self._native_stream_id = uuid.uuid4().hex
+            stream_id = self._native_stream_id
+            logger.info('[video] Starting receiver stream=%s handoff=%s display=%s viewport=%s port=%s',
+                        stream_id, selection.handoff_id, selection.display_id, self.viewport, self.stream_port)
             self._native_started_event.clear()
             self._native_started_success = False
 
@@ -267,6 +275,8 @@ class ServerVideoReceiver:
 
             def on_native_event(code, msg):
                 if code == STREAMER_EVENT_FIRST_FRAME:
+                    logger.info('[video] First native frame stream=%s handoff=%s display=%s',
+                                stream_id, selection.handoff_id, selection.display_id)
                     self.last_frame_at = time.monotonic()
                     self._native_active = True
                 elif code == STREAMER_EVENT_NEED_KEYFRAME:
@@ -279,7 +289,8 @@ class ServerVideoReceiver:
                     except Exception:
                         pass
                 elif code == STREAMER_EVENT_ERROR:
-                    logger.warning("Native receiver error (%s), falling back to GDI/JPEG", msg)
+                    logger.warning('[video] Receiver error stream=%s handoff=%s detail=%s; falling back to JPEG',
+                                   stream_id, selection.handoff_id, msg)
                     self._native_failed_selection = selection
                     self._native_active = False
 
@@ -296,11 +307,13 @@ class ServerVideoReceiver:
                 'server_ip': server_ip,
                 'udp_port': self.stream_port,
                 'display_id': selection.display_id,
+                'handoff_id': selection.handoff_id,
                 'stream_key': base64.b64encode(stream_key).decode('ascii'),
                 'fps': 60,
                 'bitrate_kbps': 10000,
             }, session_id=selection.session_id)
             if not sent:
+                logger.warning('[video] Start request send failed stream=%s handoff=%s', stream_id, selection.handoff_id)
                 self._stop_native()
                 return False
 
@@ -311,7 +324,8 @@ class ServerVideoReceiver:
                 logger.info("Native hardware video streaming active for %s", selection.display_id)
                 return True
             else:
-                logger.info("Client did not start native stream, falling back to GDI/JPEG")
+                logger.warning('[video] Start ACK failed/timed out stream=%s handoff=%s ack_received=%s; falling back to JPEG',
+                               stream_id, selection.handoff_id, self._native_started_event.is_set())
                 self._stop_native()
                 return False
         except Exception as exc:
@@ -321,6 +335,7 @@ class ServerVideoReceiver:
 
     def _stop_native(self, session_id=None):
         if self._native_stream_id is not None:
+            logger.info('[video] Stopping stream=%s', self._native_stream_id)
             sid = session_id or (self.selection.session_id if self.selection else None)
             if sid:
                 try:
@@ -386,9 +401,13 @@ class ServerVideoReceiver:
             return False
         elapsed = now - self.last_frame_at if self.last_frame_at > 0.0 else now - self.started_at
         timeout = FRAME_TIMEOUT if self.last_frame_at > 0.0 else 2.5
-        if selection == self.failed_selection:
-            return True
-        return elapsed >= timeout
+        stalled = selection == self.failed_selection or elapsed >= timeout
+        if stalled and self.__dict__.get('_last_stall_report') != selection:
+            self._last_stall_report = selection
+            logger.warning('[video] Returning locally handoff=%s display=%s native=%s elapsed=%.3fs timeout=%.3fs failed=%s',
+                           selection.handoff_id, selection.display_id, self.is_native_active(),
+                           elapsed, timeout, selection == self.failed_selection)
+        return stalled
 
     def _run(self):
         try:
@@ -411,6 +430,7 @@ class ServerVideoReceiver:
         while not self._stop.is_set():
             selection = self.current_selection()
             if selection != self.selection:
+                logger.info('[video] Selection changed previous=%s current=%s', self.selection, selection)
                 if self.selection is not None:
                     self._stop_native(self.selection.session_id)
                 self.selection = selection
@@ -457,7 +477,8 @@ class ServerVideoReceiver:
                                else time.monotonic() - self.started_at)
                     timeout = FRAME_TIMEOUT if self.last_frame_at > 0.0 else 2.5
                     if elapsed >= timeout:
-                        logger.warning("Native stream stalled, falling back to GDI/JPEG")
+                        logger.warning('[video] Native stalled stream=%s handoff=%s frames=%s elapsed=%.3fs; falling back to JPEG',
+                                       self._native_stream_id, selection.handoff_id, last_native_count, elapsed)
                         self._stop_native()
                         self._native_failed_selection = selection
                         self.started_at = time.monotonic()
@@ -496,6 +517,10 @@ class ServerVideoReceiver:
                 if frame is None or time.monotonic() - started >= FRAME_TIMEOUT:
                     raise ValueError('video frame timed out')
                 image = decode_frame(frame)
+                if self.last_frame_at == 0.0:
+                    logger.info('[video] First JPEG frame handoff=%s display=%s size=%s',
+                                selection.handoff_id, selection.display_id, image.size)
+                image.info['conduit_cursor_in_frame'] = frame.get('cursor_in_frame', True) is not False
                 x, y, width, height = fit_rect(self.viewport, image.size)
                 if image.size != (width, height):
                     image = image.resize((width, height), Image.Resampling.LANCZOS)
@@ -504,7 +529,8 @@ class ServerVideoReceiver:
                         self._latest = (selection, image, (x, y), frame.get('cursor'))
                         self.last_frame_at = time.monotonic()
             except Exception as error:
-                logger.warning('Remote video unavailable (%s)', type(error).__name__)
+                logger.warning('[video] JPEG unavailable handoff=%s display=%s reason=%s',
+                               selection.handoff_id, selection.display_id, str(error))
                 self.failed_selection = selection
             self._stop.wait(max(0, FRAME_INTERVAL - (time.monotonic() - started)))
 

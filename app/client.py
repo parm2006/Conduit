@@ -120,7 +120,9 @@ class ConduitClient:
             on_emergency_exit=self._request_app_shutdown,
             on_reload_connection=self.request_cluster_reload,
         )
+        self._cursor_fallback_enabled = True
         self.is_active = False
+        self._stop_cursor_fallback()
         from app.remote_video import ClientVideoCapture
         self.video_capture = ClientVideoCapture(self)
         self.control_network.register_callback('remote_video_request', self.video_capture.request)
@@ -198,6 +200,23 @@ class ConduitClient:
     def cancel_transfer(self, job_id):
         return self.transfer_cancellation.request(job_id)
 
+    def _start_cursor_fallback(self):
+        if not self.__dict__.get('_cursor_fallback_enabled', False):
+            return
+        from app.windows_cursor_overlay import WindowsCursorOverlay
+        if self.__dict__.get('_cursor_fallback') is None:
+            self._cursor_fallback = WindowsCursorOverlay()
+        ready = self._cursor_fallback.start()
+        logger.info('[cursor] Client fallback ready=%s hwnd=%s', ready, self._cursor_fallback.hwnd)
+
+    def _stop_cursor_fallback(self):
+        overlay = self.__dict__.get('_cursor_fallback')
+        if overlay is not None:
+            sender = getattr(self, '_native_sender', None)
+            if sender is not None:
+                sender.set_cursor_overlay(0)
+            overlay.stop()
+
     def _request_app_shutdown(self):
         self.prepare_app_shutdown()
         callback = getattr(self, "on_app_shutdown", None)
@@ -227,6 +246,9 @@ class ConduitClient:
         return lock
 
     def on_disconnected(self, data):
+        cancellation = getattr(self, 'transfer_cancellation', None)
+        if cancellation is not None:
+            cancellation.disconnect()
         logger.info("Disconnected from Server.")
         monitor = getattr(self, "display_monitor", None)
         if monitor is not None:
@@ -245,6 +267,7 @@ class ConduitClient:
                     self.connect_error = "secure session disconnected during setup"
                     report_setup_failure = True
         self.is_active = False
+        self._stop_cursor_fallback()
         self._stop_native_sender()
         self.clipboard.stop()
         self.clipboard_sender.stop()
@@ -512,6 +535,9 @@ class ConduitClient:
         )
 
     def disconnect(self, preserve_failure=False, error=None):
+        cancellation = getattr(self, 'transfer_cancellation', None)
+        if cancellation is not None:
+            cancellation.disconnect()
         observer = getattr(self, "browser_move_observer", None)
         if observer is not None:
             observer.stop()
@@ -659,6 +685,7 @@ class ConduitClient:
             coordinator.cancel()
         self._release_all_injected_input()
         self.is_active = False
+        self._stop_cursor_fallback()
         version = data.get('version')
         if type(version) is int:
             self.pending_topology = dict(data)
@@ -669,6 +696,7 @@ class ConduitClient:
     def on_topology_suspend(self, data):
         self._release_all_injected_input()
         self.is_active = False
+        self._stop_cursor_fallback()
         if hasattr(self.input_handler, 'set_client_topology_edges'):
             self.input_handler.set_client_topology_edges(())
         elif hasattr(self.input_handler, 'set_client_topology_edge'):
@@ -905,11 +933,14 @@ class ConduitClient:
         if not acknowledged:
             self._release_all_injected_input()
             self.is_active = False
+            self._stop_cursor_fallback()
             if hasattr(self.input_handler, 'set_client_topology_edges'):
                 self.input_handler.set_client_topology_edges(())
             elif hasattr(self.input_handler, 'set_client_topology_edge'):
                 self.input_handler.set_client_topology_edge(None)
             return False
+        # Optional cursor window creation must not delay the ownership ACK.
+        self._start_cursor_fallback()
         self._apply_clipboard_offer_route()
         return True
 
@@ -1041,6 +1072,7 @@ class ConduitClient:
                     return
                 logger.info(f"Hit {direction} edge. Sending switch_back to server.")
                 self.is_active = False
+                self._stop_cursor_fallback()
                 self._stop_native_sender()
                 browser_gesture_id = None
                 if region is not None:
@@ -1337,6 +1369,9 @@ class ConduitClient:
         encoded_key = data.get('stream_key')
         fps = data.get('fps', 60)
         bitrate_kbps = data.get('bitrate_kbps', 10000)
+        logger.info('[video] Start requested stream=%s handoff=%s display=%s active=%s authenticated=%s',
+                    stream_id, data.get('handoff_id'), display_id, getattr(self, 'is_active', False),
+                    self.control_network.authenticated)
 
         # Authentication check: only active authenticated control connection can start stream
         if not getattr(self, 'is_active', False) or not self.control_network.authenticated:
@@ -1368,6 +1403,8 @@ class ConduitClient:
                 raise ValueError("stream key must be 32 bytes")
 
             display_index = self._get_display_index(display_id)
+            logger.info('[video] Source selected stream=%s display=%s output_index=%s',
+                        stream_id, display_id, display_index)
             server_ip = data.get('server_ip')
             if not server_ip:
                 if hasattr(self.control_network, 'sock') and self.control_network.sock:
@@ -1385,13 +1422,15 @@ class ConduitClient:
             def on_native_sender_event(code, msg):
                 from app.native_streamer import STREAMER_EVENT_ERROR, STREAMER_EVENT_STARTED, STREAMER_EVENT_STOPPED
                 if code == STREAMER_EVENT_ERROR:
-                    logger.warning("Native streamer sender error (%d): %s", code, msg)
+                    logger.warning('[video] Sender error stream=%s code=%d detail=%s', stream_id, code, msg)
                 elif code == STREAMER_EVENT_STARTED:
-                    logger.info("Native streamer sender started: %s", msg)
+                    logger.info('[video] Sender initialized stream=%s detail=%s', stream_id, msg)
                 elif code == STREAMER_EVENT_STOPPED:
-                    logger.info("Native streamer sender stopped: %s", msg)
+                    logger.info('[video] Sender stopped stream=%s detail=%s', stream_id, msg)
 
             sender = NativeStreamerSender(on_event=on_native_sender_event)
+            overlay = self.__dict__.get('_cursor_fallback')
+            sender.set_cursor_overlay(overlay.hwnd if overlay is not None else 0)
             started = sender.start(
                 display_index=display_index,
                 target_ip=server_ip,
@@ -1424,6 +1463,7 @@ class ConduitClient:
             })
 
     def on_stream_stop(self, data):
+        logger.info('[video] Stop requested stream=%s active=%s', data.get('stream_id'), self.is_active)
         self._stop_native_sender()
         logger.info("Native streaming sender stopped")
 

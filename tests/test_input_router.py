@@ -1505,6 +1505,7 @@ class ClientEdgeReportingTests(unittest.TestCase):
             send_message=lambda message: messages.append(dict(message)) or True
         )
         client.input_handler = input_handler
+        client._start_cursor_fallback = lambda: messages.append({"type": "cursor_fallback_started"})
         client._apply_clipboard_offer_route = lambda: messages.append(
             {"type": "clipboard_route_applied"}
         )
@@ -1524,6 +1525,7 @@ class ClientEdgeReportingTests(unittest.TestCase):
                 "handoff_id": "handoff-1",
                 "topology_version": 7,
             },
+            {"type": "cursor_fallback_started"},
             {"type": "clipboard_route_applied"},
         ])
 

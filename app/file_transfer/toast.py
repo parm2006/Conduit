@@ -46,6 +46,8 @@ def toast_view(status):
             message = "Windows Explorer did not accept the paste."
         elif status.error_code == 'ManifestPreparationTimeout':
             message = 'Failed to hash in 5 seconds'
+        elif status.error_code == 'TransferStalledTimeout':
+            message = 'No file data arrived for 15 seconds.'
         else:
             message = "Conduit could not finish the network transfer."
         details = f"{_safe_file_label(status.label)} · {message}"

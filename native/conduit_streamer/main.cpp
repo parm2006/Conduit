@@ -328,6 +328,12 @@ STREAMER_API int streamer_sender_start(StreamerSenderHandle handle, int display_
     return 0;
 }
 
+STREAMER_API int streamer_sender_set_cursor_overlay(StreamerSenderHandle handle, HWND hwnd) {
+    if (!handle) return -1;
+    static_cast<StreamerSenderState*>(handle)->capture.SetCursorOverlay(hwnd);
+    return 0;
+}
+
 STREAMER_API int streamer_sender_request_keyframe(StreamerSenderHandle handle) {
     if (!handle) return -1;
     auto* state = static_cast<StreamerSenderState*>(handle);

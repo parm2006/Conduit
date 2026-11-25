@@ -16,7 +16,9 @@ class TransferCancellation:
         self._outbound = {}
         self._handled = OrderedDict()
         self._finished = OrderedDict()
+        self._active_jobs = set()
         self._lock = threading.Lock()
+        controller.subscribe(self._on_status)
         lane.register_callback("cancel_job", self._on_cancel_job)
         lane.register_callback("cancel_ack", self._on_cancel_ack)
         lane.register_callback("disconnected", self._on_disconnected)
@@ -93,11 +95,27 @@ class TransferCancellation:
         while len(self._finished) > self.tombstone_limit:
             self._finished.popitem(last=False)
 
-    def _on_disconnected(self, metadata, payload):
+    def _on_status(self, status):
         with self._lock:
-            pending = tuple(self._outbound)
+            if status.is_terminal:
+                self._active_jobs.discard(status.job_id)
+            else:
+                self._active_jobs.add(status.job_id)
+
+    def disconnect(self):
+        """Finish local operations immediately without waiting for a peer ACK."""
+        with self._lock:
+            pending = tuple(self._active_jobs | self._outbound.keys())
+            self._active_jobs.clear()
             self._outbound.clear()
             for job_id in pending:
                 self._remember_finished(job_id)
+        self.receiver.cancel_all("file lane disconnected")
         for job_id in pending:
+            self.receiver.cancel_job(job_id, "FileLaneDisconnected")
+            self.controller.cancel(job_id)
             self.controller.confirm_cancelled(job_id)
+        return pending
+
+    def _on_disconnected(self, metadata, payload):
+        return self.disconnect()
